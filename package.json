@@ -11,6 +11,22 @@
   "bin": {
     "fast-browser": "./bin/fast-browser.mjs"
   },
+  "files": [
+    ".claude-plugin/",
+    ".codex-plugin/",
+    ".mcp.json",
+    "adapters/",
+    "agents/",
+    "bin/",
+    "builtins/",
+    "lib/",
+    "skills/",
+    "templates/",
+    "runtime-lock.json",
+    "README.md",
+    "SECURITY.md",
+    "THIRD_PARTY_NOTICES.md"
+  ],
   "scripts": {
     "test": "node --test tests/unit/*.test.mjs tests/integration/*.test.mjs",
     "test:unit": "node --test tests/unit/*.test.mjs",
