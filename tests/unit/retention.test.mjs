@@ -5,6 +5,7 @@ import {
   mkdtemp,
   readFile,
   realpath,
+  rm,
   symlink,
   utimes,
   writeFile,
@@ -23,11 +24,13 @@ async function sessionDirectory(root, name, contents, mtime) {
   return directory;
 }
 
-test('pruneSessions removes only eligible direct session directories and reports paths and bytes', async () => {
+test('pruneSessions removes only eligible direct session directories and reports paths and bytes', async (t) => {
   const { pruneSessions } = await import('../../lib/sessions/retention.mjs');
   const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'fast-browser-retention-'));
-  const sessionsDir = path.join(tempRoot, '.fast-browser/sessions');
-  const archiveDir = path.join(tempRoot, '.fast-browser/archive');
+  t.after(() => rm(tempRoot, { recursive: true, force: true }));
+  const dataDir = path.join(tempRoot, '.fast-browser');
+  const sessionsDir = path.join(dataDir, 'sessions');
+  const archiveDir = path.join(dataDir, 'archive');
   const outsideDir = path.join(tempRoot, 'outside');
   await Promise.all([
     mkdir(sessionsDir, { recursive: true }),
@@ -56,7 +59,7 @@ test('pruneSessions removes only eligible direct session directories and reports
   const physicalOldSessions = await Promise.all([realpath(oldSession), realpath(oldArchive)]);
 
   const result = await pruneSessions({
-    paths: { sessionsDir, archiveDir },
+    paths: { dataDir, sessionsDir, archiveDir },
     now,
     retentionDays: 30,
   });
@@ -73,11 +76,13 @@ test('pruneSessions removes only eligible direct session directories and reports
   assert.equal((await lstat(path.join(sessionsDir, 'session-escape'))).isSymbolicLink(), true);
 });
 
-test('pruneSessions does not follow symlinks inside an eligible directory', async () => {
+test('pruneSessions does not follow symlinks inside an eligible directory', async (t) => {
   const { pruneSessions } = await import('../../lib/sessions/retention.mjs');
   const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'fast-browser-retention-link-'));
-  const sessionsDir = path.join(tempRoot, '.fast-browser/sessions');
-  const archiveDir = path.join(tempRoot, '.fast-browser/archive');
+  t.after(() => rm(tempRoot, { recursive: true, force: true }));
+  const dataDir = path.join(tempRoot, '.fast-browser');
+  const sessionsDir = path.join(dataDir, 'sessions');
+  const archiveDir = path.join(dataDir, 'archive');
   const outsideFile = path.join(tempRoot, 'outside.txt');
   const now = new Date('2026-07-26T12:00:00.000Z');
   const old = new Date(now.getTime() - 31 * DAY_MS);
@@ -89,7 +94,7 @@ test('pruneSessions does not follow symlinks inside an eligible directory', asyn
 
   const physicalCandidate = await realpath(candidate);
   const result = await pruneSessions({
-    paths: { sessionsDir, archiveDir },
+    paths: { dataDir, sessionsDir, archiveDir },
     now,
     retentionDays: 30,
   });
@@ -98,19 +103,96 @@ test('pruneSessions does not follow symlinks inside an eligible directory', asyn
   assert.equal(await readFile(outsideFile, 'utf8'), 'outside');
 });
 
-test('pruneSessions treats missing exact roots as empty', async () => {
+test('pruneSessions treats missing exact roots as empty', async (t) => {
   const { pruneSessions } = await import('../../lib/sessions/retention.mjs');
   const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'fast-browser-retention-empty-'));
+  t.after(() => rm(tempRoot, { recursive: true, force: true }));
+  const dataDir = path.join(tempRoot, '.fast-browser');
+  await mkdir(dataDir);
 
   assert.deepEqual(
     await pruneSessions({
       paths: {
-        sessionsDir: path.join(tempRoot, '.fast-browser/sessions'),
-        archiveDir: path.join(tempRoot, '.fast-browser/archive'),
+        dataDir,
+        sessionsDir: path.join(dataDir, 'sessions'),
+        archiveDir: path.join(dataDir, 'archive'),
       },
       now: new Date('2026-07-26T12:00:00.000Z'),
       retentionDays: 30,
     }),
     { removedPaths: [], removedBytes: 0 },
+  );
+});
+
+for (const linkedRoot of ['sessions', 'archive']) {
+  test(`pruneSessions rejects a symlinked ${linkedRoot} root without mutating its target`, async (t) => {
+    const { pruneSessions } = await import('../../lib/sessions/retention.mjs');
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), `fast-browser-${linkedRoot}-root-`));
+    t.after(() => rm(tempRoot, { recursive: true, force: true }));
+    const dataDir = path.join(tempRoot, '.fast-browser');
+    const externalRoot = path.join(tempRoot, 'external');
+    const sessionsDir = path.join(dataDir, 'sessions');
+    const archiveDir = path.join(dataDir, 'archive');
+    await Promise.all([mkdir(dataDir), mkdir(externalRoot)]);
+    const old = new Date('2026-06-01T12:00:00.000Z');
+    const victim = await sessionDirectory(externalRoot, 'session-victim', 'keep', old);
+    await mkdir(linkedRoot === 'sessions' ? archiveDir : sessionsDir);
+    await symlink(externalRoot, linkedRoot === 'sessions' ? sessionsDir : archiveDir);
+
+    await assert.rejects(
+      () => pruneSessions({
+        paths: { dataDir, sessionsDir, archiveDir },
+        now: new Date('2026-07-26T12:00:00.000Z'),
+        retentionDays: 30,
+      }),
+      /root must be a real directory/,
+    );
+
+    assert.equal(await readFile(path.join(victim, 'session.md'), 'utf8'), 'keep');
+  });
+}
+
+for (const fileRoot of ['sessions', 'archive']) {
+  test(`pruneSessions rejects a non-directory ${fileRoot} root`, async (t) => {
+    const { pruneSessions } = await import('../../lib/sessions/retention.mjs');
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), `fast-browser-${fileRoot}-file-`));
+    t.after(() => rm(tempRoot, { recursive: true, force: true }));
+    const dataDir = path.join(tempRoot, '.fast-browser');
+    const sessionsDir = path.join(dataDir, 'sessions');
+    const archiveDir = path.join(dataDir, 'archive');
+    await mkdir(dataDir);
+    await mkdir(fileRoot === 'sessions' ? archiveDir : sessionsDir);
+    await writeFile(fileRoot === 'sessions' ? sessionsDir : archiveDir, 'not a directory', 'utf8');
+
+    await assert.rejects(
+      () => pruneSessions({
+        paths: { dataDir, sessionsDir, archiveDir },
+        now: new Date('2026-07-26T12:00:00.000Z'),
+        retentionDays: 30,
+      }),
+      /root must be a real directory/,
+    );
+  });
+}
+
+test('pruneSessions rejects roots that are not the exact data-directory children', async (t) => {
+  const { pruneSessions } = await import('../../lib/sessions/retention.mjs');
+  const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'fast-browser-root-shape-'));
+  t.after(() => rm(tempRoot, { recursive: true, force: true }));
+  const dataDir = path.join(tempRoot, '.fast-browser');
+  const sessionsDir = path.join(dataDir, 'other-sessions');
+  const archiveDir = path.join(dataDir, 'archive');
+  await Promise.all([
+    mkdir(sessionsDir, { recursive: true }),
+    mkdir(archiveDir, { recursive: true }),
+  ]);
+
+  await assert.rejects(
+    () => pruneSessions({
+      paths: { dataDir, sessionsDir, archiveDir },
+      now: new Date('2026-07-26T12:00:00.000Z'),
+      retentionDays: 30,
+    }),
+    /exact child/,
   );
 });

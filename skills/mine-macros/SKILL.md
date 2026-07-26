@@ -33,9 +33,9 @@ Stop. Do not enumerate sessions, inspect other roots, or mutate macro state.
    Require evidence from at least two sessions. Treat repeated handwritten
    scripts for the same origin as strong candidates.
 4. **Exclude known decisions.** Drop flows covered by
-   `~/.fast-browser/macros/MACROS.md` or [rejected.md](rejected.md). A
-   single filename-only macro run is evidence for an existing macro, not a new
-   candidate.
+   `~/.fast-browser/macros/MACROS.md` or
+   `~/.fast-browser/rejected-macros.md`. A single filename-only macro run is
+   evidence for an existing macro, not a new candidate.
 5. **Draft safely.** Parameterize values that vary; retain stable values.
    Follow the browser-macros authoring contract. Keep the complete script in
    memory or a temporary file outside `~/.fast-browser/macros/`.
@@ -50,7 +50,7 @@ Stop. Do not enumerate sessions, inspect other roots, or mutate macro state.
   `~/.fast-browser/macros/MACROS.md` entry with the stable script path,
   `Status: approved`, and today's `Last verified` date.
 - **Reject:** Append `<name> | <date> | <one-line reason>` to
-  [rejected.md](rejected.md).
+  `~/.fast-browser/rejected-macros.md`.
 - **Edit first:** Revise the proposal and request a new decision. Do not write
   the macro library.
 - **Approved repair:** Replace only that macro, update its verification date,

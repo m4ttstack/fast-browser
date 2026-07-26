@@ -9,7 +9,7 @@ Use indexed Playwright macros instead of re-deriving known browser flows.
 
 ## Run a macro
 
-1. Read [MACROS.md](MACROS.md).
+1. Read `~/.fast-browser/macros/MACROS.md`.
 2. Match the task to an entry's description and target.
 3. Call `browser_run_code_unsafe` with the entry's `filename` and `args`
    exactly. Do not open the script and do not substitute inline `code`.

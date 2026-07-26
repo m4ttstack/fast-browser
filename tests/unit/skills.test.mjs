@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { lstat, readFile, readlink } from 'node:fs/promises';
+import { lstat, readdir, readFile, readlink } from 'node:fs/promises';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -8,16 +8,37 @@ const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '.
 const repositoryRoot = path.resolve(pluginRoot, '../..');
 const skillNames = ['fast-browsing', 'browser-macros', 'mine-macros'];
 
-const packagedFiles = [
-  'skills/fast-browsing/SKILL.md',
-  'skills/browser-macros/SKILL.md',
-  'skills/browser-macros/MACROS.md',
-  'skills/mine-macros/SKILL.md',
-  'skills/mine-macros/rejected.md',
-  'builtins/macros/page-recon.js',
-];
+const deployTextExtensions = new Set([
+  '.json',
+  '.js',
+  '.md',
+  '.mjs',
+  '.toml',
+  '.yaml',
+  '.yml',
+]);
+
+async function packagedTextFiles(directory, relative = '') {
+  const files = [];
+  for (const entry of await readdir(path.join(directory, relative), { withFileTypes: true })) {
+    const child = path.join(relative, entry.name);
+    if (entry.isDirectory()) {
+      if (entry.name === 'tests') continue;
+      files.push(...await packagedTextFiles(directory, child));
+    } else if (entry.isFile() && deployTextExtensions.has(path.extname(entry.name))) {
+      files.push(child);
+    }
+  }
+  return files.sort();
+}
 
 test('packages portable skill and macro files without host-specific remnants', async () => {
+  const packagedFiles = await packagedTextFiles(pluginRoot);
+  assert.ok(packagedFiles.includes('package.json'));
+  assert.ok(packagedFiles.includes('templates/codex/browser_driver.toml'));
+  assert.ok(packagedFiles.includes('lib/macros/install.mjs'));
+  assert.equal(packagedFiles.some((file) => file.startsWith('tests/')), false);
+
   for (const relativeFile of packagedFiles) {
     const text = await readFile(path.join(pluginRoot, relativeFile), 'utf8');
 
@@ -74,4 +95,31 @@ test('macro index exposes only the portable built-in page reconnaissance macro',
   assert.match(text, /maxLinks\?: number \(default 10\)/);
   assert.match(text, /~\/\.fast-browser\/macros\/page-recon\.js/);
   assert.match(text, /Status: built-in/);
+});
+
+test('skills and delegated browser guidance use authoritative live ledgers', async () => {
+  const browserMacros = await readFile(
+    path.join(pluginRoot, 'skills/browser-macros/SKILL.md'),
+    'utf8',
+  );
+  const mineMacros = await readFile(path.join(pluginRoot, 'skills/mine-macros/SKILL.md'), 'utf8');
+  const guidanceFiles = [
+    'agents/browser-driver.md',
+    'templates/codex/browser_driver.toml',
+    'skills/fast-browsing/SKILL.md',
+    'skills/browser-macros/SKILL.md',
+    'skills/mine-macros/SKILL.md',
+  ];
+
+  for (const relativeFile of guidanceFiles) {
+    assert.match(
+      await readFile(path.join(pluginRoot, relativeFile), 'utf8'),
+      /~\/\.fast-browser\/macros\/MACROS\.md/,
+      relativeFile,
+    );
+  }
+  assert.doesNotMatch(browserMacros, /\[MACROS\.md\]\(MACROS\.md\)/);
+  assert.match(mineMacros, /~\/\.fast-browser\/macro-failures\.md/);
+  assert.match(mineMacros, /~\/\.fast-browser\/rejected-macros\.md/);
+  assert.doesNotMatch(mineMacros, /\[rejected\.md\]\(rejected\.md\)/);
 });
