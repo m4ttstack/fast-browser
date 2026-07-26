@@ -1,0 +1,19 @@
+{
+  "name": "@mattstack/fast-browser",
+  "version": "0.1.0-alpha.1",
+  "description": "Fast Playwright browser automation for Claude Code and Codex",
+  "type": "module",
+  "private": true,
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "fast-browser": "./bin/fast-browser.mjs"
+  },
+  "scripts": {
+    "test": "node --test tests/unit/*.test.mjs tests/integration/*.test.mjs",
+    "test:unit": "node --test tests/unit/*.test.mjs",
+    "test:integration": "node --test tests/integration/*.test.mjs"
+  }
+}

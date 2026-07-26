@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "fast-browser": {
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/bin/fast-browser-mcp.mjs"]
+    }
+  }
+}

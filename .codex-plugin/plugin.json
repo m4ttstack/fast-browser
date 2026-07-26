@@ -1,0 +1,20 @@
+{
+  "name": "fast-browser",
+  "version": "0.1.0-alpha.1",
+  "description": "Fast Playwright browser automation for Claude Code and Codex",
+  "author": {
+    "name": "Matt Erickson"
+  },
+  "license": "UNLICENSED",
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Fast Browser",
+    "shortDescription": "Fast Playwright browser automation.",
+    "longDescription": "Fast Browser provides Playwright browser automation for Claude Code and Codex.",
+    "developerName": "Matt Erickson",
+    "category": "Productivity",
+    "capabilities": ["Browser automation"],
+    "defaultPrompt": "Help me automate a browser task with Fast Browser."
+  },
+  "mcpServers": "./adapters/codex/mcp.json"
+}

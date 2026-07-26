@@ -1,0 +1,6 @@
+{
+  "fast_browser": {
+    "command": "node",
+    "args": ["${PLUGIN_ROOT}/bin/fast-browser-mcp.mjs"]
+  }
+}
