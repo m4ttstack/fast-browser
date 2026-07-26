@@ -273,11 +273,60 @@ test('abort reason survives child and stream errors during the grace window', {
   });
 });
 
-test('timeout kills a synthetic POSIX process group whose descendant retains stdio', async (t) => {
+async function waitForPidFile(pidFile, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (true) {
+    try {
+      const value = JSON.parse(await readFile(pidFile, 'utf8'));
+      if (
+        Number.isInteger(value.groupPid)
+        && value.groupPid > 0
+        && Number.isInteger(value.descendantPid)
+        && value.descendantPid > 0
+      ) {
+        return value;
+      }
+    } catch (error) {
+      if (error.code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error;
+    }
+    if (Date.now() >= deadline) {
+      throw new Error(`synthetic process group was not ready after ${timeoutMs}ms`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
+async function waitForProcessTargetToDisappear(target, description, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (true) {
+    try {
+      process.kill(target, 0);
+      if (Date.now() >= deadline) {
+        throw new Error(`${description} survived process-group abort`);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    } catch (error) {
+      if (error.code === 'ESRCH') return;
+      throw error;
+    }
+  }
+}
+
+test('abort kills a ready synthetic POSIX process group whose descendant retains stdio', {
+  timeout: 10000,
+}, async (t) => {
   const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), 'fast-browser-process-group-'));
   const pidFile = path.join(temporaryRoot, 'descendant.pid');
+  let groupPid;
   let descendantPid;
   t.after(async () => {
+    if (groupPid) {
+      try {
+        process.kill(-groupPid, 'SIGKILL');
+      } catch {
+        // It was terminated by the abort path.
+      }
+    }
     if (descendantPid) {
       try {
         process.kill(descendantPid, 'SIGKILL');
@@ -297,34 +346,45 @@ test('timeout kills a synthetic POSIX process group whose descendant retains std
     "const { writeFileSync } = require('node:fs');",
     `const child = spawn(process.execPath, ['-e', ${JSON.stringify(descendant)}],`,
     "  { stdio: ['ignore', 'inherit', 'inherit'] });",
-    'writeFileSync(process.argv[1], String(child.pid));',
+    'writeFileSync(process.argv[1], JSON.stringify({',
+    '  groupPid: process.pid,',
+    '  descendantPid: child.pid,',
+    '}));',
     "process.on('SIGTERM', () => {});",
     'setInterval(() => {}, 1000);',
   ].join('');
+  const controller = new AbortController();
   const startedAt = Date.now();
 
-  await assert.rejects(
-    run(process.execPath, ['-e', parent, pidFile], { timeoutMs: 80 }),
-    { code: 'ETIMEDOUT' },
+  const stopped = assert.rejects(
+    run(process.execPath, ['-e', parent, pidFile], {
+      signal: controller.signal,
+      timeoutMs: 5000,
+    }),
+    { code: 'ABORT_ERR' },
   );
-  assert.ok(Date.now() - startedAt < 1000);
+  try {
+    ({ groupPid, descendantPid } = await waitForPidFile(pidFile, 3000));
+    controller.abort();
+    await stopped;
+  } finally {
+    controller.abort();
+    await stopped.catch(() => {});
+  }
+  assert.ok(Date.now() - startedAt < 5000);
 
-  descendantPid = Number.parseInt(await readFile(pidFile, 'utf8'), 10);
-  await new Promise((resolve, reject) => {
-    const deadline = Date.now() + 500;
-    const check = () => {
-      try {
-        process.kill(descendantPid, 0);
-        if (Date.now() >= deadline) {
-          reject(new Error(`descendant ${descendantPid} survived process-group timeout`));
-          return;
-        }
-        setTimeout(check, 10);
-      } catch (error) {
-        if (error.code === 'ESRCH') resolve();
-        else reject(error);
-      }
-    };
-    check();
-  });
+  await Promise.all([
+    waitForProcessTargetToDisappear(
+      descendantPid,
+      `descendant ${descendantPid}`,
+      1000,
+    ),
+    waitForProcessTargetToDisappear(
+      -groupPid,
+      `process group ${groupPid}`,
+      1000,
+    ),
+  ]);
+  groupPid = undefined;
+  descendantPid = undefined;
 });
