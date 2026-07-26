@@ -1,0 +1,4 @@
+interface:
+  display_name: "Fast Browsing"
+  short_description: "Drive browser flows with fewer, smaller calls."
+  default_prompt: "Use $fast-browsing to complete this browser flow efficiently."

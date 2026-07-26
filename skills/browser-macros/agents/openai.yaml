@@ -1,0 +1,4 @@
+interface:
+  display_name: "Browser Macros"
+  short_description: "Reuse indexed scripts for repeated browser flows."
+  default_prompt: "Use $browser-macros to check for a reusable browser flow."

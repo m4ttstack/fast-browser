@@ -1,0 +1,4 @@
+interface:
+  display_name: "Mine Macros"
+  short_description: "Find reusable macros in recorded browser sessions."
+  default_prompt: "Use $mine-macros to evaluate recorded browser flows."
