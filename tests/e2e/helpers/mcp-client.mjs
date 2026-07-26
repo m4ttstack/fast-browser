@@ -1,5 +1,12 @@
 import { execFile as execFileCallback } from 'node:child_process';
-import { access, mkdir, readFile } from 'node:fs/promises';
+import crypto from 'node:crypto';
+import {
+  access,
+  mkdir,
+  readFile,
+  rm,
+  writeFile,
+} from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -16,6 +23,13 @@ const defaultReleaseDir = path.resolve(
   pluginRoot,
   '../../../../../playwright/.worktrees/fast-browser-runtime/fast-browser-dist',
 );
+const INTEGRITY_ERROR = 'the local fast-browser runtime artifact failed integrity validation';
+const EXTRACTION_ERROR = 'the validated local fast-browser runtime artifact could not be extracted';
+const CLEANUP_ERROR = 'the validated local fast-browser runtime artifact could not be cleaned up';
+
+function integrityError() {
+  return new Error(INTEGRITY_ERROR);
+}
 
 async function runtimeCliFor({ outputDir, releaseDir = process.env.FAST_BROWSER_RELEASE_DIR ?? defaultReleaseDir }) {
   const manifest = JSON.parse(await readFile(path.join(releaseDir, 'fast-browser-release-0.1.0-alpha.1.json')));
@@ -23,10 +37,46 @@ async function runtimeCliFor({ outputDir, releaseDir = process.env.FAST_BROWSER_
     throw new Error('the local fast-browser release manifest is not compatible with this fixture');
   }
   const archive = path.join(releaseDir, manifest.runtime.file);
-  await access(archive);
+  let acceptedLock;
+  let archiveBytes;
+  try {
+    [acceptedLock, archiveBytes] = await Promise.all([
+      readFile(path.join(pluginRoot, 'runtime-lock.json'), 'utf8').then(JSON.parse),
+      readFile(archive),
+    ]);
+  } catch {
+    throw integrityError();
+  }
+  const acceptedSha256 = acceptedLock?.runtime?.sha256;
+  const manifestSha256 = manifest.runtime.sha256;
+  const actualSha256 = crypto.createHash('sha256').update(archiveBytes).digest('hex');
+  if (
+    typeof acceptedSha256 !== 'string'
+    || typeof manifestSha256 !== 'string'
+    || manifestSha256 !== acceptedSha256
+    || actualSha256 !== acceptedSha256
+  ) {
+    throw integrityError();
+  }
   const runtimeDir = path.join(outputDir, '.runtime');
-  await mkdir(runtimeDir, { recursive: true });
-  await execFile('/usr/bin/tar', ['-xzf', archive, '-C', runtimeDir]);
+  const validatedArchive = path.join(
+    outputDir,
+    `.runtime-archive-${crypto.randomUUID()}.tar.gz`,
+  );
+  let extractionError = null;
+  try {
+    await writeFile(validatedArchive, archiveBytes, { flag: 'wx', mode: 0o600 });
+    await mkdir(runtimeDir, { recursive: true });
+    await execFile('/usr/bin/tar', ['-xzf', validatedArchive, '-C', runtimeDir]);
+  } catch {
+    extractionError = new Error(EXTRACTION_ERROR);
+  }
+  try {
+    await rm(validatedArchive, { force: true });
+  } catch {
+    throw new Error(CLEANUP_ERROR);
+  }
+  if (extractionError) throw extractionError;
   const cli = path.join(runtimeDir, 'fast-browser-mcp', 'cli.cjs');
   await access(cli);
   return cli;

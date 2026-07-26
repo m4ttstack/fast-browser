@@ -1,13 +1,29 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { watch } from 'node:fs';
+import {
+  copyFile,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rm,
+  writeFile,
+} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 
 import { startOrderFixture } from '../fixtures/order-flow/server.mjs';
 import { startMcpClient } from './helpers/mcp-client.mjs';
+
+const pluginRoot = fileURLToPath(new URL('../../', import.meta.url));
+const acceptedReleaseDir = process.env.FAST_BROWSER_RELEASE_DIR ?? path.resolve(
+  pluginRoot,
+  '../../../../../playwright/.worktrees/fast-browser-runtime/fast-browser-dist',
+);
 
 function fixtureCliOutput() {
   return new Promise((resolve, reject) => {
@@ -48,8 +64,56 @@ async function setup(t) {
   return { browser, fixture, outputDir };
 }
 
+async function copyAcceptedRelease(root) {
+  const releaseDir = path.join(root, 'release');
+  await mkdir(releaseDir);
+  const manifestName = 'fast-browser-release-0.1.0-alpha.1.json';
+  const manifestText = await readFile(path.join(acceptedReleaseDir, manifestName), 'utf8');
+  const manifest = JSON.parse(manifestText);
+  await Promise.all([
+    writeFile(path.join(releaseDir, manifestName), manifestText),
+    copyFile(
+      path.join(acceptedReleaseDir, manifest.runtime.file),
+      path.join(releaseDir, manifest.runtime.file),
+    ),
+  ]);
+  return { releaseDir, archive: path.join(releaseDir, manifest.runtime.file) };
+}
+
 test('prints one local origin JSON line when started with --port 0', async () => {
   assert.match(await fixtureCliOutput(), /^\{"origin":"http:\/\/127\.0\.0\.1:\d+"\}\n$/);
+});
+
+test('extracts the verified archive snapshot if the source changes afterward', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'fast-browser-mcp-snapshot-'));
+  const outputDir = path.join(root, 'output');
+  await mkdir(outputDir);
+  const { releaseDir, archive } = await copyAcceptedRelease(root);
+  let mutationStarted = false;
+  let resolveMutation;
+  let rejectMutation;
+  const mutation = new Promise((resolve, reject) => {
+    resolveMutation = resolve;
+    rejectMutation = reject;
+  });
+  const watcher = watch(outputDir, (_event, filename) => {
+    if (mutationStarted || !filename?.startsWith('.runtime-archive-')) return;
+    mutationStarted = true;
+    writeFile(archive, 'changed after validation').then(resolveMutation, rejectMutation);
+  });
+  t.after(async () => {
+    watcher.close();
+    await rm(root, { recursive: true, force: true });
+  });
+
+  const browser = await startMcpClient({ outputDir, releaseDir });
+  t.after(browser.close);
+
+  assert.equal(await Promise.race([mutation.then(() => true), delay(200, false)]), true);
+  assert.equal(
+    (await readdir(outputDir)).some((name) => name.startsWith('.runtime-archive-')),
+    false,
+  );
 });
 
 test('completes the order flow in no more than three browser calls', async (t) => {
