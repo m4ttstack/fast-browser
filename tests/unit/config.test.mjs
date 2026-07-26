@@ -121,6 +121,20 @@ test('atomically rewrites the config without leaving temporary files and uses mo
   assert.equal(entries.some((entry) => entry.startsWith('.config.json.') && entry.endsWith('.tmp')), false);
 });
 
+test('removes sensitive temp config when atomic promotion fails', async (t) => {
+  const paths = await temporaryPaths(t);
+  await ensurePrivateDirectory(paths.dataDir);
+  await mkdir(paths.configFile);
+
+  await assert.rejects(
+    () => saveConfig(paths, configFor({ profile: 'full' })),
+    (error) => error?.code === 'EISDIR',
+  );
+  assert.equal((await stat(paths.configFile)).isDirectory(), true);
+  const entries = await readdir(paths.dataDir);
+  assert.equal(entries.some((entry) => entry.startsWith('.config.json.') && entry.endsWith('.tmp')), false);
+});
+
 test('loads and validates a saved config', async (t) => {
   const paths = await temporaryPaths(t);
   const config = configFor({ profile: 'full' });
@@ -128,4 +142,18 @@ test('loads and validates a saved config', async (t) => {
   await saveConfig(paths, config);
 
   assert.deepEqual(await loadConfig(paths), config);
+});
+
+test('fails closed when the config file is missing', async (t) => {
+  const paths = await temporaryPaths(t);
+
+  await assert.rejects(() => loadConfig(paths), ConfigError);
+});
+
+test('fails closed when the config file is malformed', async (t) => {
+  const paths = await temporaryPaths(t);
+  await ensurePrivateDirectory(paths.dataDir);
+  await writeFile(paths.configFile, '{not-json}\n', { mode: 0o600 });
+
+  await assert.rejects(() => loadConfig(paths), ConfigError);
 });
