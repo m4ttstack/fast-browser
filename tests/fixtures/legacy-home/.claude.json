@@ -1,0 +1,19 @@
+{
+  "theme": "dark",
+  "mcpServers": {
+    "notes": {
+      "command": "notes-server",
+      "args": ["--keep"]
+    },
+    "playwright": {
+      "command": "npx",
+      "args": ["@playwright/mcp@latest", "--extension"],
+      "env": {
+        "PLAYWRIGHT_MCP_EXTENSION_TOKEN": "legacy-token-fixture"
+      }
+    }
+  },
+  "unrelated": {
+    "playwright": "keep this byte-for-byte"
+  }
+}
