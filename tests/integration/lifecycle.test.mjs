@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
 import {
+  access,
   chmod,
   mkdir,
   mkdtemp,
+  readFile,
   readdir,
   realpath,
   rm,
@@ -16,6 +18,7 @@ import test from 'node:test';
 import { migrate } from '../../lib/commands/migrate.mjs';
 import { setup } from '../../lib/commands/setup.mjs';
 import { resolvePaths } from '../../lib/core/paths.mjs';
+import { installRouting, preflightRoutingRemoval } from '../../lib/hosts/routing.mjs';
 
 function request(overrides = {}) {
   return {
@@ -256,6 +259,126 @@ test('setup never prunes before config persistence and rolls routing back on sav
     /save config/i,
   );
   assert.deepEqual(events, ['save', 'rollback-routing']);
+});
+
+test('setup restores prior routing after config persistence failure', async (t) => {
+  const homeDir = await mkdtemp(path.join(tmpdir(), 'fast-browser-setup-rollback-'));
+  const paths = resolvePaths({ homeDir, pluginRoot: path.resolve(import.meta.dirname, '../..') });
+  t.after(() => rm(homeDir, { recursive: true, force: true }));
+  await mkdir(paths.dataDir, { recursive: true, mode: 0o700 });
+
+  const priorRouting = await installRouting({
+    profile: 'full',
+    hosts: ['claude'],
+    paths,
+  });
+  const previousConfig = {
+    ...migrationConfig(),
+    profile: 'full',
+    hosts: { claude: true, codex: false },
+    sessions: { enabled: true, retentionDays: 30 },
+    managed: { files: priorRouting.files, blocks: priorRouting.blocks },
+  };
+  await writeFile(paths.configFile, `${JSON.stringify(previousConfig)}\n`, { mode: 0o600 });
+
+  const priorClaudeRule = path.join(paths.homeDir, '.claude', 'rules', 'fast-browser-routing.md');
+  const priorClaudeConsent = path.join(
+    paths.homeDir,
+    '.claude',
+    'rules',
+    'fast-browser-verification-consent.md',
+  );
+  const codexAgent = path.join(paths.homeDir, '.codex', 'agents', 'browser_driver.toml');
+  const priorRuleBytes = await readFile(priorClaudeRule, 'utf8');
+  const priorConsentBytes = await readFile(priorClaudeConsent, 'utf8');
+  const priorOwnershipSummary = await preflightRoutingRemoval({
+    paths,
+    managedState: { profile: previousConfig.profile, ...previousConfig.managed },
+  });
+
+  const operation = setup(request({ hosts: ['codex'], profile: 'full' }), {
+    paths,
+    interactive: true,
+    checkPlatform: async () => {},
+    detectHosts: async () => ['codex'],
+    ensureDataDirs: async () => {},
+    loadRuntimeLock: async () => ({
+      productVersion: '0.1.0-alpha.1',
+      runtime: { sha256: 'a'.repeat(64), sourceCommit: 'abc' },
+      extension: { id: 'extension-id', version: '1.0.0' },
+    }),
+    installRuntime: async () => ({ version: '0.1.0-alpha.1' }),
+    installExtension: async () => ({ unpacked: '/tmp/extension' }),
+    installCodex: async () => ({ host: 'codex', changed: false, changes: [] }),
+    installBuiltinMacros: async () => {},
+    getCodexVersion: async () => 'codex-cli 0.145.0',
+    saveConfig: async () => {
+      throw new Error('injected config persistence failure');
+    },
+  });
+
+  await assert.rejects(operation, ({ stage }) => stage === 'save-config');
+  assert.equal(await readFile(priorClaudeRule, 'utf8'), priorRuleBytes);
+  assert.equal(await readFile(priorClaudeConsent, 'utf8'), priorConsentBytes);
+  assert.deepEqual(await preflightRoutingRemoval({
+    paths,
+    managedState: { profile: previousConfig.profile, ...previousConfig.managed },
+  }), priorOwnershipSummary);
+  await assert.rejects(access(codexAgent), { code: 'ENOENT' });
+});
+
+test('setup rollback preserves prior Codex agent ownership across version drift', async (t) => {
+  const homeDir = await mkdtemp(path.join(tmpdir(), 'fast-browser-setup-version-drift-'));
+  const paths = resolvePaths({ homeDir, pluginRoot: path.resolve(import.meta.dirname, '../..') });
+  t.after(() => rm(homeDir, { recursive: true, force: true }));
+  await mkdir(paths.dataDir, { recursive: true, mode: 0o700 });
+
+  const priorRouting = await installRouting({
+    profile: 'full',
+    hosts: ['codex'],
+    paths,
+    codexVersion: 'codex-cli 0.144.0',
+  });
+  const previousConfig = {
+    ...migrationConfig(),
+    profile: 'full',
+    hosts: { claude: false, codex: true },
+    sessions: { enabled: true, retentionDays: 30 },
+    managed: { files: priorRouting.files, blocks: priorRouting.blocks },
+  };
+  await writeFile(paths.configFile, `${JSON.stringify(previousConfig)}\n`, { mode: 0o600 });
+  const codexAgent = path.join(paths.homeDir, '.codex', 'agents', 'browser_driver.toml');
+  const priorAgentBytes = await readFile(codexAgent, 'utf8');
+
+  await assert.rejects(
+    setup(request({ hosts: ['claude'], profile: 'full' }), {
+      paths,
+      interactive: true,
+      checkPlatform: async () => {},
+      detectHosts: async () => ['claude'],
+      ensureDataDirs: async () => {},
+      loadRuntimeLock: async () => ({
+        productVersion: '0.1.0-alpha.1',
+        runtime: { sha256: 'a'.repeat(64), sourceCommit: 'abc' },
+        extension: { id: 'extension-id', version: '1.0.0' },
+      }),
+      installRuntime: async () => ({ version: '0.1.0-alpha.1' }),
+      installExtension: async () => ({ unpacked: '/tmp/extension' }),
+      installClaude: async () => ({ host: 'claude', changed: false, changes: [] }),
+      installBuiltinMacros: async () => {},
+      getCodexVersion: async () => 'codex-cli 0.145.0',
+      saveConfig: async () => {
+        throw new Error('injected config persistence failure');
+      },
+    }),
+    ({ stage }) => stage === 'save-config',
+  );
+
+  assert.equal(await readFile(codexAgent, 'utf8'), priorAgentBytes);
+  await preflightRoutingRemoval({
+    paths,
+    managedState: { profile: previousConfig.profile, ...previousConfig.managed },
+  });
 });
 
 test('partial host installation uses reviewed cleanup and exposes only redacted state', async () => {

@@ -1,5 +1,13 @@
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import {
+  access,
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -21,6 +29,8 @@ import {
 import { main } from '../../lib/cli/main.mjs';
 import { openNdjsonProcess } from '../../lib/core/process.mjs';
 import { runtimeLockIdentity } from '../../lib/runtime/lock.mjs';
+import { resolvePaths } from '../../lib/core/paths.mjs';
+import { installRouting } from '../../lib/hosts/routing.mjs';
 
 test('exports dependency-injected lifecycle command functions', () => {
   assert.equal(typeof setup, 'function');
@@ -1054,11 +1064,117 @@ test('migrate composes deterministic host, routing, verification, and cleanup ad
     'install-routing:claude+codex:codex-cli 0.145.0',
     'save-config',
     'doctor',
-    'remove-routing',
+    'install-routing:claude+codex:codex-cli 0.145.0',
     'remove-claude',
     'save-config',
   ]);
   assert.deepEqual(report, { changed: true });
+});
+
+test('migration cleanup restores prior routing after verification failure', async (t) => {
+  const canonicalTemp = await realpath(tmpdir());
+  const homeDir = await mkdtemp(path.join(canonicalTemp, 'fast-browser-migration-rollback-'));
+  const paths = resolvePaths({ homeDir, pluginRoot: path.resolve(import.meta.dirname, '../..') });
+  t.after(() => rm(homeDir, { recursive: true, force: true }));
+  await mkdir(paths.dataDir, { recursive: true, mode: 0o700 });
+
+  const codexDir = path.join(paths.homeDir, '.codex');
+  const codexAgents = path.join(codexDir, 'AGENTS.md');
+  const codexConfig = path.join(codexDir, 'config.toml');
+  await mkdir(codexDir, { recursive: true, mode: 0o700 });
+  await writeFile(codexAgents, 'unrelated agent instructions\n');
+  await writeFile(codexConfig, 'unrelated_setting = true\n');
+  const priorRouting = await installRouting({
+    profile: 'full',
+    hosts: ['codex'],
+    paths,
+    codexVersion: 'codex-cli 0.145.0',
+  });
+  const previousConfig = validConfig({
+    profile: 'full',
+    hosts: { claude: false, codex: true },
+    sessions: { enabled: true, retentionDays: 30 },
+    managed: { files: priorRouting.files, blocks: priorRouting.blocks },
+  });
+  const previousConfigBytes = `${JSON.stringify(previousConfig, null, 2)}\n`;
+  await writeFile(paths.configFile, previousConfigBytes, { mode: 0o600 });
+
+  const codexAgent = path.join(codexDir, 'agents', 'browser_driver.toml');
+  const priorAgentBytes = await readFile(codexAgent, 'utf8');
+  const priorAgentsBytes = await readFile(codexAgents, 'utf8');
+  const priorPolicyBytes = await readFile(codexConfig, 'utf8');
+  const claudeRule = path.join(paths.homeDir, '.claude', 'rules', 'fast-browser-routing.md');
+
+  await assert.rejects(
+    migrate(
+      {
+        dryRun: false,
+        rollback: null,
+        hosts: ['claude'],
+        source: '/repo/mattstack',
+      },
+      {
+        paths,
+        installClaude: async () => ({ host: 'claude', changed: false, changes: [] }),
+        getCodexVersion: async () => 'codex-cli 0.144.0',
+        verify: async () => {
+          throw new Error('injected verification failure');
+        },
+      },
+    ),
+    ({ stage }) => stage === 'verify',
+  );
+
+  assert.equal(await readFile(codexAgent, 'utf8'), priorAgentBytes);
+  assert.equal(await readFile(codexAgents, 'utf8'), priorAgentsBytes);
+  assert.equal(await readFile(codexConfig, 'utf8'), priorPolicyBytes);
+  assert.equal(await readFile(paths.configFile, 'utf8'), previousConfigBytes);
+  await assert.rejects(access(claudeRule), { code: 'ENOENT' });
+});
+
+test('migration cleanup leaves prior routing unchanged before next routing installs', async (t) => {
+  const canonicalTemp = await realpath(tmpdir());
+  const homeDir = await mkdtemp(path.join(canonicalTemp, 'fast-browser-migration-preinstall-'));
+  const paths = resolvePaths({ homeDir, pluginRoot: path.resolve(import.meta.dirname, '../..') });
+  t.after(() => rm(homeDir, { recursive: true, force: true }));
+  await mkdir(paths.dataDir, { recursive: true, mode: 0o700 });
+
+  const priorRouting = await installRouting({
+    profile: 'full',
+    hosts: ['codex'],
+    paths,
+    codexVersion: 'codex-cli 0.145.0',
+  });
+  const previousConfig = validConfig({
+    profile: 'full',
+    hosts: { claude: false, codex: true },
+    sessions: { enabled: true, retentionDays: 30 },
+    managed: { files: priorRouting.files, blocks: priorRouting.blocks },
+  });
+  await writeFile(paths.configFile, `${JSON.stringify(previousConfig, null, 2)}\n`, { mode: 0o600 });
+  const codexAgent = path.join(paths.homeDir, '.codex', 'agents', 'browser_driver.toml');
+  const priorAgentBytes = await readFile(codexAgent, 'utf8');
+
+  await assert.rejects(
+    migrate(
+      {
+        dryRun: false,
+        rollback: null,
+        hosts: ['claude'],
+        source: '/repo/mattstack',
+      },
+      {
+        paths,
+        installClaude: async () => ({ host: 'claude', changed: false, changes: [] }),
+        getCodexVersion: async () => {
+          throw new Error('injected Codex version failure');
+        },
+      },
+    ),
+    ({ stage }) => stage === 'install',
+  );
+
+  assert.equal(await readFile(codexAgent, 'utf8'), priorAgentBytes);
 });
 
 test('migration config preflight fails closed on every injected loader error before apply', async () => {
