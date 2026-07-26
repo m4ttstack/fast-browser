@@ -359,6 +359,32 @@ test('different macro content gets one deterministic legacy hash name', async (t
   assert.deepEqual(await readFile(path.join(paths.macrosDir, expected)), source);
 });
 
+test('matching metadata retains distinct ordinary and hashed macro targets', async (t) => {
+  const homeDir = await fixtureHome(t);
+  const paths = migrationPaths(homeDir);
+  await mkdir(paths.macrosDir, { recursive: true });
+  const liveSection = '## personal-checkout\n\n'
+    + '- Description: Complete a personal checkout flow.\n'
+    + '- Script: ~/.fast-browser/macros/personal-checkout.js\n'
+    + '- Status: approved';
+  const live = `# Live\n\n${liveSection}\n`;
+  await writeFile(paths.macroIndexFile, live);
+  await writeFile(path.join(paths.macrosDir, 'personal-checkout.js'), '// live user version\n');
+  const source = await readFile(
+    path.join(homeDir, '.playwright-mcp', 'macros', 'personal-checkout.js'),
+  );
+  const importedName = `personal-checkout.legacy-${sha256(source).slice(0, 8)}.js`;
+
+  const inventory = await inventoryFixture(homeDir);
+  await importLegacyData({ inventory, paths });
+  const once = await readFile(paths.macroIndexFile, 'utf8');
+  assert.ok(once.startsWith(live));
+  assert.equal([...once.matchAll(/^## personal-checkout/gm)].length, 2);
+  assert.match(once, new RegExp(`Script: ~\\/\\.fast-browser\\/macros\\/${importedName}`));
+  await importLegacyData({ inventory, paths });
+  assert.equal(await readFile(paths.macroIndexFile, 'utf8'), once);
+});
+
 test('a colliding live heading remains unchanged and gains one deterministic legacy section', async (t) => {
   const homeDir = await fixtureHome(t);
   const paths = migrationPaths(homeDir);
