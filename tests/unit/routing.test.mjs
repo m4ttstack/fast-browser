@@ -19,10 +19,13 @@ import { resolvePaths } from '../../lib/core/paths.mjs';
 import {
   beginOwnedCodexAgentFallback,
   installRouting,
+  prepareRoutingTransition,
   preflightRoutingRemoval,
   removeRouting,
   rewriteOwnedCodexAgentWithoutPreferredModel,
 } from '../../lib/hosts/routing.mjs';
+import { nodeFileTransactionIo } from '../../lib/hosts/file-transaction.mjs';
+import { renderCodexAgent } from '../../lib/hosts/codex-agent.mjs';
 
 const pluginRoot = path.resolve(import.meta.dirname, '../..');
 const safePolicy = [
@@ -53,6 +56,35 @@ async function exists(target) {
     if (error.code === 'ENOENT') return false;
     throw error;
   }
+}
+
+function routingTargets(paths) {
+  return [
+    path.join(paths.homeDir, '.claude', 'rules', 'fast-browser-routing.md'),
+    path.join(
+      paths.homeDir,
+      '.claude',
+      'rules',
+      'fast-browser-verification-consent.md',
+    ),
+    path.join(paths.homeDir, '.codex', 'AGENTS.md'),
+    path.join(paths.homeDir, '.codex', 'AGENTS.override.md'),
+    path.join(paths.homeDir, '.codex', 'agents', 'browser_driver.toml'),
+    path.join(paths.homeDir, '.codex', 'config.toml'),
+  ];
+}
+
+async function snapshotTarget(target) {
+  try {
+    return { exists: true, bytes: await readFile(target) };
+  } catch (error) {
+    if (error.code === 'ENOENT') return { exists: false, bytes: null };
+    throw error;
+  }
+}
+
+async function snapshotTargets(targets) {
+  return Promise.all(targets.map(snapshotTarget));
 }
 
 function assertOwnershipRecords(state) {
@@ -409,6 +441,200 @@ test('removal verifies all ownership before deleting or rewriting anything', asy
 
   assert.equal(await exists(agent.path), true);
   assert.equal(await readFile(config.path, 'utf8'), configBefore);
+});
+
+test('desired destination rejects an externally inserted routing block before mutation', async (t) => {
+  const paths = await temporaryPaths(t);
+  const prior = await installRouting({ profile: 'full', paths });
+  const desiredState = structuredClone(prior);
+  const recordedAgentsPath = prior.blocks.find(
+    ({ id, kind }) => id === 'routing-v1' && kind === 'markdown',
+  ).path;
+  await removeRouting({ paths, managedState: prior });
+  const externalBytes = [
+    'external',
+    '<!-- fast-browser:start routing-v1 -->',
+    'not owned',
+    '<!-- fast-browser:end routing-v1 -->',
+  ].join('\n');
+  await mkdir(path.dirname(recordedAgentsPath), { recursive: true });
+  await writeFile(recordedAgentsPath, externalBytes);
+
+  const operation = prepareRoutingTransition({
+    profile: 'full',
+    paths,
+    managedState: null,
+    desiredState,
+  });
+  await assert.rejects(operation, /routing block destination conflict/i);
+  assert.equal(await readFile(recordedAgentsPath, 'utf8'), externalBytes);
+});
+
+test('unrecorded policy block conflicts even when its bytes match generated policy', async (t) => {
+  const paths = await temporaryPaths(t);
+  const configFile = path.join(paths.homeDir, '.codex', 'config.toml');
+  await mkdir(path.dirname(configFile), { recursive: true });
+  await writeFile(configFile, safePolicy);
+
+  await assert.rejects(
+    prepareRoutingTransition({ profile: 'safe', paths }),
+    /routing block destination conflict/i,
+  );
+  assert.equal(await readFile(configFile, 'utf8'), safePolicy);
+  assert.equal(
+    await exists(path.join(paths.homeDir, '.codex', 'agents', 'browser_driver.toml')),
+    false,
+  );
+});
+
+test('unrecorded dedicated file conflicts even when its bytes match generated file', async (t) => {
+  const paths = await temporaryPaths(t);
+  const agentFile = path.join(
+    paths.homeDir,
+    '.codex',
+    'agents',
+    'browser_driver.toml',
+  );
+  const generated = renderCodexAgent({ usePreferredModel: true });
+  await mkdir(path.dirname(agentFile), { recursive: true });
+  await writeFile(agentFile, generated);
+
+  await assert.rejects(
+    prepareRoutingTransition({
+      profile: 'safe',
+      paths,
+      codexVersion: '0.145.0',
+    }),
+    /routing file destination conflict/i,
+  );
+  assert.equal(await readFile(agentFile, 'utf8'), generated);
+});
+
+test('transaction preparation detects drift in a later managed target before mutation', async (t) => {
+  const paths = await temporaryPaths(t);
+  const managedState = await installRouting({ profile: 'full', paths });
+  const targets = routingTargets(paths);
+  const policy = managedState.blocks.find(({ kind }) => kind === 'toml');
+  const external = (await readFile(policy.path, 'utf8'))
+    .replace('default_tools_approval_mode = "approve"', 'external = true');
+  await writeFile(policy.path, external);
+  const before = await snapshotTargets(targets);
+
+  await assert.rejects(
+    prepareRoutingTransition({
+      profile: 'safe',
+      paths,
+      managedState,
+    }),
+    /ownership|hash|changed/i,
+  );
+  assert.deepEqual(await snapshotTargets(targets), before);
+});
+
+test('AGENTS transition consolidates removal and installation to one mutation per path', async (t) => {
+  const paths = await temporaryPaths(t);
+  const codexDir = path.join(paths.homeDir, '.codex');
+  const agentsFile = path.join(codexDir, 'AGENTS.md');
+  const overrideFile = path.join(codexDir, 'AGENTS.override.md');
+  await mkdir(codexDir, { recursive: true });
+  await writeFile(agentsFile, 'ordinary instructions\n');
+  const first = await installRouting({ profile: 'full', paths });
+  await writeFile(overrideFile, 'override instructions\r\n');
+  const mutations = [];
+  const io = {
+    ...nodeFileTransactionIo,
+    async mutate(change) {
+      mutations.push(change.path);
+      return nodeFileTransactionIo.mutate(change);
+    },
+  };
+
+  const prepared = await prepareRoutingTransition({
+    profile: 'full',
+    paths,
+    managedState: first,
+    transactionIo: io,
+  });
+  await prepared.apply();
+
+  assert.equal(new Set(mutations).size, mutations.length);
+  assert.equal(mutations.filter((target) => target === agentsFile).length, 1);
+  assert.equal(mutations.filter((target) => target === overrideFile).length, 1);
+  assert.equal(await readFile(agentsFile, 'utf8'), 'ordinary instructions\n');
+  assert.match(
+    await readFile(overrideFile, 'utf8'),
+    /<!-- fast-browser:start routing-v1 -->/,
+  );
+});
+
+test('routing transaction reverses every injected partial mutation failure', async (t) => {
+  for (let failAt = 0; failAt < 5; failAt += 1) {
+    const paths = await temporaryPaths(t);
+    const codexDir = path.join(paths.homeDir, '.codex');
+    await mkdir(codexDir, { recursive: true });
+    await writeFile(path.join(codexDir, 'AGENTS.md'), 'unrelated markdown\r\n');
+    await writeFile(path.join(codexDir, 'config.toml'), 'unrelated = true\n');
+    const targets = routingTargets(paths);
+    const before = await snapshotTargets(targets);
+    let mutationIndex = 0;
+    const io = {
+      ...nodeFileTransactionIo,
+      async mutate(change) {
+        if (mutationIndex++ === failAt) {
+          throw new Error('injected routing mutation failure');
+        }
+        return nodeFileTransactionIo.mutate(change);
+      },
+    };
+    const prepared = await prepareRoutingTransition({
+      profile: 'full',
+      paths,
+      transactionIo: io,
+    });
+
+    await assert.rejects(
+      prepared.apply(),
+      /routing transaction apply failed/i,
+    );
+    assert.deepEqual(await snapshotTargets(targets), before);
+  }
+});
+
+test('reciprocal routing receipt restores exact prior bytes and container provenance', async (t) => {
+  const paths = await temporaryPaths(t);
+  const codexDir = path.join(paths.homeDir, '.codex');
+  const agentsFile = path.join(codexDir, 'AGENTS.md');
+  const configFile = path.join(codexDir, 'config.toml');
+  await mkdir(codexDir, { recursive: true });
+  await writeFile(agentsFile, 'unrelated markdown\r\n');
+  await writeFile(configFile, 'unrelated = true\n');
+  const prior = await installRouting({ profile: 'full', paths });
+  const priorSummary = await preflightRoutingRemoval({
+    paths,
+    managedState: prior,
+  });
+  const targets = routingTargets(paths);
+  const before = await snapshotTargets(targets);
+  assert.deepEqual(
+    prior.blocks.map(({ containerCreated }) => containerCreated),
+    [false, false],
+  );
+
+  const prepared = await prepareRoutingTransition({
+    profile: 'safe',
+    paths,
+    managedState: prior,
+  });
+  const receipt = await prepared.apply();
+  await receipt.rollback();
+
+  assert.deepEqual(await snapshotTargets(targets), before);
+  assert.deepEqual(
+    await preflightRoutingRemoval({ paths, managedState: prior }),
+    priorSummary,
+  );
+  assert.match(await readFile(agentsFile, 'utf8'), /^unrelated markdown\r\n/);
+  assert.match(await readFile(configFile, 'utf8'), /^unrelated = true\n/);
 });
 
 test('refuses duplicate or malformed TOML markers without installing the agent', async (t) => {
