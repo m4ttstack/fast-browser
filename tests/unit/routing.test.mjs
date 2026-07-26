@@ -509,3 +509,54 @@ test('Codex agent fallback transaction restores original bytes only while it ret
   await assert.rejects(externallyChanged.rollback(), /ownership|hash|changed/i);
   assert.equal(await readFile(agentPath, 'utf8'), externalBytes);
 });
+
+test('Codex fallback original-ownership errors do not expose the target path', async (t) => {
+  const temporary = await temporaryPaths(t);
+  const paths = resolvePaths({
+    homeDir: path.join(temporary.homeDir, 'maintainer-secret-home'),
+    pluginRoot,
+  });
+  const managedState = await installRouting({
+    profile: 'safe',
+    paths,
+    codexVersion: '0.145.0',
+  });
+  const agentPath = managedState.files[0].path;
+  await writeFile(agentPath, `${await readFile(agentPath, 'utf8')}# external change\n`);
+
+  await assert.rejects(
+    beginOwnedCodexAgentFallback({ paths, managedState }),
+    (error) => {
+      assert.match(error.message, /ownership/i);
+      assert.equal(error.message.includes(agentPath), false);
+      assert.doesNotMatch(error.message, /maintainer|secret/i);
+      return true;
+    },
+  );
+});
+
+test('Codex fallback rollback-ownership errors do not expose the target path', async (t) => {
+  const temporary = await temporaryPaths(t);
+  const paths = resolvePaths({
+    homeDir: path.join(temporary.homeDir, 'maintainer-secret-home'),
+    pluginRoot,
+  });
+  const managedState = await installRouting({
+    profile: 'safe',
+    paths,
+    codexVersion: '0.145.0',
+  });
+  const agentPath = managedState.files[0].path;
+  const receipt = await beginOwnedCodexAgentFallback({ paths, managedState });
+  await writeFile(agentPath, `${await readFile(agentPath, 'utf8')}# external change\n`);
+
+  await assert.rejects(
+    receipt.rollback(),
+    (error) => {
+      assert.match(error.message, /ownership/i);
+      assert.equal(error.message.includes(agentPath), false);
+      assert.doesNotMatch(error.message, /maintainer|secret/i);
+      return true;
+    },
+  );
+});
