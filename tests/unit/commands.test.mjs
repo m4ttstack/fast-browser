@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import {
   access,
   mkdir,
@@ -318,8 +319,12 @@ test('doctor restores the Codex agent when fallback config persistence fails', a
     hosts: { claude: false, codex: true },
     managed: { files: managedState.files, blocks: managedState.blocks },
   });
+  await mkdir(paths.dataDir, { recursive: true, mode: 0o700 });
+  const originalConfigBytes = `${JSON.stringify(config, null, 2)}\n`;
+  await writeFile(paths.configFile, originalConfigBytes, { mode: 0o600 });
   let smokeAttempts = 0;
-  let savedConfig = null;
+  const attemptedConfigs = [];
+  let attemptedAgentHash = null;
   const checks = Object.fromEntries(DOCTOR_CHECK_IDS
     .filter((id) => id !== 'browser-driver')
     .map((id) => [id, async () => ({
@@ -342,7 +347,11 @@ test('doctor restores the Codex agent when fallback config persistence fails', a
         error.model = 'gpt-5.6-terra';
         throw error;
       },
-      saveConfig: async () => {
+      saveConfig: async (_paths, nextConfig) => {
+        attemptedConfigs.push(structuredClone(nextConfig));
+        attemptedAgentHash = crypto.createHash('sha256')
+          .update(await readFile(agentPath))
+          .digest('hex');
         throw new Error('/Users/maintainer/private-config.json');
       },
     },
@@ -350,7 +359,10 @@ test('doctor restores the Codex agent when fallback config persistence fails', a
 
   assert.equal(smokeAttempts, 1);
   assert.equal(await readFile(agentPath, 'utf8'), originalBytes);
-  assert.equal(savedConfig, null);
+  assert.equal(attemptedConfigs.length, 1);
+  assert.equal(attemptedConfigs[0].managed.files[0].sha256, attemptedAgentHash);
+  assert.notEqual(attemptedAgentHash, managedState.files[0].sha256);
+  assert.equal(await readFile(paths.configFile, 'utf8'), originalConfigBytes);
   const browserDriverCheck = report.checks.find(({ id }) => id === 'browser-driver');
   assert.equal(browserDriverCheck.status, 'fail');
   assert.deepEqual(await preflightRoutingRemoval({ paths, managedState }), {
@@ -1202,8 +1214,8 @@ test('migrate composes deterministic host, routing, verification, and cleanup ad
     'save-config',
     'doctor',
     'install-routing:claude+codex:codex-cli 0.145.0',
-    'remove-claude',
     'save-config',
+    'remove-claude',
   ]);
   assert.deepEqual(report, { changed: true });
 });
@@ -1217,6 +1229,7 @@ test('migration cleanup restores prior routing after verification failure', asyn
 
   const codexDir = path.join(paths.homeDir, '.codex');
   const codexAgents = path.join(codexDir, 'AGENTS.md');
+  const codexOverride = path.join(codexDir, 'AGENTS.override.md');
   const codexConfig = path.join(codexDir, 'config.toml');
   await mkdir(codexDir, { recursive: true, mode: 0o700 });
   await writeFile(codexAgents, 'unrelated agent instructions\n');
@@ -1240,6 +1253,12 @@ test('migration cleanup restores prior routing after verification failure', asyn
   const priorAgentBytes = await readFile(codexAgent, 'utf8');
   const priorAgentsBytes = await readFile(codexAgents, 'utf8');
   const priorPolicyBytes = await readFile(codexConfig, 'utf8');
+  const priorOwnershipSummary = await preflightRoutingRemoval({
+    paths,
+    managedState: { profile: previousConfig.profile, ...previousConfig.managed },
+  });
+  const unrelatedOverrideBytes = 'unrelated higher-precedence instructions\n';
+  await writeFile(codexOverride, unrelatedOverrideBytes, { mode: 0o600 });
   const claudeRule = path.join(paths.homeDir, '.claude', 'rules', 'fast-browser-routing.md');
 
   await assert.rejects(
@@ -1264,9 +1283,204 @@ test('migration cleanup restores prior routing after verification failure', asyn
 
   assert.equal(await readFile(codexAgent, 'utf8'), priorAgentBytes);
   assert.equal(await readFile(codexAgents, 'utf8'), priorAgentsBytes);
+  assert.equal(await readFile(codexOverride, 'utf8'), unrelatedOverrideBytes);
   assert.equal(await readFile(codexConfig, 'utf8'), priorPolicyBytes);
   assert.equal(await readFile(paths.configFile, 'utf8'), previousConfigBytes);
+  assert.deepEqual(await preflightRoutingRemoval({
+    paths,
+    managedState: { profile: previousConfig.profile, ...previousConfig.managed },
+  }), priorOwnershipSummary);
   await assert.rejects(access(claudeRule), { code: 'ENOENT' });
+});
+
+test('migration cleanup does not resave a prior config when the next config never persisted', async (t) => {
+  const homeDir = await mkdtemp(path.join(await realpath(tmpdir()), 'fast-browser-migration-unsaved-'));
+  const paths = resolvePaths({ homeDir, pluginRoot: path.resolve(import.meta.dirname, '../..') });
+  t.after(() => rm(homeDir, { recursive: true, force: true }));
+  await mkdir(paths.dataDir, { recursive: true, mode: 0o700 });
+
+  const priorRouting = await installRouting({
+    profile: 'full',
+    hosts: ['codex'],
+    paths,
+    codexVersion: 'codex-cli 0.145.0',
+  });
+  const previousConfig = validConfig({
+    profile: 'full',
+    hosts: { claude: false, codex: true },
+    sessions: { enabled: true, retentionDays: 30 },
+    managed: { files: priorRouting.files, blocks: priorRouting.blocks },
+  });
+  const previousConfigBytes = `${JSON.stringify(previousConfig, null, 2)}\n`;
+  await writeFile(paths.configFile, previousConfigBytes, { mode: 0o600 });
+  let saveAttempts = 0;
+
+  await assert.rejects(
+    migrate(
+      {
+        dryRun: false,
+        rollback: null,
+        hosts: ['claude'],
+        source: '/repo/mattstack',
+      },
+      {
+        paths,
+        installClaude: async () => ({ host: 'claude', changed: false, changes: [] }),
+        getCodexVersion: async () => 'codex-cli 0.145.0',
+        saveConfig: async () => {
+          saveAttempts += 1;
+          throw new Error('injected next config save failure');
+        },
+      },
+    ),
+    ({ stage }) => stage === 'install',
+  );
+
+  assert.equal(saveAttempts, 1);
+  assert.equal(await readFile(paths.configFile, 'utf8'), previousConfigBytes);
+  await preflightRoutingRemoval({
+    paths,
+    managedState: { profile: previousConfig.profile, ...previousConfig.managed },
+  });
+});
+
+test('migration cleanup reconciles routing back to the persisted next config when prior save fails', async (t) => {
+  const homeDir = await mkdtemp(path.join(await realpath(tmpdir()), 'fast-browser-migration-next-'));
+  const paths = resolvePaths({ homeDir, pluginRoot: path.resolve(import.meta.dirname, '../..') });
+  t.after(() => rm(homeDir, { recursive: true, force: true }));
+  await mkdir(paths.dataDir, { recursive: true, mode: 0o700 });
+
+  const codexDir = path.join(paths.homeDir, '.codex');
+  const codexAgents = path.join(codexDir, 'AGENTS.md');
+  await mkdir(codexDir, { recursive: true, mode: 0o700 });
+  await writeFile(codexAgents, 'unrelated prior instructions\n');
+  const priorRouting = await installRouting({
+    profile: 'full',
+    hosts: ['codex'],
+    paths,
+    codexVersion: 'codex-cli 0.145.0',
+  });
+  const previousConfig = validConfig({
+    profile: 'full',
+    hosts: { claude: false, codex: true },
+    sessions: { enabled: true, retentionDays: 30 },
+    managed: { files: priorRouting.files, blocks: priorRouting.blocks },
+  });
+  await writeFile(paths.configFile, `${JSON.stringify(previousConfig, null, 2)}\n`, { mode: 0o600 });
+  const saves = [];
+
+  await assert.rejects(
+    migrate(
+      {
+        dryRun: false,
+        rollback: null,
+        hosts: ['claude'],
+        source: '/repo/mattstack',
+      },
+      {
+        paths,
+        installClaude: async () => ({ host: 'claude', changed: false, changes: [] }),
+        getCodexVersion: async () => 'codex-cli 0.145.0',
+        saveConfig: async (_paths, config) => {
+          saves.push(structuredClone(config));
+          if (saves.length > 1) throw new Error('/Users/maintainer/prior-save.json');
+          await writeFile(paths.configFile, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
+        },
+        verify: async () => {
+          throw new Error('injected verification failure');
+        },
+      },
+    ),
+    (error) => {
+      assert.equal(error.stage, 'verify');
+      assert.doesNotMatch(JSON.stringify(error), /maintainer|prior-save/);
+      return true;
+    },
+  );
+
+  assert.equal(saves.length, 2);
+  const nextConfig = saves[0];
+  const nextConfigBytes = `${JSON.stringify(nextConfig, null, 2)}\n`;
+  assert.equal(await readFile(paths.configFile, 'utf8'), nextConfigBytes);
+  await preflightRoutingRemoval({
+    paths,
+    managedState: { profile: nextConfig.profile, ...nextConfig.managed },
+  });
+  await assert.rejects(
+    access(path.join(paths.homeDir, '.codex', 'agents', 'browser_driver.toml')),
+    { code: 'ENOENT' },
+  );
+});
+
+test('migration persists prior config before adapter cleanup and propagates cleanup failure redacted', async (t) => {
+  const homeDir = await mkdtemp(path.join(await realpath(tmpdir()), 'fast-browser-migration-order-'));
+  const paths = resolvePaths({ homeDir, pluginRoot: path.resolve(import.meta.dirname, '../..') });
+  t.after(() => rm(homeDir, { recursive: true, force: true }));
+  await mkdir(paths.dataDir, { recursive: true, mode: 0o700 });
+
+  const priorRouting = await installRouting({
+    profile: 'full',
+    hosts: ['codex'],
+    paths,
+    codexVersion: 'codex-cli 0.145.0',
+  });
+  const previousConfig = validConfig({
+    profile: 'full',
+    hosts: { claude: false, codex: true },
+    sessions: { enabled: true, retentionDays: 30 },
+    managed: { files: priorRouting.files, blocks: priorRouting.blocks },
+  });
+  const previousConfigBytes = `${JSON.stringify(previousConfig, null, 2)}\n`;
+  await writeFile(paths.configFile, previousConfigBytes, { mode: 0o600 });
+  const events = [];
+
+  await assert.rejects(
+    migrate(
+      {
+        dryRun: false,
+        rollback: null,
+        hosts: ['claude'],
+        source: '/repo/mattstack',
+      },
+      {
+        paths,
+        installClaude: async () => ({
+          host: 'claude',
+          changed: true,
+          changes: ['plugin-installed'],
+        }),
+        getCodexVersion: async () => 'codex-cli 0.145.0',
+        saveConfig: async (_paths, config) => {
+          events.push(config.hosts.codex ? 'save-prior' : 'save-next');
+          await writeFile(paths.configFile, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
+        },
+        uninstallClaude: async () => {
+          events.push('uninstall-claude');
+          throw new Error('/Users/maintainer/adapter-cleanup');
+        },
+        verify: async () => {
+          throw new Error('injected verification failure');
+        },
+      },
+    ),
+    (error) => {
+      assert.equal(error.stage, 'recovery');
+      assert.match(error.message, /recovery required/i);
+      assert.doesNotMatch(JSON.stringify(error), /maintainer|adapter-cleanup|Users/);
+      return true;
+    },
+  );
+
+  assert.deepEqual(events, ['save-next', 'save-prior', 'uninstall-claude']);
+  assert.equal(await readFile(paths.configFile, 'utf8'), previousConfigBytes);
+  await preflightRoutingRemoval({
+    paths,
+    managedState: { profile: previousConfig.profile, ...previousConfig.managed },
+  });
+  await assert.rejects(
+    access(path.join(paths.homeDir, '.claude', 'rules', 'fast-browser-routing.md')),
+    { code: 'ENOENT' },
+  );
 });
 
 test('migration cleanup leaves prior routing unchanged before next routing installs', async (t) => {
