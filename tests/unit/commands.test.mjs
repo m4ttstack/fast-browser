@@ -35,6 +35,7 @@ import {
   installRouting,
   preflightRoutingRemoval,
 } from '../../lib/hosts/routing.mjs';
+import { PairingError } from '../../lib/keychain/pair.mjs';
 
 test('exports dependency-injected lifecycle command functions', () => {
   assert.equal(typeof setup, 'function');
@@ -917,6 +918,7 @@ test('production MCP composition uses one persistent pinned-runtime duplex sessi
 
 test('configure composes full defaults, applies explicit overrides, saves before pruning', async () => {
   const events = [];
+  let rollbacks = 0;
   const current = validConfig();
   const managed = {
     profile: 'full',
@@ -932,9 +934,12 @@ test('configure composes full defaults, applies explicit overrides, saves before
     },
     {
       loadConfig: async () => current,
-      installRouting: async ({ profile, hosts, managedState }) => {
+      prepareRoutingTransition: async ({ profile, hosts, managedState }) => {
         events.push(`routing:${profile}:${hosts.join('+')}:${managedState.profile ?? 'none'}`);
-        return managed;
+        return {
+          nextState: managed,
+          apply: async () => ({ rollback: async () => { rollbacks += 1; } }),
+        };
       },
       saveConfig: async (_paths, config) => events.push(`save:${config.sessions.retentionDays}`),
       pruneSessions: async () => events.push('prune'),
@@ -950,6 +955,7 @@ test('configure composes full defaults, applies explicit overrides, saves before
     blocks: [],
   });
   assert.deepEqual(events, ['routing:full:claude+codex:safe', 'save:17']);
+  assert.equal(rollbacks, 0);
 });
 
 test('configure auto connection invokes secure pairing and full recording defaults', async () => {
@@ -963,7 +969,10 @@ test('configure auto connection invokes secure pairing and full recording defaul
     },
     {
       loadConfig: async () => validConfig(),
-      installRouting: async () => ({ profile: 'full', files: [], blocks: [] }),
+      prepareRoutingTransition: async () => ({
+        nextState: { profile: 'full', files: [], blocks: [] },
+        apply: async () => ({ rollback: async () => {} }),
+      }),
       pairAutoConnect: async (config, { updateConfig }) => {
         events.push('pair');
         const paired = { ...config, connection: { mode: 'auto' } };
@@ -1000,16 +1009,27 @@ test('configure validates retention and never records in safe profile', async ()
   );
 });
 
-test('configure rolls routing back when config persistence fails', async () => {
+test('configure uses the exact routing receipt when config persistence fails', async () => {
   const events = [];
+  const routing = { profile: 'full', files: [], blocks: [] };
   await assert.rejects(
     configure(
       { profile: 'full', connection: null, recordSessions: null, retentionDays: null },
       {
         loadConfig: async () => validConfig(),
+        prepareRoutingTransition: async () => {
+          events.push('routing:prepare');
+          return {
+            nextState: routing,
+            apply: async () => {
+              events.push('routing:apply');
+              return { rollback: async () => events.push('routing:rollback') };
+            },
+          };
+        },
         installRouting: async ({ profile, managedState }) => {
-          events.push(`routing:${profile}:${managedState?.profile ?? 'none'}`);
-          return { profile, files: [], blocks: [] };
+          events.push(`routing:obsolete-render:${profile}:${managedState?.profile ?? 'none'}`);
+          return routing;
         },
         saveConfig: async () => {
           events.push('save');
@@ -1025,7 +1045,165 @@ test('configure rolls routing back when config persistence fails', async () => {
       return true;
     },
   );
-  assert.deepEqual(events, ['routing:full:safe', 'save', 'routing:safe:full']);
+  assert.deepEqual(events, [
+    'routing:prepare',
+    'routing:apply',
+    'save',
+    'routing:rollback',
+  ]);
+});
+
+test('configure rolls back the routing receipt for plain, automatic, and manual persistence failures', async () => {
+  const cases = [
+    {
+      name: 'plain',
+      request: { profile: 'full', connection: null, recordSessions: null, retentionDays: null },
+      dependencies: {},
+      pairingError: false,
+    },
+    {
+      name: 'automatic',
+      request: { profile: 'full', connection: 'auto', recordSessions: null, retentionDays: null },
+      dependencies: {
+        hasToken: async () => false,
+        pairAutoConnect: async (config, { updateConfig }) => {
+          try {
+            await updateConfig(config);
+          } catch {
+            throw new PairingError('automatic pairing save failed');
+          }
+        },
+      },
+      pairingError: true,
+    },
+    {
+      name: 'manual',
+      request: { profile: 'full', connection: 'manual', recordSessions: null, retentionDays: null },
+      dependencies: {
+        setManualConnection: async (config, { updateConfig }) => {
+          try {
+            await updateConfig(config);
+          } catch {
+            throw new PairingError('manual pairing save failed');
+          }
+        },
+      },
+      pairingError: true,
+    },
+  ];
+
+  for (const entry of cases) {
+    const events = [];
+    await assert.rejects(
+      configure(entry.request, {
+        loadConfig: async () => validConfig(),
+        prepareRoutingTransition: async () => {
+          events.push('routing:prepare');
+          return {
+            nextState: { profile: 'full', files: [], blocks: [] },
+            apply: async () => {
+              events.push('routing:apply');
+              return { rollback: async () => events.push('routing:rollback') };
+            },
+          };
+        },
+        saveConfig: async () => {
+          events.push('config:save');
+          throw new Error('injected save failure');
+        },
+        paths: {},
+        ...entry.dependencies,
+      }),
+      (error) => {
+        if (entry.pairingError) {
+          assert.equal(error.name, 'PairingError');
+        } else {
+          assert.equal(error.stage, 'save-config');
+        }
+        return true;
+      },
+      entry.name,
+    );
+    assert.deepEqual(events, [
+      'routing:prepare',
+      'routing:apply',
+      'config:save',
+      'routing:rollback',
+    ]);
+  }
+});
+
+test('configure restores exact prior routing bytes from one real receipt', async (t) => {
+  const homeDir = await mkdtemp(path.join(tmpdir(), 'fast-browser-configure-receipt-'));
+  const paths = resolvePaths({ homeDir, pluginRoot: path.resolve(import.meta.dirname, '../..') });
+  t.after(() => rm(homeDir, { recursive: true, force: true }));
+  await mkdir(paths.dataDir, { recursive: true, mode: 0o700 });
+  const codexDir = path.join(homeDir, '.codex');
+  const codexConfig = path.join(codexDir, 'config.toml');
+  await mkdir(codexDir, { recursive: true, mode: 0o700 });
+  await writeFile(codexConfig, 'unrelated_setting = true\n');
+  const priorRouting = await installRouting({
+    profile: 'full',
+    hosts: ['codex'],
+    paths,
+    codexVersion: 'codex-cli 0.145.0',
+  });
+  const previousBytes = await readFile(codexConfig, 'utf8');
+  const current = validConfig({
+    profile: 'full',
+    hosts: { claude: false, codex: true },
+    sessions: { enabled: true, retentionDays: 30 },
+    managed: { files: priorRouting.files, blocks: priorRouting.blocks },
+  });
+
+  await assert.rejects(
+    configure(
+      { profile: 'safe', connection: null, recordSessions: null, retentionDays: null },
+      {
+        paths,
+        loadConfig: async () => current,
+        getCodexVersion: async () => 'codex-cli 0.145.0',
+        saveConfig: async () => { throw new Error('injected save failure'); },
+      },
+    ),
+    ({ stage }) => stage === 'save-config',
+  );
+
+  assert.equal(await readFile(codexConfig, 'utf8'), previousBytes);
+  await preflightRoutingRemoval({
+    paths,
+    managedState: { profile: current.profile, ...current.managed },
+  });
+});
+
+test('configure preserves external drift and redacts receipt-managed state on rollback failure', async (t) => {
+  const homeDir = await mkdtemp(path.join(tmpdir(), 'fast-browser-configure-drift-'));
+  const paths = resolvePaths({ homeDir, pluginRoot: path.resolve(import.meta.dirname, '../..') });
+  t.after(() => rm(homeDir, { recursive: true, force: true }));
+  await mkdir(paths.dataDir, { recursive: true, mode: 0o700 });
+  const routingPath = path.join(homeDir, '.claude', 'rules', 'fast-browser-routing.md');
+
+  await assert.rejects(
+    configure(
+      { profile: 'full', connection: null, recordSessions: null, retentionDays: null },
+      {
+        paths,
+        loadConfig: async () => validConfig({ hosts: { claude: true, codex: false } }),
+        saveConfig: async () => {
+          await writeFile(routingPath, 'external routing drift\n', { mode: 0o600 });
+          throw new Error('injected save failure');
+        },
+      },
+    ),
+    (error) => {
+      assert.equal(error.stage, 'save-config');
+      assert.equal(error.partialState, null);
+      assert.doesNotMatch(JSON.stringify(error), /fast-browser-routing|external routing drift/);
+      return true;
+    },
+  );
+
+  assert.equal(await readFile(routingPath, 'utf8'), 'external routing drift\n');
 });
 
 test('configure retention failure keeps the durably tracked configuration', async () => {
@@ -1035,7 +1213,10 @@ test('configure retention failure keeps the durably tracked configuration', asyn
       { profile: 'full', connection: null, recordSessions: null, retentionDays: null },
       {
         loadConfig: async () => validConfig(),
-        installRouting: async () => ({ profile: 'full', files: [], blocks: [] }),
+        prepareRoutingTransition: async () => ({
+          nextState: { profile: 'full', files: [], blocks: [] },
+          apply: async () => ({ rollback: async () => {} }),
+        }),
         saveConfig: async () => events.push('save'),
         pruneSessions: async () => {
           events.push('prune');
@@ -2005,7 +2186,10 @@ test('CLI production dispatch composes setup entirely from injected adapters', a
       installExtension: async () => ({ unpacked: '/tmp/extension' }),
       installClaude: async () => ({ host: 'claude', changed: false, changes: [] }),
       installBuiltinMacros: async () => {},
-      installRouting: async () => ({ profile: 'safe', files: [], blocks: [] }),
+      prepareRoutingTransition: async () => ({
+        nextState: { profile: 'safe', files: [], blocks: [] },
+        apply: async () => ({ rollback: async () => {} }),
+      }),
       saveConfig: async () => events.push('save'),
       doctor: async () => ({ schemaVersion: 1, ok: true, profile: 'safe', checks: [] }),
       loadConfig: async () => null,

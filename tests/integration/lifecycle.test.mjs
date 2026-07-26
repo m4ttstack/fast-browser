@@ -18,7 +18,11 @@ import test from 'node:test';
 import { migrate } from '../../lib/commands/migrate.mjs';
 import { setup } from '../../lib/commands/setup.mjs';
 import { resolvePaths } from '../../lib/core/paths.mjs';
-import { installRouting, preflightRoutingRemoval } from '../../lib/hosts/routing.mjs';
+import {
+  installRouting,
+  prepareRoutingTransition,
+  preflightRoutingRemoval,
+} from '../../lib/hosts/routing.mjs';
 
 function request(overrides = {}) {
   return {
@@ -65,7 +69,13 @@ test('setup orchestrates lifecycle work in the exact deterministic order', async
     installCodex: record('install-codex', { changed: true }),
     installBuiltinMacros: record('install-builtins'),
     pruneSessions: record('prune-sessions', { removedPaths: [], removedBytes: 0 }),
-    installRouting: record('install-routing', managedState),
+    prepareRoutingTransition: async () => {
+      events.push('prepare-routing');
+      return {
+        nextState: managedState,
+        apply: record('apply-routing', { rollback: async () => {} }),
+      };
+    },
     saveConfig: record('save-config'),
     doctor: record('doctor', { schemaVersion: 1, ok: true, checks: [] }),
     loadConfig: async () => null,
@@ -85,7 +95,8 @@ test('setup orchestrates lifecycle work in the exact deterministic order', async
     'install-claude',
     'install-codex',
     'install-builtins',
-    'install-routing',
+    'prepare-routing',
+    'apply-routing',
     'save-config',
     'prune-sessions',
     'doctor',
@@ -113,9 +124,12 @@ test('setup carries selected hosts and the detected Codex version into routing',
     installExtension: async () => ({ unpacked: '/tmp/extension' }),
     installCodex: async () => ({ changed: true, changes: ['plugin-installed'] }),
     installBuiltinMacros: async () => {},
-    installRouting: async (input) => {
+    prepareRoutingTransition: async (input) => {
       routingInput = input;
-      return { profile: 'safe', files: [], blocks: [] };
+      return {
+        nextState: { profile: 'safe', files: [], blocks: [] },
+        apply: async () => ({ rollback: async () => {} }),
+      };
     },
     saveConfig: async () => {},
     doctor: async () => ({ schemaVersion: 1, ok: true, checks: [] }),
@@ -229,8 +243,9 @@ test('matching setup reports doctor or current-state drift instead of claiming c
   }
 });
 
-test('setup never prunes before config persistence and rolls routing back on save failure', async () => {
+test('setup uses the exact routing receipt when config persistence fails', async () => {
   const events = [];
+  const routing = { profile: 'full', files: [], blocks: [] };
   await assert.rejects(
     setup(request({ hosts: ['claude'] }), {
       checkPlatform: async () => {},
@@ -245,20 +260,84 @@ test('setup never prunes before config persistence and rolls routing back on sav
       installExtension: async () => ({ unpacked: '/tmp/extension' }),
       installClaude: async () => ({ host: 'claude', changed: true }),
       installBuiltinMacros: async () => {},
-      installRouting: async () => ({ profile: 'full', files: [], blocks: [] }),
+      prepareRoutingTransition: async () => {
+        events.push('routing:prepare');
+        return {
+          nextState: routing,
+          apply: async () => {
+            events.push('routing:apply');
+            return { rollback: async () => events.push('routing:rollback') };
+          },
+        };
+      },
+      installRouting: async () => {
+        events.push('routing:obsolete-render');
+        return routing;
+      },
       saveConfig: async () => {
         events.push('save');
         throw new Error('disk failure');
       },
       pruneSessions: async () => events.push('prune'),
-      removeRouting: async () => events.push('rollback-routing'),
+      removeRouting: async () => events.push('routing:obsolete-remove'),
       loadConfig: async () => null,
       paths: {},
       interactive: true,
     }),
     /save config/i,
   );
-  assert.deepEqual(events, ['save', 'rollback-routing']);
+  assert.deepEqual(events, [
+    'routing:prepare',
+    'routing:apply',
+    'save',
+    'routing:rollback',
+  ]);
+});
+
+test('setup preserves external routing drift and redacts exact prior receipt state', async (t) => {
+  const homeDir = await mkdtemp(path.join(tmpdir(), 'fast-browser-setup-receipt-drift-'));
+  const paths = resolvePaths({ homeDir, pluginRoot: path.resolve(import.meta.dirname, '../..') });
+  t.after(() => rm(homeDir, { recursive: true, force: true }));
+  await mkdir(paths.dataDir, { recursive: true, mode: 0o700 });
+  const routingPath = path.join(paths.homeDir, '.claude', 'rules', 'fast-browser-routing.md');
+  let preparations = 0;
+
+  await assert.rejects(
+    setup(request({ hosts: ['claude'] }), {
+      paths,
+      interactive: true,
+      checkPlatform: async () => {},
+      detectHosts: async () => ['claude'],
+      ensureDataDirs: async () => {},
+      loadRuntimeLock: async () => ({
+        productVersion: '0.1.0-alpha.1',
+        runtime: { sha256: 'a'.repeat(64), sourceCommit: 'abc' },
+        extension: { id: 'extension-id', version: '1.0.0' },
+      }),
+      installRuntime: async () => ({ version: '0.1.0-alpha.1' }),
+      installExtension: async () => ({ unpacked: '/tmp/extension' }),
+      installClaude: async () => ({ host: 'claude', changed: false, changes: [] }),
+      installBuiltinMacros: async () => {},
+      prepareRoutingTransition: async (options) => {
+        preparations += 1;
+        return prepareRoutingTransition(options);
+      },
+      saveConfig: async () => {
+        await writeFile(routingPath, 'external routing drift\n', { mode: 0o600 });
+        throw new Error('injected config persistence failure');
+      },
+      loadConfig: async () => null,
+    }),
+    (error) => {
+      assert.equal(error.stage, 'save-config');
+      assert.equal(error.partialState, null);
+      assert.doesNotMatch(JSON.stringify(error), /fast-browser-routing|external routing drift/);
+      return true;
+    },
+  );
+
+  assert.equal(preparations, 1);
+  assert.equal(await readFile(routingPath, 'utf8'), 'external routing drift\n');
 });
 
 test('setup restores prior routing after config persistence failure', async (t) => {
@@ -518,13 +597,15 @@ test('post-save retention failure preserves the tracked installation', async () 
         changes: ['plugin-installed'],
       }),
       installBuiltinMacros: async () => {},
-      installRouting: async () => ({ profile: 'full', files: [], blocks: [] }),
+      prepareRoutingTransition: async () => ({
+        nextState: { profile: 'full', files: [], blocks: [] },
+        apply: async () => ({ rollback: async () => {} }),
+      }),
       saveConfig: async () => events.push('save'),
       pruneSessions: async () => {
         events.push('prune');
         throw new Error('/Users/secret');
       },
-      removeRouting: async () => events.push('remove-routing'),
       uninstallClaude: async () => events.push('remove-claude'),
       loadConfig: async () => null,
       paths: {},
