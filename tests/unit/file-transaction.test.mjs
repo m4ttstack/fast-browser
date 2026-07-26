@@ -81,6 +81,50 @@ test('apply preflights every target before the first mutation', async (t) => {
   assert.equal(await readFile(paths[1], 'utf8'), 'external');
 });
 
+test('apply reverses its prefix when a later target drifts before mutation', async (t) => {
+  const home = await temporaryHome(t, 'inter-mutation-drift-');
+  const firstPath = path.join(home, 'a.txt');
+  const secondPath = path.join(home, 'b.txt');
+  await writeFile(firstPath, 'before-a');
+  await writeFile(secondPath, 'before-b');
+  let drifted = false;
+  const io = {
+    ...nodeFileTransactionIo,
+    async mutate(change) {
+      await nodeFileTransactionIo.mutate(change);
+      if (!drifted && change.path === firstPath) {
+        drifted = true;
+        await writeFile(secondPath, 'external-b');
+      }
+    },
+  };
+  const prepared = prepareFileTransaction({
+    home,
+    changes: [
+      {
+        path: firstPath,
+        before: { exists: true, bytes: Buffer.from('before-a') },
+        after: { exists: true, bytes: Buffer.from('after-a') },
+      },
+      {
+        path: secondPath,
+        before: { exists: true, bytes: Buffer.from('before-b') },
+        after: { exists: true, bytes: Buffer.from('after-b') },
+      },
+    ],
+    io,
+  });
+
+  const error = await prepared.apply().then(
+    () => assert.fail('transaction must reject inter-mutation drift'),
+    (caught) => caught,
+  );
+
+  assert.equal(await readFile(firstPath, 'utf8'), 'before-a');
+  assert.equal(await readFile(secondPath, 'utf8'), 'external-b');
+  assert.equal(error.message, 'routing transaction apply failed');
+});
+
 test('apply automatically reverses each possible partial mutation failure', async (t) => {
   for (let failAt = 0; failAt < 3; failAt += 1) {
     const {
