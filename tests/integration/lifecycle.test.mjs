@@ -146,6 +146,53 @@ test('setup carries selected hosts and the detected Codex version into routing',
   assert.equal(routingInput.codexVersion, 'codex-cli 0.145.0');
 });
 
+test('setup removes a prior Codex host without probing its unavailable version', async () => {
+  let routingInput;
+  const current = {
+    ...migrationConfig(),
+    profile: 'full',
+    hosts: { claude: false, codex: true },
+    sessions: { enabled: true, retentionDays: 30 },
+  };
+  const report = await setup(request({ hosts: ['claude'], profile: 'full' }), {
+    checkPlatform: async () => {},
+    detectHosts: async () => ['claude'],
+    getCodexVersion: async () => {
+      throw new Error('stale prior-host Codex probe');
+    },
+    ensureDataDirs: async () => {},
+    loadRuntimeLock: async () => ({
+      productVersion: '0.1.0-alpha.1',
+      runtime: { sha256: 'a'.repeat(64), sourceCommit: 'abc' },
+      extension: { id: 'extension-id', version: '1.0.0' },
+    }),
+    installRuntime: async () => ({ version: '0.1.0-alpha.1' }),
+    installExtension: async () => ({ unpacked: '/tmp/extension' }),
+    installClaude: async () => ({ changed: false, changes: [] }),
+    installBuiltinMacros: async () => {},
+    prepareRoutingTransition: async (input) => {
+      routingInput = input;
+      return {
+        nextState: { profile: 'full', files: [], blocks: [] },
+        apply: async () => ({ rollback: async () => {} }),
+      };
+    },
+    saveConfig: async () => {},
+    pruneSessions: async () => ({ removedPaths: [], removedBytes: 0 }),
+    doctor: async () => ({ schemaVersion: 1, ok: true, checks: [] }),
+    loadConfig: async () => current,
+    paths: {
+      homeDir: '/home/test',
+      dataDir: '/home/test/.fast-browser',
+      configFile: '/home/test/.fast-browser/config.json',
+    },
+    interactive: true,
+  });
+
+  assert.deepEqual(report.hosts, ['claude']);
+  assert.equal(routingInput.codexVersion, '');
+});
+
 test('second matching setup is a true mutation no-op', async () => {
   const events = [];
   const current = {
