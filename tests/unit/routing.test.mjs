@@ -17,7 +17,9 @@ import test from 'node:test';
 
 import { resolvePaths } from '../../lib/core/paths.mjs';
 import {
+  beginOwnedCodexAgentFallback,
   installRouting,
+  preflightRoutingRemoval,
   removeRouting,
   rewriteOwnedCodexAgentWithoutPreferredModel,
 } from '../../lib/hosts/routing.mjs';
@@ -467,4 +469,43 @@ test('owned Codex agent fallback rewrites atomically and updates its ownership h
   assert.notEqual(updated.files[0].sha256, state.files[0].sha256);
   assertOwnershipRecords(updated);
   assert.equal((await stat(state.files[0].path)).mode & 0o777, 0o600);
+});
+
+test('Codex agent fallback transaction restores original bytes only while it retains ownership', async (t) => {
+  const paths = await temporaryPaths(t);
+  const originalManagedState = await installRouting({
+    profile: 'safe',
+    paths,
+    codexVersion: '0.145.0',
+  });
+  const agentPath = originalManagedState.files[0].path;
+  const originalBytes = await readFile(agentPath, 'utf8');
+  const originalOwnershipSummary = await preflightRoutingRemoval({
+    paths,
+    managedState: originalManagedState,
+  });
+
+  const receipt = await beginOwnedCodexAgentFallback({
+    paths,
+    managedState: originalManagedState,
+  });
+  assert.notEqual(
+    receipt.managedState.files[0].sha256,
+    originalManagedState.files[0].sha256,
+  );
+  await receipt.rollback();
+  assert.equal(await readFile(agentPath, 'utf8'), originalBytes);
+  assert.deepEqual(await preflightRoutingRemoval({
+    paths,
+    managedState: originalManagedState,
+  }), originalOwnershipSummary);
+
+  const externallyChanged = await beginOwnedCodexAgentFallback({
+    paths,
+    managedState: originalManagedState,
+  });
+  const externalBytes = `${await readFile(agentPath, 'utf8')}# external change\n`;
+  await writeFile(agentPath, externalBytes);
+  await assert.rejects(externallyChanged.rollback(), /ownership|hash|changed/i);
+  assert.equal(await readFile(agentPath, 'utf8'), externalBytes);
 });

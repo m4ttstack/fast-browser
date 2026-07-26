@@ -30,7 +30,10 @@ import { main } from '../../lib/cli/main.mjs';
 import { openNdjsonProcess } from '../../lib/core/process.mjs';
 import { runtimeLockIdentity } from '../../lib/runtime/lock.mjs';
 import { resolvePaths } from '../../lib/core/paths.mjs';
-import { installRouting } from '../../lib/hosts/routing.mjs';
+import {
+  installRouting,
+  preflightRoutingRemoval,
+} from '../../lib/hosts/routing.mjs';
 
 test('exports dependency-injected lifecycle command functions', () => {
   assert.equal(typeof setup, 'function');
@@ -266,9 +269,9 @@ test('doctor rewrites one still-owned preferred Codex agent, persists its hash, 
           throw error;
         }
       },
-      rewriteOwnedCodexAgent: async ({ managedState }) => {
+      beginOwnedCodexAgentFallback: async ({ managedState }) => {
         events.push(`rewrite:${managedState.files[0].sha256}`);
-        return updatedState;
+        return { managedState: updatedState, rollback: async () => assert.fail('must not roll back') };
       },
       saveConfig: async (_paths, config) => {
         events.push('save-config');
@@ -295,6 +298,140 @@ test('doctor rewrites one still-owned preferred Codex agent, persists its hash, 
   ]);
   assert.equal(saved.managed.files[0].sha256, 'c'.repeat(64));
   assert.equal(attempts, 2);
+});
+
+test('doctor restores the Codex agent when fallback config persistence fails', async (t) => {
+  const homeDir = await mkdtemp(path.join(tmpdir(), 'fast-browser-doctor-fallback-'));
+  t.after(() => rm(homeDir, { recursive: true, force: true }));
+  const paths = resolvePaths({
+    homeDir,
+    pluginRoot: path.resolve(import.meta.dirname, '../..'),
+  });
+  const managedState = await installRouting({
+    profile: 'safe',
+    paths,
+    codexVersion: '0.145.0',
+  });
+  const agentPath = managedState.files[0].path;
+  const originalBytes = await readFile(agentPath, 'utf8');
+  const config = validConfig({
+    hosts: { claude: false, codex: true },
+    managed: { files: managedState.files, blocks: managedState.blocks },
+  });
+  let smokeAttempts = 0;
+  let savedConfig = null;
+  const checks = Object.fromEntries(DOCTOR_CHECK_IDS
+    .filter((id) => id !== 'browser-driver')
+    .map((id) => [id, async () => ({
+      status: 'pass',
+      message: `${id} passed.`,
+      remediation: null,
+    })]));
+
+  const report = await doctor(
+    { profile: 'safe' },
+    {
+      paths,
+      config,
+      checks,
+      runCodexAgentSmoke: async () => {
+        smokeAttempts += 1;
+        const error = new Error('preferred model unavailable');
+        error.name = 'CodexBrowserDriverSmokeError';
+        error.code = 'MODEL_NOT_FOUND';
+        error.model = 'gpt-5.6-terra';
+        throw error;
+      },
+      saveConfig: async () => {
+        throw new Error('/Users/maintainer/private-config.json');
+      },
+    },
+  );
+
+  assert.equal(smokeAttempts, 1);
+  assert.equal(await readFile(agentPath, 'utf8'), originalBytes);
+  assert.equal(savedConfig, null);
+  const browserDriverCheck = report.checks.find(({ id }) => id === 'browser-driver');
+  assert.equal(browserDriverCheck.status, 'fail');
+  assert.deepEqual(await preflightRoutingRemoval({ paths, managedState }), {
+    files: [{ path: agentPath, exists: true }],
+    blocks: managedState.blocks.map(({ path: target, id, kind }) => ({
+      path: target,
+      id,
+      kind,
+      exists: true,
+    })),
+  });
+  assert.doesNotMatch(browserDriverCheck.message, /model =|maintainer|private-config/i);
+  assert.doesNotMatch(JSON.stringify(report), /model =|maintainer|private-config/i);
+});
+
+test('doctor reports recovery required without exposing fallback bytes when rollback fails', async () => {
+  const config = validConfig({
+    hosts: { claude: false, codex: true },
+    managed: {
+      files: [{
+        path: '/home/test/.codex/agents/browser_driver.toml',
+        sha256: 'a'.repeat(64),
+      }],
+      blocks: [],
+    },
+  });
+  const checks = Object.fromEntries(DOCTOR_CHECK_IDS
+    .filter((id) => id !== 'browser-driver')
+    .map((id) => [id, async () => ({
+      status: 'pass',
+      message: `${id} passed.`,
+      remediation: null,
+    })]));
+  let smokeAttempts = 0;
+
+  const report = await doctor(
+    { profile: 'safe' },
+    {
+      config,
+      checks,
+      preflightRouting: async () => {},
+      runCodexAgentSmoke: async () => {
+        smokeAttempts += 1;
+        const error = new Error('preferred model unavailable');
+        error.name = 'CodexBrowserDriverSmokeError';
+        error.code = 'MODEL_NOT_FOUND';
+        error.model = 'gpt-5.6-terra';
+        throw error;
+      },
+      beginOwnedCodexAgentFallback: async () => ({
+        managedState: {
+          profile: 'safe',
+          files: [{
+            path: '/home/test/.codex/agents/browser_driver.toml',
+            sha256: 'c'.repeat(64),
+          }],
+          blocks: [],
+        },
+        rollback: async () => {
+          throw new Error('/Users/maintainer/original-bytes');
+        },
+      }),
+      saveConfig: async () => {
+        throw new Error('/Users/maintainer/private-config.json');
+      },
+      paths: {
+        homeDir: '/home/test',
+        dataDir: '/home/test/.fast-browser',
+        configFile: '/home/test/.fast-browser/config.json',
+        runtimeDir: '/home/test/.fast-browser/runtime',
+        extensionDir: '/home/test/.fast-browser/extension',
+        pluginRoot: '/plugin',
+      },
+    },
+  );
+
+  const browserDriverCheck = report.checks.find(({ id }) => id === 'browser-driver');
+  assert.equal(smokeAttempts, 1);
+  assert.equal(browserDriverCheck.status, 'fail');
+  assert.match(browserDriverCheck.message, /requires recovery/i);
+  assert.doesNotMatch(JSON.stringify(report), /Users|maintainer|original-bytes|private-config/i);
 });
 
 test('doctor never rewrites or retries an unrelated Codex smoke failure', async () => {
@@ -328,7 +465,7 @@ test('doctor never rewrites or retries an unrelated Codex smoke failure', async 
         attempts += 1;
         throw new Error('network unavailable for gpt-5.6-terra');
       },
-      rewriteOwnedCodexAgent: async () => {
+      beginOwnedCodexAgentFallback: async () => {
         rewrites += 1;
       },
       paths: {
@@ -383,7 +520,7 @@ test('doctor stops after an ownership mismatch instead of retrying a rewritten C
         error.model = 'gpt-5.6-terra';
         throw error;
       },
-      rewriteOwnedCodexAgent: async () => {
+      beginOwnedCodexAgentFallback: async () => {
         throw new Error('Codex agent ownership hash changed');
       },
       saveConfig: async () => {
