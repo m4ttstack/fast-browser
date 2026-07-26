@@ -5,42 +5,64 @@ runtime and Chrome extension for Claude Code, Codex, or both. It includes the
 same three browser skills for both hosts, plus host-specific routing and a
 delegated browser driver.
 
-This package is still `private: true` and `UNLICENSED`. It has not been
-published to npm, so the `npx` path below is a post-publication example, not a
-currently available install method. Source installs are the supported candidate
-workflow.
+This package is still `private: true` and `UNLICENSED`. The source checkout
+alone is not an installable candidate: its bundled lock points to a runtime
+commit, tag, and release assets that are not public. The only current candidate
+flow requires a separately produced local release bundle.
 
 ## Requirements and limits
 
 - macOS, Google Chrome, and Node.js 20 or newer.
 - Claude Code, Codex, or both already installed.
 - Chrome is the only supported browser in this alpha.
-- Runtime and extension downloads are pinned by `runtime-lock.json`.
+- Runtime and extension identity is pinned by `runtime-lock.json`.
 
 Other operating systems, Chromium variants, Firefox, Safari, remote browsers,
 and unattended extension loading are not supported by this candidate.
 
 ## Install
 
-After a future npm publication, setup will be:
+`npx` is not available. It remains gated on choosing a license, an authorized
+npm publisher publishing the package, and the locked runtime release becoming
+public. After all three gates are resolved, the intended setup form is:
 
 ```bash
 npx @mattstack/fast-browser setup --host both
 ```
 
-For the current local candidate, clone or check out the repository, then run
-the bundled CLI and give it the repository root as its marketplace source:
+### Local candidate bundle
+
+The current verified flow requires these three files in one local directory:
+
+- `fast-browser-release-0.1.0-alpha.1.json`
+- `fast-browser-mcp-0.1.0-alpha.1.tar.gz`
+- `fast-browser-extension-0.1.0-alpha.1.zip`
+
+The release JSON is the URL-free local candidate manifest. The runtime and
+extension filenames above must be adjacent to it and must match its locked
+SHA-256 values. These files are produced separately; they are not included in
+the source checkout or npm tarball.
+
+If you possess that local candidate bundle, run the bundled CLI from a source
+checkout with absolute paths:
 
 ```bash
 cd /path/to/mattstack
 node plugins/fast-browser/bin/fast-browser.mjs setup \
   --source /path/to/mattstack \
-  --host both
+  --runtime-lock /absolute/path/to/fast-browser-release-0.1.0-alpha.1.json \
+  --host both \
+  --profile safe
 ```
 
 The remaining examples use the installed command name `fast-browser`. For an
 unpublished source checkout, replace it with
 `node /path/to/mattstack/plugins/fast-browser/bin/fast-browser.mjs`.
+
+Do not omit `--runtime-lock` on the initial local candidate setup. The
+URL-backed bundled lock will fail until the runtime commit, tag, and release
+assets are public. The override is accepted only when it contains no URLs; the
+CLI resolves the two exact adjacent artifacts locally and verifies both hashes.
 
 Use `--host claude`, `--host codex`, or `--host both`. Interactive setup with
 no `--host` uses the installed hosts it detects. Non-interactive setup always
@@ -49,10 +71,10 @@ Setup defaults to `--profile safe`. A matching repeat setup is a mutation
 no-op only when all doctor checks still pass. If external files or installation
 state drifted, setup reports the drift instead of claiming success.
 
-Setup downloads and verifies the locked runtime and extension, installs the
+Setup reads and verifies the locally locked runtime and extension, installs the
 selected host plugin adapters, writes owned routing state, and prints the
 unpacked extension directory. It does not install a public license, publish the
-package, or load the extension into Chrome for you.
+package or runtime release, or load the extension into Chrome for you.
 
 ## Load the Chrome extension
 

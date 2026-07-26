@@ -5,8 +5,6 @@ import {
   mkdtemp,
   readFile,
   readdir,
-  readlink,
-  realpath,
   rm,
 } from 'node:fs/promises';
 import os from 'node:os';
@@ -14,9 +12,11 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
+import { gunzipSync } from 'node:zlib';
 
 const execFileAsync = promisify(execFile);
 const pluginRoot = fileURLToPath(new URL('../..', import.meta.url));
+const repositoryRoot = fileURLToPath(new URL('../../../..', import.meta.url));
 
 const requiredEntries = [
   'package/.claude-plugin/plugin.json',
@@ -24,6 +24,24 @@ const requiredEntries = [
   'package/.mcp.json',
   'package/adapters/codex/mcp.json',
   'package/agents/browser-driver.md',
+  'package/builtins/macros/page-recon.js',
+  'package/lib/cli/main.mjs',
+  'package/lib/cli/parse-args.mjs',
+  'package/lib/commands/configure.mjs',
+  'package/lib/commands/doctor.mjs',
+  'package/lib/commands/migrate.mjs',
+  'package/lib/commands/setup.mjs',
+  'package/lib/commands/uninstall.mjs',
+  'package/lib/doctor/checks.mjs',
+  'package/lib/migration/apply.mjs',
+  'package/lib/migration/inventory.mjs',
+  'package/lib/migration/rollback.mjs',
+  'package/lib/runtime/install.mjs',
+  'package/lib/runtime/launch.mjs',
+  'package/lib/runtime/lock.mjs',
+  'package/skills/browser-macros/agents/openai.yaml',
+  'package/skills/fast-browsing/agents/openai.yaml',
+  'package/skills/mine-macros/agents/openai.yaml',
   'package/templates/codex/browser_driver.toml',
   'package/templates/routing/claude/fast-browser-routing.md',
   'package/templates/routing/claude/fast-browser-verification-consent.md',
@@ -36,6 +54,53 @@ const requiredEntries = [
   'package/SECURITY.md',
   'package/THIRD_PARTY_NOTICES.md',
 ];
+
+function tarString(block, offset, length) {
+  const bytes = block.subarray(offset, offset + length);
+  const nul = bytes.indexOf(0);
+  return bytes.subarray(0, nul < 0 ? bytes.length : nul).toString('utf8');
+}
+
+function tarSize(block) {
+  const raw = tarString(block, 124, 12).trim();
+  assert.match(raw, /^[0-7]+$/, 'tar entry has a non-octal size');
+  return Number.parseInt(raw, 8);
+}
+
+function tarHeaders(compressed) {
+  const archive = gunzipSync(compressed);
+  const headers = [];
+  let offset = 0;
+  while (offset + 512 <= archive.length) {
+    const block = archive.subarray(offset, offset + 512);
+    if (block.every((byte) => byte === 0)) break;
+    const name = tarString(block, 0, 100);
+    const prefix = tarString(block, 345, 155);
+    const type = tarString(block, 156, 1) || '0';
+    const linkTarget = tarString(block, 157, 100);
+    const size = tarSize(block);
+    headers.push({
+      name: prefix ? `${prefix}/${name}` : name,
+      type,
+      linkTarget,
+    });
+    offset += 512 + Math.ceil(size / 512) * 512;
+  }
+  assert.ok(headers.length > 0, 'tarball has no headers');
+  return headers;
+}
+
+function assertPortableArchivePath(value, label) {
+  assert.notEqual(value, '', `empty ${label}`);
+  assert.equal(path.posix.isAbsolute(value), false, `absolute ${label}: ${value}`);
+  assert.doesNotMatch(value, /\\/, `backslash in ${label}: ${value}`);
+  assert.doesNotMatch(value, /^[A-Za-z]:/, `drive-qualified ${label}: ${value}`);
+  assert.equal(
+    value.split('/').includes('..'),
+    false,
+    `parent segment in ${label}: ${value}`,
+  );
+}
 
 async function walk(root, directory = root) {
   const entries = [];
@@ -73,6 +138,7 @@ test('npm package contains only portable deployable Fast Browser assets', async 
   });
   const entries = listing.split('\n').filter(Boolean);
   const entrySet = new Set(entries.map((entry) => entry.replace(/\/$/, '')));
+  const headers = tarHeaders(await readFile(tarball));
 
   for (const required of requiredEntries) {
     assert.equal(entrySet.has(required), true, `package is missing ${required}`);
@@ -84,16 +150,11 @@ test('npm package contains only portable deployable Fast Browser assets', async 
   );
 
   for (const entry of entries) {
-    assert.equal(path.posix.isAbsolute(entry), false, `absolute tar entry: ${entry}`);
+    assertPortableArchivePath(entry, 'tar entry');
     assert.equal(
       entry === 'package' || entry.startsWith('package/'),
       true,
       `tar entry escaped the package root: ${entry}`,
-    );
-    assert.equal(
-      path.posix.normalize(entry).startsWith('package/../'),
-      false,
-      `tar entry traverses outside the package root: ${entry}`,
     );
     assert.doesNotMatch(
       entry,
@@ -103,38 +164,39 @@ test('npm package contains only portable deployable Fast Browser assets', async 
     assert.doesNotMatch(entry, /\/Users\/|\.playwright-mcp/, `non-portable package entry: ${entry}`);
   }
 
+  for (const header of headers) {
+    assertPortableArchivePath(header.name, 'tar header name');
+    if (header.linkTarget) {
+      assertPortableArchivePath(header.linkTarget, 'tar link target');
+    }
+    assert.equal(
+      header.type === '0' || header.type === '5',
+      true,
+      `package contains a link or special tar header: ${header.type} ${header.name}`,
+    );
+    assert.equal(header.linkTarget, '', `package tar header links elsewhere: ${header.name}`);
+  }
+
   await execFileAsync('tar', ['-xzf', tarball, '-C', temporary], {
     maxBuffer: 10 * 1024 * 1024,
   });
   const extractedRoot = path.join(temporary, 'package');
-  const canonicalRoot = await realpath(extractedRoot);
   const extracted = await walk(extractedRoot);
   const textParts = [];
+  const textByPath = new Map();
 
   for (const entry of extracted) {
-    if (entry.state.isSymbolicLink()) {
-      const target = await readlink(entry.absolute);
-      const resolved = path.resolve(path.dirname(entry.absolute), target);
-      const canonicalTarget = await realpath(entry.absolute);
-      const relativeTarget = path.relative(canonicalRoot, canonicalTarget);
-      assert.equal(
-        relativeTarget === '..'
-          || relativeTarget.startsWith(`..${path.sep}`)
-          || path.isAbsolute(relativeTarget),
-        false,
-        `package symlink escapes its root: ${entry.relative} -> ${target}`,
-      );
-      assert.equal(
-        resolved === canonicalRoot || resolved.startsWith(`${canonicalRoot}${path.sep}`),
-        true,
-        `package symlink has an outside lexical target: ${entry.relative} -> ${target}`,
-      );
-      continue;
-    }
-    if (!entry.state.isFile()) continue;
+    assert.equal(
+      entry.state.isFile() || entry.state.isDirectory(),
+      true,
+      `extracted package contains a link or special file: ${entry.relative}`,
+    );
+    if (entry.state.isDirectory()) continue;
     const contents = await readFile(entry.absolute);
     if (!contents.includes(0)) {
-      textParts.push(`\n--- ${entry.relative} ---\n${contents.toString('utf8')}`);
+      const text = contents.toString('utf8');
+      textByPath.set(entry.relative, text);
+      textParts.push(`\n--- ${entry.relative} ---\n${text}`);
     }
   }
 
@@ -162,4 +224,37 @@ test('npm package contains only portable deployable Fast Browser assets', async 
     /\b[A-Z][A-Z0-9_]*(?:_TOKEN|_SECRET|_PASSWORD|_API_KEY)\s*=\s*[^\s"'`]+/,
     'package text contains a token or secret assignment',
   );
+
+  const readme = textByPath.get('README.md');
+  const normalizedReadme = readme.replace(/\s+/g, ' ');
+  assert.match(normalizedReadme, /source checkout alone is not an installable candidate/i);
+  assert.match(normalizedReadme, /fast-browser-release-0\.1\.0-alpha\.1\.json/);
+  assert.match(normalizedReadme, /fast-browser-mcp-0\.1\.0-alpha\.1\.tar\.gz/);
+  assert.match(normalizedReadme, /fast-browser-extension-0\.1\.0-alpha\.1\.zip/);
+  assert.match(
+    readme,
+    /setup[\s\S]*--source \/path\/to\/mattstack[\s\S]*--runtime-lock \/absolute\/path\/to\/fast-browser-release-0\.1\.0-alpha\.1\.json[\s\S]*--host both[\s\S]*--profile safe/,
+  );
+  assert.match(
+    normalizedReadme,
+    /URL-backed bundled lock will fail until the runtime commit, tag, and release assets are public/i,
+  );
+  assert.match(
+    normalizedReadme,
+    /npx[\s\S]*(?:license|licensed)[\s\S]*(?:publisher|publish)[\s\S]*runtime release/i,
+  );
+
+  const rootReadme = await readFile(path.join(repositoryRoot, 'README.md'), 'utf8');
+  const normalizedRootReadme = rootReadme.replace(/\s+/g, ' ');
+  assert.match(normalizedRootReadme, /source checkout alone is not an installable candidate/i);
+  assert.match(
+    normalizedRootReadme,
+    /--runtime-lock \/absolute\/path\/to\/fast-browser-release-0\.1\.0-alpha\.1\.json/,
+  );
+
+  const notices = textByPath.get('THIRD_PARTY_NOTICES.md');
+  assert.match(notices, /not public/i);
+  assert.match(notices, /23c61fcce87a8d2fcaf9f636751f062641a1bf1e/);
+  assert.match(notices, /fast-browser-mcp-0\.1\.0-alpha\.1\.tar\.gz/);
+  assert.match(notices, /fast-browser-extension-0\.1\.0-alpha\.1\.zip/);
 });
