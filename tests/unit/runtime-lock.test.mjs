@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFile as execFileCallback } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -72,6 +72,60 @@ test('rejects malformed checksums before installation', () => {
     const input = fixtureLock();
     input.runtime.sha256 = sha256;
     assert.throws(() => parseRuntimeLock(input), /runtime\.sha256.*64-character hexadecimal/i);
+  }
+});
+
+test('rejects noncanonical or path-capable product versions', () => {
+  for (const version of [
+    '.',
+    '..',
+    '/tmp/escape',
+    'C:\\escape',
+    '1/../../escape',
+    '1\\..\\escape',
+    '%2e%2e',
+    'v1.2.3',
+    '1.2',
+    '01.2.3',
+    '1.02.3',
+    '1.2.03',
+    '1.2.3-01',
+    '1.2.3-',
+  ]) {
+    const input = fixtureLock();
+    input.productVersion = version;
+    input.runtime.file = `fast-browser-mcp-${version}.tar.gz`;
+    input.extension.file = `fast-browser-extension-${version}.zip`;
+    assert.throws(
+      () => parseRuntimeLock(input),
+      /productVersion.*canonical SemVer/i,
+      version,
+    );
+  }
+});
+
+test('rejects noncanonical or path-capable extension versions', () => {
+  for (const version of [
+    '.',
+    '..',
+    '/tmp/escape',
+    'C:\\escape',
+    '1/../../escape',
+    '1\\..\\escape',
+    '%2e%2e',
+    'v1.2.3',
+    '1.2',
+    '01.2.3',
+    '1.2.3-01',
+    '1.2.3+',
+  ]) {
+    const input = fixtureLock();
+    input.extension.version = version;
+    assert.throws(
+      () => parseRuntimeLock(input),
+      /extension\.version.*canonical SemVer/i,
+      version,
+    );
   }
 });
 
@@ -375,4 +429,53 @@ test('wrapper help smoke never downloads when the runtime is missing', async () 
   );
   const runtimeDirectory = path.join(dataDir, 'runtime');
   await assert.rejects(readFile(path.join(runtimeDirectory, '.download')), /ENOENT/);
+});
+
+test('launcher refuses runtime roots and CLIs that symlink outside dataDir', async () => {
+  for (const symlinkAt of ['root', 'cli']) {
+    const home = await mkdtemp(path.join(os.tmpdir(), 'fast-browser-launch-'));
+    const outside = await mkdtemp(path.join(os.tmpdir(), 'fast-browser-outside-'));
+    const paths = launcherPaths(home);
+    const lock = fixtureLock();
+    const outsideCli = path.join(outside, 'outside-cli.cjs');
+    await writeFile(outsideCli, 'do-not-launch\n');
+    if (symlinkAt === 'root') {
+      const outsideRuntime = path.join(
+        outside,
+        lock.productVersion,
+        'fast-browser-mcp',
+      );
+      await mkdir(outsideRuntime, { recursive: true });
+      await writeFile(path.join(outsideRuntime, 'cli.cjs'), 'do-not-launch\n');
+      await writeFile(
+        path.join(outside, lock.productVersion, 'installed.json'),
+        JSON.stringify({ schemaVersion: 1, lock: fixtureIdentity(lock) }),
+      );
+      await mkdir(paths.dataDir, { recursive: true });
+      await symlink(outside, paths.runtimeDir);
+    } else {
+      const installed = await installedLauncher();
+      paths.dataDir = installed.paths.dataDir;
+      paths.runtimeDir = installed.paths.runtimeDir;
+      await rm(installed.cli);
+      await symlink(outsideCli, installed.cli);
+    }
+
+    let spawnCalls = 0;
+    await assert.rejects(
+      launchRuntime({
+        config: launcherConfig(),
+        paths,
+        lock,
+        readToken: async () => null,
+        spawn: () => {
+          spawnCalls += 1;
+        },
+      }),
+      /symlink|confined|outside|fast-browser doctor/i,
+      symlinkAt,
+    );
+    assert.equal(spawnCalls, 0);
+    assert.equal(await readFile(outsideCli, 'utf8'), 'do-not-launch\n');
+  }
 });

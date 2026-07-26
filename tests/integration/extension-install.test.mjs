@@ -291,3 +291,71 @@ test('detects exact IDs only in Default and Profile <N> without returning prefer
     { profile: 'Profile 3', installed: false, manifestVersion: null },
   ]);
 });
+
+test('defense-in-depth rejects a raw lock whose extension version escapes its root', async () => {
+  const fixture = await extensionFixture();
+  const home = await mkdtemp(path.join(os.tmpdir(), 'fast-browser-home-'));
+  const paths = pathsFor(home);
+  const lock = lockFor(
+    'http://127.0.0.1:1/extension.zip',
+    fixture.archive,
+    fixture.id,
+  );
+  lock.extension.version = '..';
+  let fetchCalls = 0;
+
+  await assert.rejects(
+    installExtension({
+      lock,
+      paths,
+      fetch: async () => {
+        fetchCalls += 1;
+        return new Response(fixture.archive, { status: 200 });
+      },
+    }),
+    /confined|outside|descendant/i,
+  );
+  assert.equal(fetchCalls, 0);
+});
+
+test('refuses pre-existing symlinks that would move extension writes outside dataDir', async () => {
+  const fixture = await extensionFixture();
+  for (const symlinkAt of ['data', 'root', 'version']) {
+    const home = await mkdtemp(path.join(os.tmpdir(), 'fast-browser-home-'));
+    const outside = await mkdtemp(path.join(os.tmpdir(), 'fast-browser-outside-'));
+    const paths = pathsFor(home);
+    await writeFile(path.join(outside, 'sentinel'), 'unchanged');
+    if (symlinkAt === 'data') {
+      await symlink(outside, paths.dataDir);
+    } else {
+      await mkdir(paths.dataDir, { recursive: true });
+      if (symlinkAt === 'root') {
+        await symlink(outside, paths.extensionDir);
+      } else {
+        await mkdir(paths.extensionDir);
+        await symlink(outside, path.join(paths.extensionDir, '0.2.1'));
+      }
+    }
+    const before = (await readdir(outside)).sort();
+    let fetchCalls = 0;
+    await assert.rejects(
+      installExtension({
+        lock: lockFor(
+          'http://127.0.0.1:1/extension.zip',
+          fixture.archive,
+          fixture.id,
+        ),
+        paths,
+        fetch: async () => {
+          fetchCalls += 1;
+          return new Response(fixture.archive, { status: 200 });
+        },
+      }),
+      /symlink|confined|outside/i,
+      symlinkAt,
+    );
+    assert.equal(fetchCalls, 0);
+    assert.deepEqual((await readdir(outside)).sort(), before);
+    assert.equal(await readFile(path.join(outside, 'sentinel'), 'utf8'), 'unchanged');
+  }
+});
