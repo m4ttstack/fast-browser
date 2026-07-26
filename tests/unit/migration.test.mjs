@@ -442,6 +442,72 @@ test('same-heading import does not duplicate a truly represented normalized sect
   assert.equal(await readFile(paths.macroIndexFile, 'utf8'), live);
 });
 
+test('occupied deterministic legacy labels preserve both user and imported sections', async (t) => {
+  const selectedLabels = [];
+  for (const unrelatedPosition of ['before', 'after']) {
+    const homeDir = await fixtureHome(t, `migration-label-collision-${unrelatedPosition}-`);
+    const paths = migrationPaths(homeDir);
+    await mkdir(paths.macrosDir, { recursive: true });
+    const sourceIndex = await readFile(
+      path.join(homeDir, '.playwright-mcp', 'macros', 'MACROS.md'),
+      'utf8',
+    );
+    const importedSection = sourceIndex
+      .slice(sourceIndex.indexOf('## personal-checkout'))
+      .replace(
+        '/Users/example/.playwright-mcp/macros/personal-checkout.js',
+        '~/.fast-browser/macros/personal-checkout.js',
+      )
+      .trimEnd();
+    const fullIdentity = sha256(Buffer.from(importedSection));
+    const userBase = '## personal-checkout\n\n- Description: Live owner.\n'
+      + '- Script: ~/.fast-browser/macros/live-personal-checkout.js';
+    const occupied = `## personal-checkout (legacy ${fullIdentity.slice(0, 8)})\n\n`
+      + '- Description: User-owned deterministic label collision.\n'
+      + '- Script: ~/.fast-browser/macros/user-collision.js';
+    const unrelated = '## unrelated\n\n- Script: custom.js';
+    const ordered = unrelatedPosition === 'before'
+      ? [unrelated, userBase, occupied]
+      : [userBase, occupied, unrelated];
+    const live = `# Live\n\n${ordered.join('\n\n')}\n`;
+    await writeFile(paths.macroIndexFile, live);
+
+    const inventory = await inventoryFixture(homeDir);
+    await importLegacyData({ inventory, paths });
+    const once = await readFile(paths.macroIndexFile, 'utf8');
+    const expectedLabel = `personal-checkout (legacy ${fullIdentity.slice(0, 12)})`;
+    assert.ok(once.startsWith(live));
+    assert.match(once, /User-owned deterministic label collision/);
+    assert.match(once, /Complete a personal checkout flow/);
+    assert.match(once, new RegExp(`^## ${expectedLabel.replace(/[()]/g, '\\$&')}$`, 'm'));
+    await importLegacyData({ inventory, paths });
+    assert.equal(await readFile(paths.macroIndexFile, 'utf8'), once);
+    selectedLabels.push(expectedLabel);
+  }
+  assert.equal(selectedLabels[0], selectedLabels[1]);
+});
+
+test('duplicate identical legacy sections are queued only once', async (t) => {
+  const homeDir = await fixtureHome(t);
+  const paths = migrationPaths(homeDir);
+  await mkdir(paths.macrosDir, { recursive: true });
+  await writeFile(paths.macroIndexFile, '# Live\n');
+  const sourcePath = path.join(homeDir, '.playwright-mcp', 'macros', 'MACROS.md');
+  const source = await readFile(sourcePath, 'utf8');
+  const duplicate = source.slice(source.indexOf('## personal-checkout')).trimEnd();
+  await writeFile(sourcePath, `${source.trimEnd()}\n\n${duplicate}\n`);
+
+  const inventory = await inventoryFixture(homeDir);
+  await importLegacyData({ inventory, paths });
+  const once = await readFile(paths.macroIndexFile, 'utf8');
+  assert.equal(
+    [...once.matchAll(/^## personal-checkout(?: \(legacy [a-f0-9]+\))?$/gm)].length,
+    1,
+  );
+  await importLegacyData({ inventory, paths });
+  assert.equal(await readFile(paths.macroIndexFile, 'utf8'), once);
+});
+
 test('import rejects source and target symlink collisions without outside writes', async (t) => {
   const homeDir = await fixtureHome(t);
   const paths = migrationPaths(homeDir);
