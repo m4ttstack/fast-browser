@@ -276,3 +276,42 @@ test('captured stdout and stderr are bounded and never returned in failures', as
   assert.equal(stdoutDiagnostic.includes(marker), false);
   assert.equal(stderrDiagnostic.includes(marker), false);
 });
+
+test('overflow rejects promptly and terminates a child that never closes', async () => {
+  const token = 'overflow-secret-fixture';
+  const attempts = [];
+  const child = new EventEmitter();
+  child.stdout = new FakeReadable();
+  child.stderr = new FakeReadable();
+  child.stdout.destroy = () => attempts.push('stdout.destroy');
+  child.stderr.destroy = () => attempts.push('stderr.destroy');
+  child.kill = () => {
+    attempts.push('kill');
+    return true;
+  };
+  const spawn = () => {
+    process.nextTick(() => {
+      child.stdout.emit('data', Buffer.from(token.repeat(4_000)));
+    });
+    return child;
+  };
+
+  const outcome = await Promise.race([
+    capturedRejection(() => readToken({ spawn })).then((diagnostic) => ({
+      kind: 'rejected',
+      diagnostic,
+    })),
+    new Promise((resolve) => {
+      setTimeout(() => resolve({ kind: 'timeout' }), 100);
+    }),
+  ]);
+
+  assert.equal(outcome.kind, 'rejected');
+  assert.equal(outcome.diagnostic.includes(token), false);
+  assert.deepEqual(attempts.sort(), ['kill', 'stderr.destroy', 'stdout.destroy']);
+
+  child.stdout.emit('error', new Error(token));
+  child.stderr.emit('end');
+  child.emit('error', new Error(token));
+  child.emit('close', 9, null);
+});

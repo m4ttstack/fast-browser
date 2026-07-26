@@ -71,6 +71,64 @@ test('pairAutoConnect verifies token presence before updating config', async () 
   assert.equal(updates, 0);
 });
 
+test('pairAutoConnect requires persistence before printing or writing a credential', async () => {
+  const events = [];
+
+  await assert.rejects(
+    () => pairAutoConnect(defaultConfig(), {
+      print() {
+        events.push('print');
+      },
+      async writeTokenFromPrompt() {
+        events.push('write');
+      },
+      async hasToken() {
+        events.push('verify');
+        return true;
+      },
+    }),
+    /requires config persistence/,
+  );
+
+  assert.deepEqual(events, []);
+});
+
+test('pairAutoConnect preserves the Keychain item and returns fixed remediation on save failure', async () => {
+  const token = 'pair-save-secret-fixture';
+  const original = defaultConfig();
+  const events = [];
+
+  const diagnostic = await (async () => {
+    try {
+      await pairAutoConnect(original, {
+        print() {},
+        async writeTokenFromPrompt() {
+          events.push('write');
+        },
+        async hasToken() {
+          events.push('verify');
+          return true;
+        },
+        async updateConfig() {
+          events.push('update');
+          throw new Error(token);
+        },
+        async deleteToken() {
+          events.push('delete');
+        },
+      });
+      assert.fail('expected pairing to reject');
+    } catch (error) {
+      return String(error?.stack ?? error);
+    }
+  })();
+
+  assert.deepEqual(events, ['write', 'verify', 'update']);
+  assert.equal(diagnostic.includes(token), false);
+  assert.match(diagnostic, /Keychain token was preserved/);
+  assert.deepEqual(original.connection, { mode: 'manual' });
+});
+
 test('manual mode preserves the Keychain item without an explicit confirmation dependency', async () => {
   const automatic = {
     ...defaultConfig(),
@@ -103,12 +161,80 @@ test('manual mode deletes only after an explicit confirmation dependency approve
         events.push('delete');
         return true;
       },
-      async updateConfig() {
+      async updateConfig(config) {
         events.push('update');
+        assert.deepEqual(config.connection, { mode: 'manual' });
       },
     },
   );
 
-  assert.deepEqual(events, ['confirm', 'delete', 'update']);
+  assert.deepEqual(events, ['confirm', 'update', 'delete']);
   assert.deepEqual(result.connection, { mode: 'manual' });
+});
+
+test('confirmed manual mode never deletes when persistence fails', async () => {
+  const token = 'manual-save-secret-fixture';
+  const original = { ...defaultConfig(), connection: { mode: 'auto' } };
+  const events = [];
+
+  const diagnostic = await (async () => {
+    try {
+      await setManualConnection(original, {
+        async confirmDeleteToken() {
+          events.push('confirm');
+          return true;
+        },
+        async updateConfig() {
+          events.push('update');
+          throw new Error(token);
+        },
+        async deleteToken() {
+          events.push('delete');
+        },
+      });
+      assert.fail('expected manual transition to reject');
+    } catch (error) {
+      return String(error?.stack ?? error);
+    }
+  })();
+
+  assert.deepEqual(events, ['confirm', 'update']);
+  assert.equal(diagnostic.includes(token), false);
+  assert.match(diagnostic, /automatic connection remains configured/);
+  assert.deepEqual(original.connection, { mode: 'auto' });
+});
+
+test('delete failure leaves the persisted manual config and returns fixed remediation', async () => {
+  const token = 'manual-delete-secret-fixture';
+  const original = { ...defaultConfig(), connection: { mode: 'auto' } };
+  const events = [];
+  let persisted;
+
+  const diagnostic = await (async () => {
+    try {
+      await setManualConnection(original, {
+        async confirmDeleteToken() {
+          events.push('confirm');
+          return true;
+        },
+        async updateConfig(config) {
+          events.push('update');
+          persisted = config;
+        },
+        async deleteToken() {
+          events.push('delete');
+          throw new Error(token);
+        },
+      });
+      assert.fail('expected manual transition to reject');
+    } catch (error) {
+      return String(error?.stack ?? error);
+    }
+  })();
+
+  assert.deepEqual(events, ['confirm', 'update', 'delete']);
+  assert.deepEqual(persisted.connection, { mode: 'manual' });
+  assert.deepEqual(original.connection, { mode: 'auto' });
+  assert.equal(diagnostic.includes(token), false);
+  assert.match(diagnostic, /manual connection was saved/);
 });
