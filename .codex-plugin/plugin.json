@@ -16,5 +16,10 @@
     "capabilities": ["Browser automation"],
     "defaultPrompt": "Help me automate a browser task with Fast Browser."
   },
-  "mcpServers": "./adapters/codex/mcp.json"
+  "mcpServers": {
+    "fast_browser": {
+      "command": "node",
+      "args": ["${PLUGIN_ROOT}/bin/fast-browser-mcp.mjs"]
+    }
+  }
 }
