@@ -802,16 +802,78 @@ test('migration production config preflight treats the exact missing config leaf
         events.push('host');
         return { host: 'claude', changed: false, changes: [] };
       },
-      installRouting: async ({ profile }) => {
-        events.push(`routing:${profile}`);
-        return { profile, files: [], blocks: [] };
+      prepareRoutingTransition: async ({ profile }) => {
+        events.push(`routing:prepare:${profile}`);
+        return {
+          nextState: { profile, files: [], blocks: [] },
+          apply: async () => {
+            events.push('routing:apply');
+            return { rollback: async () => {} };
+          },
+        };
       },
       saveConfig: async () => events.push('save'),
     },
   );
 
-  assert.deepEqual(events, ['apply', 'host', 'routing:safe', 'save']);
+  assert.deepEqual(events, [
+    'apply',
+    'host',
+    'routing:prepare:safe',
+    'routing:apply',
+    'save',
+  ]);
   assert.deepEqual(report.previousConfig, migrationConfig());
+});
+
+test('migration receipt preserves external routing drift and reports recovery required', async (t) => {
+  const homeDir = await mkdtemp(path.join(await realpath(tmpdir()), 'fast-browser-migration-drift-'));
+  const paths = resolvePaths({ homeDir, pluginRoot: path.resolve(import.meta.dirname, '../..') });
+  await mkdir(paths.dataDir, { recursive: true, mode: 0o700 });
+  t.after(() => rm(homeDir, { recursive: true, force: true }));
+  const routingPath = path.join(homeDir, '.claude', 'rules', 'fast-browser-routing.md');
+  let preparations = 0;
+
+  await assert.rejects(
+    migrate(
+      {
+        dryRun: false,
+        rollback: null,
+        hosts: ['claude'],
+        source: '/repo/mattstack',
+      },
+      {
+        paths,
+        loadConfig: async () => ({
+          ...migrationConfig(),
+          profile: 'full',
+        }),
+        installClaude: async () => ({ host: 'claude', changed: false, changes: [] }),
+        prepareRoutingTransition: async (options) => {
+          preparations += 1;
+          return prepareRoutingTransition(options);
+        },
+        saveConfig: async () => {},
+        verify: async () => {
+          await writeFile(routingPath, 'external routing drift\n', { mode: 0o600 });
+          throw new Error('injected verification failure');
+        },
+      },
+    ),
+    (error) => {
+      assert.equal(error.stage, 'recovery');
+      assert.match(error.message, /recovery required/i);
+      assert.equal(error.partialState, null);
+      assert.doesNotMatch(
+        JSON.stringify(error),
+        /fast-browser-routing|external routing drift/,
+      );
+      return true;
+    },
+  );
+
+  assert.equal(preparations, 1);
+  assert.equal(await readFile(routingPath, 'utf8'), 'external routing drift\n');
 });
 
 test('default setup directory preflight refuses a symlinked data root without outside writes', async (t) => {

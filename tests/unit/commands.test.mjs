@@ -1364,16 +1364,26 @@ test('migrate composes deterministic host, routing, verification, and cleanup ad
         events.push('codex-version');
         return 'codex-cli 0.145.0';
       },
-      installRouting: async ({ hosts, codexVersion }) => {
-        events.push(`install-routing:${hosts.join('+')}:${codexVersion}`);
-        return { profile: 'safe', files: [], blocks: [] };
+      prepareRoutingTransition: async ({ hosts, codexVersion }) => {
+        events.push(`prepare-routing:${hosts.join('+')}:${codexVersion}`);
+        return {
+          nextState: { profile: 'safe', files: [], blocks: [] },
+          apply: async () => {
+            events.push('apply-routing');
+            return {
+              rollback: async () => {
+                events.push('rollback-routing');
+                return { rollback: async () => {} };
+              },
+            };
+          },
+        };
       },
       saveConfig: async () => events.push('save-config'),
       doctor: async () => {
         events.push('doctor');
         return { schemaVersion: 1, ok: true, profile: 'safe', checks: [] };
       },
-      removeRouting: async () => events.push('remove-routing'),
       uninstallClaude: async () => events.push('remove-claude'),
       uninstallCodex: async () => events.push('remove-codex'),
       applyMigration: async (options) => {
@@ -1391,14 +1401,323 @@ test('migrate composes deterministic host, routing, verification, and cleanup ad
     'install-claude',
     'install-codex',
     'codex-version',
-    'install-routing:claude+codex:codex-cli 0.145.0',
+    'prepare-routing:claude+codex:codex-cli 0.145.0',
+    'apply-routing',
     'save-config',
     'doctor',
-    'install-routing:claude+codex:codex-cli 0.145.0',
+    'rollback-routing',
     'save-config',
     'remove-claude',
   ]);
   assert.deepEqual(report, { changed: true });
+});
+
+test('migration receipt restores prior routing and config after verification failure', async () => {
+  const events = [];
+  const previousConfig = validConfig({
+    hosts: { claude: false, codex: true },
+  });
+  const nextState = { profile: 'safe', files: [], blocks: [] };
+
+  await assert.rejects(
+    migrate(
+      {
+        dryRun: false,
+        rollback: null,
+        hosts: ['claude'],
+        source: '/repo/mattstack',
+      },
+      {
+        paths: { homeDir: '/home/test', backupsDir: '/home/test/.fast-browser/backups' },
+        loadConfig: async () => previousConfig,
+        installClaude: async () => ({ host: 'claude', changed: false, changes: [] }),
+        getCodexVersion: async () => '',
+        prepareRoutingTransition: async () => {
+          events.push('routing:prepare-next');
+          return {
+            nextState,
+            apply: async () => {
+              events.push('routing:apply-next');
+              return {
+                rollback: async () => {
+                  events.push('routing:rollback-to-prior');
+                  return { rollback: async () => {} };
+                },
+              };
+            },
+          };
+        },
+        installRouting: async ({ desiredState }) => {
+          events.push(desiredState ? 'routing:reconstruct-prior' : 'routing:install-next');
+          return desiredState ?? nextState;
+        },
+        saveConfig: async (_paths, config) => {
+          events.push(config.hosts.codex ? 'config:save-prior' : 'config:save-next');
+        },
+        verify: async () => {
+          events.push('verify:fail');
+          throw new Error('injected verification failure');
+        },
+        applyMigration: async (options) => {
+          let installedState = null;
+          try {
+            installedState = await options.installAdaptersAndRouting();
+            await options.verify();
+          } catch (cause) {
+            await options.cleanupInstalled(installedState ?? cause.partialState);
+            throw cause;
+          }
+        },
+      },
+    ),
+    /verification failure/,
+  );
+
+  assert.deepEqual(events, [
+    'routing:prepare-next',
+    'routing:apply-next',
+    'config:save-next',
+    'verify:fail',
+    'routing:rollback-to-prior',
+    'config:save-prior',
+  ]);
+});
+
+test('migration receipt restores prior routing without resaving config after next save failure', async () => {
+  const events = [];
+  const previousConfig = validConfig({
+    hosts: { claude: false, codex: true },
+  });
+
+  await assert.rejects(
+    migrate(
+      {
+        dryRun: false,
+        rollback: null,
+        hosts: ['claude'],
+        source: '/repo/mattstack',
+      },
+      {
+        paths: { homeDir: '/home/test', backupsDir: '/home/test/.fast-browser/backups' },
+        loadConfig: async () => previousConfig,
+        installClaude: async () => ({ host: 'claude', changed: false, changes: [] }),
+        getCodexVersion: async () => '',
+        prepareRoutingTransition: async () => {
+          events.push('routing:prepare-next');
+          return {
+            nextState: { profile: 'safe', files: [], blocks: [] },
+            apply: async () => {
+              events.push('routing:apply-next');
+              return {
+                rollback: async () => {
+                  events.push('routing:rollback-to-prior');
+                  return { rollback: async () => {} };
+                },
+              };
+            },
+          };
+        },
+        installRouting: async () => {
+          events.push('routing:install-next');
+          return { profile: 'safe', files: [], blocks: [] };
+        },
+        saveConfig: async () => {
+          events.push('config:save-next');
+          throw new Error('injected next config save failure');
+        },
+        applyMigration: async (options) => {
+          try {
+            await options.installAdaptersAndRouting();
+          } catch (cause) {
+            await options.cleanupInstalled(cause.partialState);
+            throw cause;
+          }
+        },
+      },
+    ),
+    /Migration install failed/,
+  );
+
+  assert.deepEqual(events, [
+    'routing:prepare-next',
+    'routing:apply-next',
+    'config:save-next',
+    'routing:rollback-to-prior',
+  ]);
+});
+
+test('migration reciprocal receipt reapplies next routing when prior config restore fails', async () => {
+  const events = [];
+  const previousConfig = validConfig({
+    hosts: { claude: false, codex: true },
+  });
+
+  await assert.rejects(
+    migrate(
+      {
+        dryRun: false,
+        rollback: null,
+        hosts: ['claude'],
+        source: '/repo/mattstack',
+      },
+      {
+        paths: { homeDir: '/home/test', backupsDir: '/home/test/.fast-browser/backups' },
+        loadConfig: async () => previousConfig,
+        installClaude: async () => ({ host: 'claude', changed: false, changes: [] }),
+        getCodexVersion: async () => '',
+        prepareRoutingTransition: async () => {
+          events.push('routing:prepare-next');
+          return {
+            nextState: { profile: 'safe', files: [], blocks: [] },
+            apply: async () => {
+              events.push('routing:apply-next');
+              return {
+                rollback: async () => {
+                  events.push('routing:rollback-to-prior');
+                  return {
+                    rollback: async () => {
+                      events.push('routing:rollback-to-next');
+                    },
+                  };
+                },
+              };
+            },
+          };
+        },
+        installRouting: async ({ desiredState }) => {
+          events.push(desiredState ? 'routing:reconstruct-prior' : 'routing:install-next');
+          return desiredState ?? { profile: 'safe', files: [], blocks: [] };
+        },
+        saveConfig: async (_paths, config) => {
+          if (config.hosts.codex) {
+            events.push('config:save-prior:fail');
+            throw new Error('/Users/maintainer/prior-config.json');
+          }
+          events.push('config:save-next');
+        },
+        verify: async () => {
+          events.push('verify:fail');
+          throw new Error('injected verification failure');
+        },
+        applyMigration: async (options) => {
+          const installedState = await options.installAdaptersAndRouting();
+          try {
+            await options.verify();
+          } catch (cause) {
+            await options.cleanupInstalled(installedState);
+            throw cause;
+          }
+        },
+      },
+    ),
+    /verification failure/,
+  );
+
+  assert.deepEqual(events, [
+    'routing:prepare-next',
+    'routing:apply-next',
+    'config:save-next',
+    'verify:fail',
+    'routing:rollback-to-prior',
+    'config:save-prior:fail',
+    'routing:rollback-to-next',
+  ]);
+});
+
+test('migration private receipt state stays out of install metadata, partial state, and JSON output', async () => {
+  const capturedPath = '/Users/maintainer/private-routing-target.md';
+  const capturedTemplate = 'PRIVATE TEMPLATE CONTENT';
+  const nextState = { profile: 'safe', files: [], blocks: [] };
+  let rollbackCount = 0;
+  let thrownPartialState = null;
+
+  function containsFunction(value, seen = new Set()) {
+    if (typeof value === 'function') return true;
+    if (!value || typeof value !== 'object' || seen.has(value)) return false;
+    seen.add(value);
+    return Object.values(value).some((entry) => containsFunction(entry, seen));
+  }
+
+  const dependencies = {
+    paths: { homeDir: '/home/test', backupsDir: '/home/test/.fast-browser/backups' },
+    loadConfig: async () => null,
+    installClaude: async () => ({ host: 'claude', changed: false, changes: [] }),
+    prepareRoutingTransition: async () => ({
+      nextState,
+      apply: async () => {
+        const exactPriorBytes = Buffer.from(capturedTemplate);
+        return {
+          rollback: async () => {
+            assert.equal(capturedPath.endsWith('private-routing-target.md'), true);
+            assert.equal(exactPriorBytes.toString(), capturedTemplate);
+            rollbackCount += 1;
+            return { rollback: async () => {} };
+          },
+        };
+      },
+    }),
+    installRouting: async () => ({
+      ...nextState,
+      receipt: {
+        capturedPath,
+        capturedTemplate,
+        rollback: async () => {},
+      },
+    }),
+  };
+
+  const report = await migrate(
+    {
+      dryRun: false,
+      rollback: null,
+      hosts: ['claude'],
+      source: '/repo/mattstack',
+    },
+    {
+      ...dependencies,
+      saveConfig: async () => {},
+      applyMigration: async (options) => options.installAdaptersAndRouting(),
+    },
+  );
+  assert.equal(containsFunction(report), false);
+  assert.doesNotMatch(
+    JSON.stringify(report),
+    /receipt|private-routing-target|PRIVATE TEMPLATE CONTENT/,
+  );
+
+  await assert.rejects(
+    migrate(
+      {
+        dryRun: false,
+        rollback: null,
+        hosts: ['claude'],
+        source: '/repo/mattstack',
+      },
+      {
+        ...dependencies,
+        saveConfig: async () => {
+          throw new Error('injected persistence failure');
+        },
+        applyMigration: async (options) => {
+          try {
+            await options.installAdaptersAndRouting();
+          } catch (cause) {
+            thrownPartialState = cause.partialState;
+            await options.cleanupInstalled(cause.partialState);
+            throw cause;
+          }
+        },
+      },
+    ),
+    /Migration install failed/,
+  );
+
+  assert.equal(containsFunction(thrownPartialState), false);
+  assert.doesNotMatch(
+    JSON.stringify(thrownPartialState),
+    /receipt|private-routing-target|PRIVATE TEMPLATE CONTENT/,
+  );
+  assert.equal(rollbackCount, 1);
 });
 
 test('migration cleanup restores prior routing after verification failure', async (t) => {
