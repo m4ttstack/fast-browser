@@ -31,7 +31,8 @@
     "test": "node --test tests/unit/*.test.mjs tests/integration/*.test.mjs",
     "test:unit": "node --test tests/unit/*.test.mjs",
     "test:integration": "node --test tests/integration/*.test.mjs",
-    "test:e2e": "node --test tests/e2e/direct-mcp.test.mjs"
+    "test:e2e": "node --test tests/e2e/direct-mcp.test.mjs",
+    "test:host": "node --test tests/e2e/host-parity.test.mjs"
   },
   "devDependencies": {
     "@modelcontextprotocol/sdk": "1.29.0"

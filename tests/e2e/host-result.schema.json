@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "host",
+    "ok",
+    "orderId",
+    "browserCalls",
+    "elapsedMs",
+    "tools"
+  ],
+  "properties": {
+    "host": {
+      "enum": [
+        "claude",
+        "codex"
+      ]
+    },
+    "ok": {
+      "const": true
+    },
+    "orderId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "browserCalls": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "elapsedMs": {
+      "type": "number",
+      "minimum": 0
+    },
+    "tools": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^browser_"
+      }
+    }
+  }
+}
