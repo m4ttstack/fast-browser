@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import test from 'node:test';
 
 import { configure } from '../../lib/commands/configure.mjs';
@@ -12,6 +15,8 @@ import {
   performMcpHandshake,
 } from '../../lib/doctor/checks.mjs';
 import { main } from '../../lib/cli/main.mjs';
+import { openNdjsonProcess } from '../../lib/core/process.mjs';
+import { runtimeLockIdentity } from '../../lib/runtime/lock.mjs';
 
 test('exports dependency-injected lifecycle command functions', () => {
   assert.equal(typeof setup, 'function');
@@ -133,18 +138,18 @@ test('doctor real composition accepts complete injected platform adapters with n
       }],
       hasToken: async () => true,
       checkDataPermissions: async () => {},
-      runMcpSession: async () => ({
-        exitCode: 0,
-        stdout: [
-          JSON.stringify({
-            jsonrpc: '2.0',
-            id: 1,
-            result: { protocolVersion: '2025-03-26' },
-          }),
-          JSON.stringify({ jsonrpc: '2.0', id: 2, result: { tools } }),
-          '',
-        ].join('\n'),
-        stderr: '',
+      openMcpTransport: async () => ({
+        request: async (message) => (
+          message.method === 'initialize'
+            ? {
+              jsonrpc: '2.0',
+              id: message.id,
+              result: { protocolVersion: '2025-03-26' },
+            }
+            : { jsonrpc: '2.0', id: message.id, result: { tools } }
+        ),
+        notify: async () => {},
+        close: async () => {},
       }),
     },
   );
@@ -175,7 +180,7 @@ test('tool contract requires browser tools and unsafe annotations', () => {
   assert.equal(checkToolContract(tools.slice(1)).status, 'fail');
 });
 
-test('MCP handshake initializes, lists tools, closes, and bounds malformed output', async () => {
+test('MCP handshake validates initialize before initialized notification and tools/list', async () => {
   const events = [];
   const transport = {
     async request(message) {
@@ -189,20 +194,81 @@ test('MCP handshake initializes, lists tools, closes, and bounds malformed outpu
         result: { tools: [{ name: 'browser_navigate' }] },
       };
     },
+    async notify(message) {
+      events.push(message.method);
+    },
     async close(options) {
       events.push(`close:${options.descendants}`);
     },
   };
 
   const result = await performMcpHandshake({ openTransport: async () => transport });
-  assert.deepEqual(events, ['initialize', 'tools/list', 'close:true']);
+  assert.deepEqual(events, [
+    'initialize',
+    'notifications/initialized',
+    'tools/list',
+    'close:true',
+  ]);
   assert.deepEqual(result.tools, [{ name: 'browser_navigate' }]);
+});
 
+test('MCP handshake rejects wrong JSON-RPC versions, ids, and error responses', async () => {
+  const invalid = (id) => [
+    {
+      name: 'wrong jsonrpc',
+      response: { jsonrpc: '1.0', id, result: {} },
+    },
+    {
+      name: 'wrong id',
+      response: { jsonrpc: '2.0', id: 99, result: {} },
+    },
+    {
+      name: 'error response',
+      response: { jsonrpc: '2.0', id, error: { code: -32603, message: 'failed' } },
+    },
+  ];
+  for (const stage of ['initialize', 'tools/list']) {
+    for (const fixture of invalid(stage === 'initialize' ? 1 : 2)) {
+    let closed = false;
+    let requests = 0;
+    await assert.rejects(
+      performMcpHandshake({
+        openTransport: async () => ({
+          request: async (message) => {
+            requests += 1;
+            if (message.method === stage) return fixture.response;
+            return {
+              jsonrpc: '2.0',
+              id: message.id,
+              result: { protocolVersion: '2025-03-26' },
+            };
+          },
+          notify: async () => {},
+          close: async () => {
+            closed = true;
+          },
+        }),
+      }),
+      /malformed|error/i,
+      `${stage}: ${fixture.name}`,
+    );
+    assert.equal(requests, stage === 'initialize' ? 1 : 2, `${stage}: ${fixture.name}`);
+    assert.equal(closed, true, `${stage}: ${fixture.name}`);
+    }
+  }
+});
+
+test('MCP handshake bounds each exact NDJSON response and closes on timeout', async () => {
   await assert.rejects(
     performMcpHandshake({
       outputCapBytes: 8,
       openTransport: async () => ({
-        request: async () => ({ result: { tools: [{ name: 'too-large' }] } }),
+        request: async (message) => ({
+          jsonrpc: '2.0',
+          id: message.id,
+          result: { protocolVersion: '2025-03-26', tools: [{ name: 'too-large' }] },
+        }),
+        notify: async () => {},
         close: async () => {},
       }),
     }),
@@ -217,6 +283,7 @@ test('MCP handshake times out and still closes descendants', async () => {
       timeoutMs: 5,
       openTransport: async () => ({
         request: async () => new Promise(() => {}),
+        notify: async () => {},
         close: async ({ descendants }) => events.push(descendants),
       }),
     }),
@@ -225,46 +292,149 @@ test('MCP handshake times out and still closes descendants', async () => {
   assert.deepEqual(events, [true]);
 });
 
-test('MCP handshake supports one bounded pinned-runtime session', async () => {
-  const result = await performMcpHandshake({
-    runSession: async (messages, options) => {
-      assert.deepEqual(messages.map(({ method }) => method), [
-        'initialize',
-        'notifications/initialized',
-        'tools/list',
-      ]);
-      assert.equal(options.timeoutMs, 10_000);
-      assert.equal(options.outputCapBytes, 1024 * 1024);
-      return {
-        exitCode: 0,
-        stdout: [
-          JSON.stringify({
-            jsonrpc: '2.0',
-            id: 1,
-            result: { protocolVersion: '2025-03-26' },
-          }),
-          JSON.stringify({
-            jsonrpc: '2.0',
-            id: 2,
-            result: { tools: [{ name: 'browser_navigate' }] },
-          }),
-          '',
-        ].join('\n'),
-        stderr: '',
-      };
-    },
-  });
-  assert.deepEqual(result.tools, [{ name: 'browser_navigate' }]);
+test('MCP handshake applies one total timeout across open, initialize, notification, and tools phases', async () => {
+  for (const phase of ['open', 'initialize', 'notify', 'tools/list']) {
+    const events = [];
+    await assert.rejects(
+      performMcpHandshake({
+        timeoutMs: 5,
+        openTransport: async () => {
+          if (phase === 'open') return new Promise(() => {});
+          return {
+            request: async (message) => {
+              events.push(message.method);
+              if (message.method === phase) return new Promise(() => {});
+              return message.method === 'initialize'
+                ? {
+                  jsonrpc: '2.0',
+                  id: message.id,
+                  result: { protocolVersion: '2025-03-26' },
+                }
+                : { jsonrpc: '2.0', id: message.id, result: { tools: [] } };
+            },
+            notify: async () => {
+              events.push('notify');
+              if (phase === 'notify') return new Promise(() => {});
+            },
+            close: async () => events.push('close'),
+          };
+        },
+      }),
+      /timed out/i,
+      phase,
+    );
+    if (phase !== 'open') assert.equal(events.at(-1), 'close', phase);
+  }
 });
 
-test('bounded MCP session enforces its own timeout even for an injected runner', async () => {
-  await assert.rejects(
-    performMcpHandshake({
-      timeoutMs: 5,
-      runSession: async () => new Promise(() => {}),
-    }),
-    /timed out/,
+test('production NDJSON transport rejects early exit and oversized raw output', async () => {
+  for (const fixture of [
+    {
+      name: 'early exit',
+      script: "process.stdin.once('data', () => process.exit(7));",
+      match: /exited before/i,
+    },
+    {
+      name: 'oversize',
+      script: "process.stdin.once('data', () => process.stdout.write('x'.repeat(1025)));",
+      match: /exceeds 1024 bytes/i,
+    },
+  ]) {
+    await assert.rejects(
+      performMcpHandshake({
+        outputCapBytes: 1024,
+        openTransport: (options) => openNdjsonProcess(
+          process.execPath,
+          ['-e', fixture.script],
+          options,
+        ),
+      }),
+      fixture.match,
+      fixture.name,
+    );
+  }
+});
+
+test('production MCP composition uses one persistent pinned-runtime duplex session', async (t) => {
+  const homeDir = await mkdtemp(path.join(tmpdir(), 'fast-browser-mcp-home-'));
+  t.after(() => rm(homeDir, { recursive: true, force: true }));
+  const dataDir = path.join(homeDir, '.fast-browser');
+  const runtimeDir = path.join(dataDir, 'runtime');
+  const lock = {
+    schemaVersion: 1,
+    productVersion: '0.1.0-alpha.1',
+    sourceCommit: 'abc',
+    protocolVersion: 2,
+    runtime: {
+      file: 'fast-browser-mcp-0.1.0-alpha.1.tar.gz',
+      sha256: 'a'.repeat(64),
+      node: '>=20',
+    },
+    extension: {
+      file: 'fast-browser-extension-0.1.0-alpha.1.zip',
+      sha256: 'b'.repeat(64),
+      id: 'a'.repeat(32),
+      version: '0.2.1',
+    },
+  };
+  const installDir = path.join(runtimeDir, lock.productVersion);
+  const cliDir = path.join(installDir, 'fast-browser-mcp');
+  await mkdir(cliDir, { recursive: true });
+  await writeFile(
+    path.join(installDir, 'installed.json'),
+    JSON.stringify({ lock: runtimeLockIdentity(lock) }),
   );
+  await writeFile(
+    path.join(cliDir, 'cli.cjs'),
+    [
+      "let buffered = '';",
+      "process.stdin.setEncoding('utf8');",
+      "process.stdin.on('data', (chunk) => {",
+      "  if ((chunk.match(/\\n/g) || []).length > 1) process.exit(9);",
+      '  buffered += chunk;',
+      "  const newline = buffered.indexOf('\\n');",
+      '  if (newline < 0) return;',
+      '  const message = JSON.parse(buffered.slice(0, newline));',
+      '  buffered = buffered.slice(newline + 1);',
+      "  if (message.method === 'initialize') {",
+      "    process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: message.id, result: { protocolVersion: '2025-03-26' } }) + '\\n');",
+      "  } else if (message.method === 'tools/list') {",
+      "    const tools = ['browser_navigate', 'browser_snapshot', 'browser_click'].map((name) => ({ name }));",
+      "    tools.push({ name: 'browser_run_code_unsafe', annotations: { destructiveHint: true, openWorldHint: true } });",
+      "    process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: message.id, result: { tools } }) + '\\n');",
+      "  }",
+      '});',
+    ].join('\n'),
+  );
+  const config = validConfig({
+    hosts: { claude: false, codex: false },
+    runtime: {
+      version: lock.productVersion,
+      sha256: lock.runtime.sha256,
+      sourceCommit: lock.sourceCommit,
+    },
+  });
+  const checks = Object.fromEntries(DOCTOR_CHECK_IDS
+    .filter((id) => id !== 'mcp-handshake' && id !== 'tool-contract')
+    .map((id) => [id, async () => ({ status: 'pass', message: `${id} passed.`, remediation: null })]));
+  const report = await doctor(
+    { profile: 'safe' },
+    {
+      paths: {
+        homeDir,
+        dataDir,
+        configFile: path.join(dataDir, 'config.json'),
+        runtimeDir,
+        extensionDir: path.join(dataDir, 'extension'),
+        pluginRoot: '/plugin',
+      },
+      config,
+      lock,
+      checks,
+    },
+  );
+  assert.equal(report.checks.find(({ id }) => id === 'mcp-handshake').status, 'pass');
+  assert.equal(report.checks.find(({ id }) => id === 'tool-contract').status, 'pass');
 });
 
 test('configure composes full defaults, applies explicit overrides, saves before pruning', async () => {
@@ -322,6 +492,7 @@ test('configure auto connection invokes secure pairing and full recording defaul
         await updateConfig(paired);
         return paired;
       },
+      hasToken: async () => false,
       saveConfig: async (_paths, config) => events.push(`save:${config.connection.mode}`),
       pruneSessions: async () => events.push('prune'),
       now: () => new Date('2026-01-01T00:00:00.000Z'),
@@ -454,6 +625,29 @@ test('migrate rollback resolves one exact confined manifest and only rolls back'
   assert.equal(report.changed, true);
 });
 
+test('production rollback composition supplies one Keychain reader', async () => {
+  const events = [];
+  await migrate(
+    { dryRun: false, rollback: 'migration-1/rollback.json' },
+    {
+      paths: {
+        homeDir: '/home/test',
+        backupsDir: '/home/test/.fast-browser/backups',
+      },
+      readToken: async () => {
+        events.push('read-keychain');
+        return 'secret-not-rendered';
+      },
+      rollbackMigration: async (_manifest, options) => {
+        assert.equal(typeof options.readMigratedToken, 'function');
+        await options.readMigratedToken();
+        return { changed: true };
+      },
+    },
+  );
+  assert.deepEqual(events, ['read-keychain']);
+});
+
 test('migrate apply wires secure token handling, install cleanup, and verification', async () => {
   const supplied = {
     paths: { homeDir: '/home/test', backupsDir: '/home/test/.fast-browser/backups' },
@@ -534,10 +728,47 @@ test('migrate composes deterministic host, routing, verification, and cleanup ad
   assert.deepEqual(report, { changed: true });
 });
 
+test('migration optional config treats only ENOENT as absent and fails closed otherwise', async () => {
+  const failures = [
+    Object.assign(new Error('malformed config'), { name: 'ConfigError' }),
+    Object.assign(new Error('unreadable config'), { code: 'EACCES' }),
+    Object.assign(new Error('symlink config'), { code: 'ELOOP' }),
+  ];
+  for (const failure of failures) {
+    const events = [];
+    await assert.rejects(
+      migrate(
+        {
+          dryRun: false,
+          rollback: null,
+          hosts: ['claude'],
+          source: '/repo/mattstack',
+        },
+        {
+          paths: { homeDir: '/home/test', backupsDir: '/home/test/.fast-browser/backups' },
+          loadConfig: async () => {
+            events.push('load-config');
+            throw failure;
+          },
+          installClaude: async () => events.push('install-host'),
+          installRouting: async () => events.push('install-routing'),
+          saveConfig: async () => events.push('save-config'),
+          applyMigration: async (options) => {
+            events.push('backup-import');
+            return options.installAdaptersAndRouting();
+          },
+        },
+      ),
+      /migration install|config/i,
+    );
+    assert.deepEqual(events, ['backup-import', 'load-config']);
+  }
+});
+
 test('ordinary uninstall preflights all targets and retains data and Keychain', async () => {
   const events = [];
   const config = validConfig({
-    managed: { files: ['/owned'], blocks: [] },
+    managed: { files: [], blocks: [] },
   });
   const report = await uninstall(
     { hosts: [], purgeData: false },
@@ -566,6 +797,160 @@ test('ordinary uninstall preflights all targets and retains data and Keychain', 
   ]);
   assert.equal(report.dataRetained, true);
   assert.equal(report.keychainRetained, true);
+});
+
+test('host-selective uninstall removes only exact selected ownership and retains the other host', async () => {
+  const events = [];
+  const sha = 'a'.repeat(64);
+  const config = validConfig({
+    profile: 'full',
+    managed: {
+      files: [
+        { path: '/home/test/.claude/rules/fast-browser-routing.md', sha256: sha },
+        { path: '/home/test/.claude/rules/fast-browser-verification-consent.md', sha256: sha },
+        { path: '/home/test/.codex/agents/browser_driver.toml', sha256: sha },
+      ],
+      blocks: [
+        {
+          path: '/home/test/.codex/AGENTS.md',
+          id: 'routing-v1',
+          kind: 'markdown',
+          sha256: sha,
+        },
+        {
+          path: '/home/test/.codex/config.toml',
+          id: 'mcp-policy-v1',
+          kind: 'toml',
+          sha256: sha,
+        },
+      ],
+    },
+  });
+  let retained;
+  const report = await uninstall(
+    { hosts: ['claude'], purgeData: false },
+    {
+      paths: { dataDir: '/home/test/.fast-browser', homeDir: '/home/test' },
+      loadConfig: async () => config,
+      preflightRouting: async ({ managedState }) => {
+        events.push(`preflight:${managedState.files.length}:${managedState.blocks.length}`);
+        assert.deepEqual(
+          managedState.files.map(({ path: target }) => target),
+          [
+            '/home/test/.claude/rules/fast-browser-routing.md',
+            '/home/test/.claude/rules/fast-browser-verification-consent.md',
+          ],
+        );
+      },
+      preflightHostRemoval: async ({ host }) => events.push(`preflight-host:${host}`),
+      removeRouting: async ({ managedState }) => {
+        events.push(`remove-routing:${managedState.files.length}:${managedState.blocks.length}`);
+      },
+      uninstallClaude: async () => events.push('remove-claude'),
+      uninstallCodex: async () => assert.fail('Codex registration must remain'),
+      saveConfig: async (_paths, value) => {
+        retained = value;
+        events.push('save');
+      },
+    },
+  );
+  assert.deepEqual(events, [
+    'preflight:2:0',
+    'preflight-host:claude',
+    'remove-routing:2:0',
+    'remove-claude',
+    'save',
+  ]);
+  assert.deepEqual(report.hosts, ['claude']);
+  assert.deepEqual(retained.hosts, { claude: false, codex: true });
+  assert.deepEqual(retained.managed, {
+    files: [{ path: '/home/test/.codex/agents/browser_driver.toml', sha256: sha }],
+    blocks: config.managed.blocks,
+  });
+
+  const secondEvents = [];
+  let finalConfig;
+  await uninstall(
+    { hosts: ['codex'], purgeData: false },
+    {
+      paths: { dataDir: '/home/test/.fast-browser', homeDir: '/home/test' },
+      loadConfig: async () => retained,
+      preflightRouting: async ({ managedState }) => {
+        secondEvents.push(`preflight:${managedState.files.length}:${managedState.blocks.length}`);
+      },
+      preflightHostRemoval: async ({ host }) => secondEvents.push(`preflight-host:${host}`),
+      removeRouting: async ({ managedState }) => {
+        secondEvents.push(`remove-routing:${managedState.files.length}:${managedState.blocks.length}`);
+      },
+      uninstallCodex: async () => secondEvents.push('remove-codex'),
+      saveConfig: async (_paths, value) => {
+        finalConfig = value;
+        secondEvents.push('save');
+      },
+    },
+  );
+  assert.deepEqual(secondEvents, [
+    'preflight:1:2',
+    'preflight-host:codex',
+    'remove-routing:1:2',
+    'remove-codex',
+    'save',
+  ]);
+  assert.deepEqual(finalConfig.hosts, { claude: false, codex: false });
+  assert.deepEqual(finalConfig.managed, { files: [], blocks: [] });
+});
+
+test('host-selective uninstall fails closed on unclassifiable managed records', async () => {
+  const events = [];
+  await assert.rejects(
+    uninstall(
+      { hosts: ['claude'], purgeData: false },
+      {
+        paths: { dataDir: '/home/test/.fast-browser', homeDir: '/home/test' },
+        loadConfig: async () => validConfig({
+          managed: {
+            files: [{ path: '/home/test/.config/unknown', sha256: 'a'.repeat(64) }],
+            blocks: [],
+          },
+        }),
+        preflightRouting: async () => events.push('preflight'),
+        removeRouting: async () => events.push('remove'),
+        uninstallClaude: async () => events.push('host'),
+        saveConfig: async () => events.push('save'),
+      },
+    ),
+    /unclassifiable|managed ownership/i,
+  );
+  assert.deepEqual(events, []);
+});
+
+test('host-selective uninstall refuses purge while another configured host would remain', async () => {
+  const events = [];
+  const config = validConfig({ managed: { files: [], blocks: [] } });
+  await assert.rejects(
+    uninstall(
+      {
+        hosts: ['claude'],
+        purgeData: true,
+        dataDir: '/home/test/.fast-browser',
+      },
+      {
+        paths: { dataDir: '/home/test/.fast-browser', homeDir: '/home/test' },
+        loadConfig: async () => config,
+        preflightRouting: async () => events.push('preflight-routing'),
+        preflightHostRemoval: async () => events.push('preflight-host'),
+        inspectDataDir: async () => events.push('inspect-data'),
+        confirmPurge: async () => events.push('confirm-purge'),
+        removeRouting: async () => events.push('remove-routing'),
+        uninstallClaude: async () => events.push('remove-claude'),
+        removeDataDir: async () => events.push('remove-data'),
+        saveConfig: async () => events.push('save'),
+      },
+    ),
+    /purge.*all configured hosts|configured host.*remain/i,
+  );
+  assert.deepEqual(config.hosts, { claude: true, codex: true });
+  assert.deepEqual(events, []);
 });
 
 test('purge refuses aliases and requires explicit confirmation', async () => {
@@ -641,6 +1026,80 @@ test('purge revalidates the exact root immediately before deletion', async () =>
     /changed|replaced/i,
   );
   assert.equal(inspections, 2);
+});
+
+test('production purge confirmation requires a real TTY and exact affirmative answer', async () => {
+  const base = {
+    hosts: [],
+    purgeData: true,
+    dataDir: '/home/test/.fast-browser',
+    json: false,
+  };
+  const paths = { dataDir: '/home/test/.fast-browser', homeDir: '/home/test' };
+  const inspected = {
+    isDirectory: true,
+    isSymbolicLink: false,
+    realpath: '/home/test/.fast-browser',
+    dev: 1,
+    ino: 2,
+  };
+  const common = {
+    paths,
+    loadConfig: async () => validConfig({ hosts: { claude: false, codex: false } }),
+    preflightRouting: async () => {},
+    removeRouting: async () => {},
+    inspectDataDir: async () => inspected,
+    saveConfig: async () => {},
+  };
+  for (const fixture of [
+    { interactive: false, json: false, answer: 'PURGE' },
+    { interactive: true, json: true, answer: 'PURGE' },
+    { interactive: true, json: false, answer: 'no' },
+  ]) {
+    const events = [];
+    await assert.rejects(
+      uninstall(
+        { ...base, json: fixture.json },
+        {
+          ...common,
+          interactive: fixture.interactive,
+          input: { isTTY: fixture.interactive },
+          output: { isTTY: fixture.interactive },
+          createInterface: () => ({
+            question: async () => {
+              events.push('prompt');
+              return fixture.answer;
+            },
+            close: () => events.push('close'),
+          }),
+          removeDataDir: async () => events.push('remove'),
+        },
+      ),
+      /confirmation/i,
+    );
+    assert.equal(events.includes('remove'), false);
+  }
+
+  const events = [];
+  const report = await uninstall(
+    base,
+    {
+      ...common,
+      interactive: true,
+      input: { isTTY: true },
+      output: { isTTY: true },
+      createInterface: () => ({
+        question: async () => {
+          events.push('prompt');
+          return 'PURGE';
+        },
+        close: () => events.push('close'),
+      }),
+      removeDataDir: async () => events.push('remove'),
+    },
+  );
+  assert.equal(report.dataRetained, false);
+  assert.deepEqual(events, ['prompt', 'close', 'remove']);
 });
 
 test('ordinary uninstall reports recoverable state when retained config cannot be saved', async () => {

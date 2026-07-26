@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { defaultConfig } from '../../lib/core/config.mjs';
+import { configure } from '../../lib/commands/configure.mjs';
 import {
   pairAutoConnect,
   setManualConnection,
@@ -19,6 +20,7 @@ test('pairAutoConnect prints only the prescribed instructions and returns a pars
   const events = [];
   let updated;
 
+  const tokenStates = [false, true];
   const result = await pairAutoConnect(original, {
     print(line) {
       printed.push(line);
@@ -28,7 +30,7 @@ test('pairAutoConnect prints only the prescribed instructions and returns a pars
     },
     async hasToken() {
       events.push('verify');
-      return true;
+      return tokenStates.shift();
     },
     async updateConfig(config) {
       events.push('update');
@@ -37,7 +39,7 @@ test('pairAutoConnect prints only the prescribed instructions and returns a pars
   });
 
   assert.deepEqual(printed, INSTRUCTIONS);
-  assert.deepEqual(events, ['write', 'verify', 'update']);
+  assert.deepEqual(events, ['verify', 'write', 'verify', 'update']);
   assert.deepEqual(result, {
     ...defaultConfig(),
     connection: { mode: 'auto' },
@@ -51,6 +53,7 @@ test('pairAutoConnect verifies token presence before updating config', async () 
   const printed = [];
   let updates = 0;
 
+  const tokenStates = [false, false];
   await assert.rejects(
     () => pairAutoConnect(defaultConfig(), {
       print(line) {
@@ -58,7 +61,7 @@ test('pairAutoConnect verifies token presence before updating config', async () 
       },
       async writeTokenFromPrompt() {},
       async hasToken() {
-        return false;
+        return tokenStates.shift();
       },
       async updateConfig() {
         updates += 1;
@@ -69,6 +72,125 @@ test('pairAutoConnect verifies token presence before updating config', async () 
 
   assert.deepEqual(printed, INSTRUCTIONS);
   assert.equal(updates, 0);
+});
+
+test('existing automatic-pairing item requires explicit replacement confirmation', async () => {
+  const secret = 'existing-token-must-not-appear';
+  for (const fixture of [
+    { interactive: false, json: false, answer: true },
+    { interactive: true, json: true, answer: true },
+    { interactive: true, json: false, answer: false },
+  ]) {
+    const events = [];
+    const diagnostic = await (async () => {
+      try {
+        await pairAutoConnect(defaultConfig(), {
+          interactive: fixture.interactive,
+          json: fixture.json,
+          async hasToken() {
+            events.push('has-token');
+            return true;
+          },
+          async confirmReplaceToken() {
+            events.push('confirm');
+            return fixture.answer;
+          },
+          print(line) {
+            events.push(`print:${line}`);
+          },
+          async writeTokenFromPrompt() {
+            events.push('write');
+            throw new Error(secret);
+          },
+          async updateConfig() {
+            events.push('update');
+          },
+        });
+        assert.fail('expected replacement to be declined');
+      } catch (error) {
+        return String(error?.stack ?? error);
+      }
+    })();
+    assert.equal(events.includes('write'), false);
+    assert.equal(events.includes('update'), false);
+    assert.equal(events.some((event) => event.startsWith('print:')), false);
+    assert.equal(diagnostic.includes(secret), false);
+    if (!fixture.interactive || fixture.json) assert.equal(events.includes('confirm'), false);
+  }
+});
+
+test('configure uses its TTY replacement handler before any routing or credential write', async () => {
+  const events = [];
+  await assert.rejects(
+    configure(
+      {
+        profile: 'safe',
+        connection: 'auto',
+        recordSessions: null,
+        retentionDays: null,
+        json: false,
+      },
+      {
+        loadConfig: async () => defaultConfig(),
+        hasToken: async () => {
+          events.push('has-token');
+          return true;
+        },
+        interactive: true,
+        input: { isTTY: true },
+        output: { isTTY: true },
+        createInterface: () => ({
+          question: async () => {
+            events.push('prompt');
+            return 'no';
+          },
+          close: () => events.push('close'),
+        }),
+        installRouting: async () => events.push('routing'),
+        writeTokenFromPrompt: async () => events.push('write-token'),
+        saveConfig: async () => events.push('save-config'),
+        paths: {},
+      },
+    ),
+    /replacement confirmation/i,
+  );
+  assert.deepEqual(events, ['has-token', 'prompt', 'close']);
+});
+
+test('configure redacts replacement-confirmation failures before any write', async () => {
+  const secret = 'replacement-confirmation-secret';
+  const events = [];
+  const diagnostic = await (async () => {
+    try {
+      await configure(
+        {
+          profile: 'safe',
+          connection: 'auto',
+          recordSessions: null,
+          retentionDays: null,
+          json: false,
+        },
+        {
+          loadConfig: async () => defaultConfig(),
+          hasToken: async () => true,
+          interactive: true,
+          confirmReplaceToken: async () => {
+            throw new Error(secret);
+          },
+          installRouting: async () => events.push('routing'),
+          writeTokenFromPrompt: async () => events.push('write-token'),
+          saveConfig: async () => events.push('save-config'),
+          paths: {},
+        },
+      );
+      assert.fail('expected confirmation to reject');
+    } catch (error) {
+      return String(error?.stack ?? error);
+    }
+  })();
+  assert.equal(diagnostic.includes(secret), false);
+  assert.match(diagnostic, /unable to confirm.*replacement/i);
+  assert.deepEqual(events, []);
 });
 
 test('pairAutoConnect requires persistence before printing or writing a credential', async () => {
@@ -97,6 +219,7 @@ test('pairAutoConnect preserves the Keychain item and returns fixed remediation 
   const token = 'pair-save-secret-fixture';
   const original = defaultConfig();
   const events = [];
+  const tokenStates = [false, true];
 
   const diagnostic = await (async () => {
     try {
@@ -107,7 +230,7 @@ test('pairAutoConnect preserves the Keychain item and returns fixed remediation 
         },
         async hasToken() {
           events.push('verify');
-          return true;
+          return tokenStates.shift();
         },
         async updateConfig() {
           events.push('update');
@@ -123,7 +246,7 @@ test('pairAutoConnect preserves the Keychain item and returns fixed remediation 
     }
   })();
 
-  assert.deepEqual(events, ['write', 'verify', 'update']);
+  assert.deepEqual(events, ['verify', 'write', 'verify', 'update']);
   assert.equal(diagnostic.includes(token), false);
   assert.match(diagnostic, /Keychain token was preserved/);
   assert.deepEqual(original.connection, { mode: 'manual' });

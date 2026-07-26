@@ -125,6 +125,48 @@ test('matching setup is a no-op without a test-only current-state hook', async (
   assert.equal(report.changed, false);
 });
 
+test('matching setup reports doctor or current-state drift instead of claiming configured', async () => {
+  const current = {
+    schemaVersion: 1,
+    productVersion: '0.1.0-alpha.1',
+    profile: 'safe',
+    hosts: { claude: true, codex: false },
+    connection: { mode: 'manual' },
+    sessions: { enabled: false, retentionDays: 30 },
+    runtime: { version: null, sha256: null, sourceCommit: null },
+    managed: { files: [], blocks: [] },
+  };
+  for (const fixture of [
+    {
+      doctor: { schemaVersion: 1, ok: false, checks: [{ id: 'runtime-checksum', status: 'fail' }] },
+      isSetupCurrent: async () => true,
+    },
+    {
+      doctor: { schemaVersion: 1, ok: true, checks: [] },
+      isSetupCurrent: async () => false,
+    },
+  ]) {
+    const events = [];
+    await assert.rejects(
+      setup(request({ hosts: ['claude'], profile: 'safe' }), {
+        checkPlatform: async () => {},
+        detectHosts: async () => ['claude'],
+        loadConfig: async () => current,
+        doctor: async () => fixture.doctor,
+        isSetupCurrent: fixture.isSetupCurrent,
+        ensureDataDirs: async () => events.push('repair'),
+        paths: {},
+      }),
+      (error) => {
+        assert.equal(error.stage, 'setup-drift');
+        assert.doesNotMatch(error.message, /already configured|extension configured/i);
+        return true;
+      },
+    );
+    assert.deepEqual(events, []);
+  }
+});
+
 test('setup never prunes before config persistence and rolls routing back on save failure', async () => {
   const events = [];
   await assert.rejects(

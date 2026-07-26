@@ -50,6 +50,25 @@ test('parses configure profile and strict help or version requests', () => {
   assert.equal(parseArgs(['--version']).version, true);
 });
 
+test('each command help request is parsed without command options or side effects', () => {
+  for (const command of ['setup', 'doctor', 'configure', 'migrate', 'uninstall']) {
+    const parsed = parseArgs([command, '--help']);
+    assert.equal(parsed.command, command);
+    assert.equal(parsed.help, true);
+  }
+});
+
+test('per-command allowlists reject flags a command would otherwise ignore', () => {
+  assert.throws(
+    () => parseArgs(['configure', '--host', 'claude']),
+    /--host.*not valid.*configure/i,
+  );
+  assert.throws(
+    () => parseArgs(['doctor', '--host', 'claude']),
+    /--host.*not valid.*doctor/i,
+  );
+});
+
 test('rejects duplicate and conflicting options', () => {
   assert.throws(
     () => parseArgs(['setup', '--profile', 'safe', '--profile', 'full']),
