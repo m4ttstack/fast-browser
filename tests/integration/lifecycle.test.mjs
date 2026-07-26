@@ -1,9 +1,19 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readdir, rm, symlink } from 'node:fs/promises';
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readdir,
+  realpath,
+  rm,
+  symlink,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
+import { migrate } from '../../lib/commands/migrate.mjs';
 import { setup } from '../../lib/commands/setup.mjs';
 import { resolvePaths } from '../../lib/core/paths.mjs';
 
@@ -14,6 +24,19 @@ function request(overrides = {}) {
     source: '/repo/mattstack',
     runtimeLock: null,
     ...overrides,
+  };
+}
+
+function migrationConfig() {
+  return {
+    schemaVersion: 1,
+    productVersion: '0.1.0-alpha.1',
+    profile: 'safe',
+    hosts: { claude: false, codex: false },
+    connection: { mode: 'manual' },
+    sessions: { enabled: false, retentionDays: 30 },
+    runtime: { version: null, sha256: null, sourceCommit: null },
+    managed: { files: [], blocks: [] },
   };
 }
 
@@ -325,6 +348,114 @@ test('setup refuses malformed or unreadable existing config before any mutation'
     },
   );
   assert.deepEqual(events, []);
+});
+
+test('migration production config preflight rejects unsafe config before every mutation', async (t) => {
+  const canonicalTemp = await realpath(tmpdir());
+  const cases = [
+    {
+      name: 'malformed JSON',
+      prepare: async ({ configFile }) => writeFile(configFile, '{"schemaVersion":'),
+    },
+    {
+      name: 'unreadable regular config',
+      prepare: async ({ configFile }) => {
+        await writeFile(configFile, `${JSON.stringify(migrationConfig())}\n`);
+        await chmod(configFile, 0o000);
+      },
+    },
+    {
+      name: 'config symlink to a valid external file',
+      prepare: async ({ configFile, externalDir }) => {
+        const externalConfig = path.join(externalDir, 'valid-config.json');
+        await writeFile(externalConfig, `${JSON.stringify(migrationConfig())}\n`);
+        await symlink(externalConfig, configFile);
+      },
+    },
+  ];
+
+  for (const entry of cases) {
+    await t.test(entry.name, async (caseTest) => {
+      const homeDir = await mkdtemp(path.join(canonicalTemp, 'fast-browser-migrate-home-'));
+      const externalDir = await mkdtemp(path.join(canonicalTemp, 'fast-browser-migrate-external-'));
+      const paths = resolvePaths({ homeDir, pluginRoot: '/plugin' });
+      await mkdir(paths.dataDir, { mode: 0o700 });
+      await entry.prepare({ configFile: paths.configFile, externalDir });
+      caseTest.after(() => Promise.all([
+        rm(homeDir, { recursive: true, force: true }),
+        rm(externalDir, { recursive: true, force: true }),
+      ]));
+
+      const events = [];
+      await assert.rejects(
+        migrate(
+          {
+            dryRun: false,
+            rollback: null,
+            hosts: ['claude'],
+            source: '/repo/mattstack',
+          },
+          {
+            paths,
+            applyMigration: async (options) => {
+              events.push('inventory');
+              events.push('backup');
+              events.push('import');
+              await options.writeMigratedToken('fixture-token');
+              return options.installAdaptersAndRouting();
+            },
+            writeMigratedToken: async () => events.push('keychain'),
+            installClaude: async () => events.push('host'),
+            installRouting: async () => events.push('routing'),
+            saveConfig: async () => events.push('save'),
+          },
+        ),
+        (error) => {
+          assert.equal(error.name, 'LifecycleError');
+          assert.equal(error.stage, 'config-preflight');
+          return true;
+        },
+      );
+      assert.deepEqual(events, []);
+    });
+  }
+});
+
+test('migration production config preflight treats the exact missing config leaf as absence', async (t) => {
+  const canonicalTemp = await realpath(tmpdir());
+  const homeDir = await mkdtemp(path.join(canonicalTemp, 'fast-browser-migrate-absent-'));
+  const paths = resolvePaths({ homeDir, pluginRoot: '/plugin' });
+  await mkdir(paths.dataDir, { mode: 0o700 });
+  t.after(() => rm(homeDir, { recursive: true, force: true }));
+
+  const events = [];
+  const report = await migrate(
+    {
+      dryRun: false,
+      rollback: null,
+      hosts: ['claude'],
+      source: '/repo/mattstack',
+    },
+    {
+      paths,
+      applyMigration: async (options) => {
+        events.push('apply');
+        return options.installAdaptersAndRouting();
+      },
+      installClaude: async () => {
+        events.push('host');
+        return { host: 'claude', changed: false, changes: [] };
+      },
+      installRouting: async ({ profile }) => {
+        events.push(`routing:${profile}`);
+        return { profile, files: [], blocks: [] };
+      },
+      saveConfig: async () => events.push('save'),
+    },
+  );
+
+  assert.deepEqual(events, ['apply', 'host', 'routing:safe', 'save']);
+  assert.deepEqual(report.previousConfig, migrationConfig());
 });
 
 test('default setup directory preflight refuses a symlinked data root without outside writes', async (t) => {

@@ -593,6 +593,7 @@ test('migrate dry-run inventories and proposes without any writer', async () => 
         events.push('proposal');
         return { mutations: [] };
       },
+      loadConfig: async () => events.push('config-preflight'),
       applyMigration: async () => events.push('apply'),
       rollbackMigration: async () => events.push('rollback'),
       writeMigratedToken: async () => events.push('keychain-write'),
@@ -615,6 +616,7 @@ test('migrate rollback resolves one exact confined manifest and only rolls back'
         events.push(`rollback:${manifest}:${options.homeDir}`);
         return { changed: true };
       },
+      loadConfig: async () => events.push('config-preflight'),
       inventoryLegacy: async () => events.push('inventory'),
       applyMigration: async () => events.push('apply'),
     },
@@ -661,6 +663,7 @@ test('migrate apply wires secure token handling, install cleanup, and verificati
     { dryRun: false, rollback: null },
     {
       ...supplied,
+      loadConfig: async () => null,
       applyMigration: async (options) => {
         assert.equal(options.paths, supplied.paths);
         assert.equal(options.writeMigratedToken, supplied.writeMigratedToken);
@@ -686,7 +689,10 @@ test('migrate composes deterministic host, routing, verification, and cleanup ad
     },
     {
       paths: { homeDir: '/home/test', backupsDir: '/home/test/.fast-browser/backups' },
-      loadConfig: async () => validConfig(),
+      loadConfig: async () => {
+        events.push('load-config');
+        return validConfig();
+      },
       installClaude: async () => {
         events.push('install-claude');
         return { host: 'claude', changed: true, changes: ['plugin-installed'] };
@@ -708,6 +714,7 @@ test('migrate composes deterministic host, routing, verification, and cleanup ad
       uninstallClaude: async () => events.push('remove-claude'),
       uninstallCodex: async () => events.push('remove-codex'),
       applyMigration: async (options) => {
+        events.push('apply');
         const installed = await options.installAdaptersAndRouting();
         await options.verify();
         await options.cleanupInstalled(installed);
@@ -716,6 +723,8 @@ test('migrate composes deterministic host, routing, verification, and cleanup ad
     },
   );
   assert.deepEqual(events, [
+    'load-config',
+    'apply',
     'install-claude',
     'install-codex',
     'install-routing',
@@ -728,11 +737,12 @@ test('migrate composes deterministic host, routing, verification, and cleanup ad
   assert.deepEqual(report, { changed: true });
 });
 
-test('migration optional config treats only ENOENT as absent and fails closed otherwise', async () => {
+test('migration config preflight fails closed on every injected loader error before apply', async () => {
   const failures = [
     Object.assign(new Error('malformed config'), { name: 'ConfigError' }),
     Object.assign(new Error('unreadable config'), { code: 'EACCES' }),
     Object.assign(new Error('symlink config'), { code: 'ELOOP' }),
+    Object.assign(new Error('nested missing dependency'), { code: 'ENOENT' }),
   ];
   for (const failure of failures) {
     const events = [];
@@ -759,9 +769,13 @@ test('migration optional config treats only ENOENT as absent and fails closed ot
           },
         },
       ),
-      /migration install|config/i,
+      (error) => {
+        assert.equal(error.name, 'LifecycleError');
+        assert.equal(error.stage, 'config-preflight');
+        return true;
+      },
     );
-    assert.deepEqual(events, ['backup-import', 'load-config']);
+    assert.deepEqual(events, ['load-config']);
   }
 });
 
