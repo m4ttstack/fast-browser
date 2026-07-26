@@ -5,8 +5,10 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  readdir,
   rm,
   stat,
+  symlink,
   writeFile,
 } from 'node:fs/promises';
 import os from 'node:os';
@@ -91,6 +93,7 @@ test('safe installs only the Codex agent and exact prompt-oriented MCP policy', 
     profile: 'safe',
     paths,
     codexVersion: 'codex-cli 0.145.0',
+    managedState: state,
   });
   assert.deepEqual(second, state);
   assert.equal(await readFile(configFile, 'utf8'), config);
@@ -170,6 +173,100 @@ test('full installs dedicated Claude rules and routes through AGENTS.override.md
   assert.equal(await readFile(agentsFile, 'utf8'), originalAgents);
 });
 
+test('full to safe transition removes only routing no longer owned by the safe profile', async (t) => {
+  const paths = await temporaryPaths(t);
+  const full = await installRouting({
+    profile: 'full',
+    paths,
+    codexVersion: '0.145.0',
+  });
+
+  const safe = await installRouting({
+    profile: 'safe',
+    paths,
+    codexVersion: '0.145.0',
+    managedState: full,
+  });
+
+  assert.equal(
+    await exists(path.join(
+      paths.homeDir,
+      '.claude',
+      'rules',
+      'fast-browser-routing.md',
+    )),
+    false,
+  );
+  assert.equal(
+    await exists(path.join(
+      paths.homeDir,
+      '.claude',
+      'rules',
+      'fast-browser-verification-consent.md',
+    )),
+    false,
+  );
+  assert.equal(
+    await exists(path.join(paths.homeDir, '.codex', 'AGENTS.md')),
+    false,
+  );
+  assert.equal(safe.files.length, 1);
+  assert.equal(safe.blocks.length, 1);
+  assert.match(
+    await readFile(path.join(paths.homeDir, '.codex', 'config.toml'), 'utf8'),
+    /default_tools_approval_mode = "writes"/,
+  );
+});
+
+test('AGENTS target transition removes the old owned block and preserves both user files', async (t) => {
+  const paths = await temporaryPaths(t);
+  const codexDir = path.join(paths.homeDir, '.codex');
+  const agentsFile = path.join(codexDir, 'AGENTS.md');
+  const overrideFile = path.join(codexDir, 'AGENTS.override.md');
+  await mkdir(codexDir, { recursive: true });
+  await writeFile(agentsFile, 'ordinary instructions\n');
+  const first = await installRouting({ profile: 'full', paths });
+  await writeFile(overrideFile, 'override instructions\r\n');
+
+  const second = await installRouting({
+    profile: 'full',
+    paths,
+    managedState: first,
+  });
+
+  assert.equal(await readFile(agentsFile, 'utf8'), 'ordinary instructions\n');
+  assert.match(
+    await readFile(overrideFile, 'utf8'),
+    /<!-- fast-browser:start routing-v1 -->/,
+  );
+  assert.equal(
+    second.blocks.some(({ path: target }) => target === agentsFile),
+    false,
+  );
+  assert.equal(
+    second.blocks.some(({ path: target }) => target === overrideFile),
+    true,
+  );
+});
+
+test('removal preserves pre-existing empty config and AGENTS container files', async (t) => {
+  const paths = await temporaryPaths(t);
+  const codexDir = path.join(paths.homeDir, '.codex');
+  const agentsFile = path.join(codexDir, 'AGENTS.md');
+  const configFile = path.join(codexDir, 'config.toml');
+  await mkdir(codexDir, { recursive: true });
+  await writeFile(agentsFile, '');
+  await writeFile(configFile, '');
+
+  const state = await installRouting({ profile: 'full', paths });
+  await removeRouting({ paths, managedState: state });
+
+  assert.equal(await exists(agentsFile), true);
+  assert.equal(await exists(configFile), true);
+  assert.equal(await readFile(agentsFile, 'utf8'), '');
+  assert.equal(await readFile(configFile, 'utf8'), '');
+});
+
 test('refuses a non-owned dedicated file before making any routing change', async (t) => {
   const paths = await temporaryPaths(t);
   const codexDir = path.join(paths.homeDir, '.codex');
@@ -208,6 +305,25 @@ test('treats an existing empty dedicated file as a non-owned conflict', async (t
     await exists(path.join(paths.homeDir, '.codex', 'config.toml')),
     false,
   );
+});
+
+test('rejects a symlinked host parent before writing outside the supplied home', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'fast-browser-confined-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const homeDir = path.join(root, 'home');
+  const outside = path.join(root, 'outside');
+  await mkdir(homeDir);
+  await mkdir(outside);
+  await symlink(outside, path.join(homeDir, '.codex'), 'dir');
+  const paths = resolvePaths({ homeDir, pluginRoot });
+
+  await assert.rejects(
+    installRouting({ profile: 'safe', paths }),
+    /symlink|confined/i,
+  );
+
+  assert.deepEqual(await readdir(outside), []);
+  assert.equal(await exists(path.join(homeDir, '.claude')), false);
 });
 
 test('removal verifies all ownership before deleting or rewriting anything', async (t) => {
@@ -251,6 +367,22 @@ test('refuses duplicate or malformed TOML markers without installing the agent',
   assert.equal(
     await exists(path.join(paths.homeDir, '.codex', 'agents', 'browser_driver.toml')),
     false,
+  );
+});
+
+test('rejects a bare carriage return after a TOML marker', async (t) => {
+  const paths = await temporaryPaths(t);
+  const configFile = path.join(paths.homeDir, '.codex', 'config.toml');
+  await mkdir(path.dirname(configFile), { recursive: true });
+  await writeFile(
+    configFile,
+    '# fast-browser:start other-v1\rbody\n'
+      + '# fast-browser:end other-v1\n',
+  );
+
+  await assert.rejects(
+    installRouting({ profile: 'safe', paths }),
+    /malformed/i,
   );
 });
 

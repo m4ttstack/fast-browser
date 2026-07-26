@@ -38,6 +38,9 @@ test('selects the preferred model only for parseable Codex versions at least 0.1
     ['codex 1.0.0', true],
     ['0.144.99', false],
     ['0.145.0-alpha.1', false],
+    ['codex-cli 0.145.0.1', false],
+    ['codex-cli 0.145.0rc1', false],
+    ['codex-cli 0.145.0 and codex 0.146.0', false],
     ['not a version', false],
     ['', false],
   ];
