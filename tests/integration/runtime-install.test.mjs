@@ -315,3 +315,59 @@ test('refuses pre-existing symlinks that would move runtime writes outside dataD
     assert.equal(await readFile(path.join(outside, 'sentinel'), 'utf8'), 'unchanged');
   }
 });
+
+test('rejects a pre-existing runtime .download symlink before fetch or outside mutation', async () => {
+  const archive = await validTar();
+  const home = await mkdtemp(path.join(os.tmpdir(), 'fast-browser-home-'));
+  const outside = await mkdtemp(path.join(os.tmpdir(), 'fast-browser-outside-'));
+  const paths = pathsFor(home);
+  const lock = lockFor('http://127.0.0.1:1/runtime.tar.gz', archive);
+  const versionDirectory = path.join(paths.runtimeDir, lock.productVersion);
+  const outsideFile = path.join(outside, 'sentinel');
+  await mkdir(versionDirectory, { recursive: true });
+  await writeFile(outsideFile, 'unchanged');
+  await symlink(outsideFile, path.join(versionDirectory, '.download'));
+  const before = (await readdir(outside)).sort();
+  let fetchCalls = 0;
+
+  await assert.rejects(
+    installRuntime({
+      lock,
+      paths,
+      fetch: async () => {
+        fetchCalls += 1;
+        return new Response(archive, { status: 200 });
+      },
+    }),
+    /download|symlink|confined/i,
+  );
+  assert.equal(fetchCalls, 0);
+  assert.deepEqual((await readdir(outside)).sort(), before);
+  assert.equal(await readFile(outsideFile, 'utf8'), 'unchanged');
+});
+
+test('fails closed on a stale ordinary runtime .download file before fetch', async () => {
+  const archive = await validTar();
+  const home = await mkdtemp(path.join(os.tmpdir(), 'fast-browser-home-'));
+  const paths = pathsFor(home);
+  const lock = lockFor('http://127.0.0.1:1/runtime.tar.gz', archive);
+  const versionDirectory = path.join(paths.runtimeDir, lock.productVersion);
+  const downloadPath = path.join(versionDirectory, '.download');
+  await mkdir(versionDirectory, { recursive: true });
+  await writeFile(downloadPath, 'stale-download');
+  let fetchCalls = 0;
+
+  await assert.rejects(
+    installRuntime({
+      lock,
+      paths,
+      fetch: async () => {
+        fetchCalls += 1;
+        return new Response(archive, { status: 200 });
+      },
+    }),
+    /download.*exists|download.*unavailable|EEXIST/i,
+  );
+  assert.equal(fetchCalls, 0);
+  assert.equal(await readFile(downloadPath, 'utf8'), 'stale-download');
+});
