@@ -194,6 +194,29 @@ test('routing installs only resources owned by the selected hosts', async (t) =>
   );
 });
 
+test('Claude-only routing ignores an unrelated symlinked Codex tree', async (t) => {
+  const paths = await temporaryPaths(t);
+  const outside = await mkdtemp(path.join(os.tmpdir(), 'fast-browser-unselected-codex-'));
+  t.after(() => rm(outside, { recursive: true, force: true }));
+  await symlink(outside, path.join(paths.homeDir, '.codex'), 'dir');
+
+  const state = await installRouting({
+    profile: 'full',
+    hosts: ['claude'],
+    paths,
+  });
+
+  assert.deepEqual(
+    state.files.map(({ path: target }) => path.relative(paths.homeDir, target)).sort(),
+    [
+      '.claude/rules/fast-browser-routing.md',
+      '.claude/rules/fast-browser-verification-consent.md',
+    ],
+  );
+  assert.deepEqual(state.blocks, []);
+  assert.deepEqual(await readdir(outside), []);
+});
+
 test('full installs dedicated Claude rules and routes through AGENTS.override.md', async (t) => {
   const paths = await temporaryPaths(t);
   const codexDir = path.join(paths.homeDir, '.codex');
@@ -529,6 +552,39 @@ test('transaction preparation detects drift in a later managed target before mut
     /ownership|hash|changed/i,
   );
   assert.deepEqual(await snapshotTargets(targets), before);
+});
+
+test('apply rejects drift in an unchanged retained Codex agent before mutating routing', async (t) => {
+  const paths = await temporaryPaths(t);
+  const managedState = await installRouting({
+    profile: 'safe',
+    hosts: ['codex'],
+    paths,
+    codexVersion: 'codex-cli 0.145.0',
+  });
+  const agentPath = managedState.files[0].path;
+  const configPath = managedState.blocks[0].path;
+  const configBefore = await readFile(configPath, 'utf8');
+  const prepared = await prepareRoutingTransition({
+    profile: 'full',
+    hosts: ['codex'],
+    paths,
+    codexVersion: 'codex-cli 0.145.0',
+    managedState,
+  });
+  await writeFile(agentPath, 'external retained agent drift\n');
+
+  await assert.rejects(
+    prepared.apply(),
+    /routing transaction preflight failed/i,
+  );
+
+  assert.equal(await readFile(agentPath, 'utf8'), 'external retained agent drift\n');
+  assert.equal(await readFile(configPath, 'utf8'), configBefore);
+  assert.equal(
+    await exists(path.join(paths.homeDir, '.codex', 'AGENTS.md')),
+    false,
+  );
 });
 
 test('AGENTS transition consolidates removal and installation to one mutation per path', async (t) => {

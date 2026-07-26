@@ -216,6 +216,8 @@ test('transaction errors never expose target paths or file contents', async (t) 
   const preflight = prepareFileTransaction({ home, changes });
   await writeFile(paths[1], 'external-secret-content');
   await assert.rejects(preflight.apply(), (error) => {
+    assert.equal(error.name, 'RoutingTransactionError');
+    assert.equal(error.code, 'ROUTING_TRANSACTION_PREFLIGHT_FAILED');
     assert.equal(error.message, 'routing transaction preflight failed');
     return assertRedacted(error, paths, [...contents, 'external-secret-content']);
   });
@@ -236,6 +238,8 @@ test('transaction errors never expose target paths or file contents', async (t) 
       io: applyIo,
     }).apply(),
     (error) => {
+      assert.equal(error.name, 'RoutingTransactionError');
+      assert.equal(error.code, 'ROUTING_TRANSACTION_APPLY_FAILED');
       assert.equal(error.message, 'routing transaction apply failed');
       return assertRedacted(error, second.paths, contents);
     },
@@ -260,6 +264,8 @@ test('transaction errors never expose target paths or file contents', async (t) 
       io: recoveryIo,
     }).apply(),
     (error) => {
+      assert.equal(error.name, 'RoutingTransactionError');
+      assert.equal(error.code, 'ROUTING_TRANSACTION_RECOVERY_REQUIRED');
       assert.equal(error.message, 'routing transaction recovery required');
       return assertRedacted(error, third.paths, contents);
     },

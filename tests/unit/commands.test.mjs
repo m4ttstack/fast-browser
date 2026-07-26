@@ -35,6 +35,10 @@ import {
   installRouting,
   preflightRoutingRemoval,
 } from '../../lib/hosts/routing.mjs';
+import {
+  ROUTING_TRANSACTION_RECOVERY_REQUIRED,
+  RoutingTransactionError,
+} from '../../lib/hosts/file-transaction.mjs';
 import { PairingError } from '../../lib/keychain/pair.mjs';
 
 test('exports dependency-injected lifecycle command functions', () => {
@@ -1133,6 +1137,73 @@ test('configure rolls back the routing receipt for plain, automatic, and manual 
   }
 });
 
+test('configure keeps next routing when real manual connection saves before token deletion fails', async () => {
+  const events = [];
+  const current = validConfig({ connection: { mode: 'auto' } });
+  const nextRouting = {
+    profile: 'full',
+    files: [{ path: '/next-owned', sha256: 'b'.repeat(64) }],
+    blocks: [],
+  };
+  let routingSide = 'prior';
+  let persisted = null;
+
+  await assert.rejects(
+    configure(
+      {
+        profile: 'full',
+        connection: 'manual',
+        recordSessions: false,
+        retentionDays: 30,
+      },
+      {
+        loadConfig: async () => current,
+        prepareRoutingTransition: async () => ({
+          nextState: nextRouting,
+          apply: async () => {
+            events.push('routing:apply-next');
+            routingSide = 'next';
+            return {
+              rollback: async () => {
+                events.push('routing:rollback-prior');
+                routingSide = 'prior';
+              },
+            };
+          },
+        }),
+        saveConfig: async (_paths, config) => {
+          events.push('config:save-manual');
+          persisted = structuredClone(config);
+        },
+        confirmDeleteToken: async () => true,
+        deleteToken: async () => {
+          events.push('keychain:delete-fail');
+          throw new Error('/Users/maintainer/secret-token');
+        },
+        paths: {},
+      },
+    ),
+    (error) => {
+      assert.equal(error.name, 'PairingError');
+      assert.match(error.message, /manual connection was saved/i);
+      assert.doesNotMatch(error.message, /Users|maintainer|secret-token/);
+      return true;
+    },
+  );
+
+  assert.equal(routingSide, 'next');
+  assert.deepEqual(persisted.connection, { mode: 'manual' });
+  assert.deepEqual(persisted.managed, {
+    files: nextRouting.files,
+    blocks: [],
+  });
+  assert.deepEqual(events, [
+    'routing:apply-next',
+    'config:save-manual',
+    'keychain:delete-fail',
+  ]);
+});
+
 test('configure restores exact prior routing bytes from one real receipt', async (t) => {
   const homeDir = await mkdtemp(path.join(tmpdir(), 'fast-browser-configure-receipt-'));
   const paths = resolvePaths({ homeDir, pluginRoot: path.resolve(import.meta.dirname, '../..') });
@@ -1204,6 +1275,47 @@ test('configure preserves external drift and redacts receipt-managed state on ro
   );
 
   assert.equal(await readFile(routingPath, 'utf8'), 'external routing drift\n');
+});
+
+test('configure maps a routing recovery-required apply failure to its fixed recovery result', async () => {
+  let saves = 0;
+
+  await assert.rejects(
+    configure(
+      { profile: 'full', connection: null, recordSessions: false, retentionDays: 30 },
+      {
+        loadConfig: async () => validConfig({
+          hosts: { claude: true, codex: false },
+        }),
+        prepareRoutingTransition: async () => ({
+          nextState: { profile: 'full', files: [], blocks: [] },
+          apply: async () => {
+            throw new RoutingTransactionError(
+              'routing transaction recovery required',
+              ROUTING_TRANSACTION_RECOVERY_REQUIRED,
+            );
+          },
+        }),
+        saveConfig: async () => {
+          saves += 1;
+        },
+        paths: {},
+      },
+    ),
+    (error) => {
+      assert.equal(error.name, 'LifecycleError');
+      assert.equal(error.stage, 'save-config');
+      assert.equal(
+        error.message,
+        'Configure could not save config and routing requires recovery.',
+      );
+      assert.equal(error.code, 'ROUTING_TRANSACTION_RECOVERY_REQUIRED');
+      assert.equal(error.partialState, null);
+      return true;
+    },
+  );
+
+  assert.equal(saves, 0);
 });
 
 test('configure retention failure keeps the durably tracked configuration', async () => {
@@ -1983,7 +2095,7 @@ test('migration persists prior config before adapter cleanup and propagates clea
   );
 });
 
-test('migration cleanup leaves prior routing unchanged before next routing installs', async (t) => {
+test('migration removes a prior Codex host without probing its unavailable version', async (t) => {
   const canonicalTemp = await realpath(tmpdir());
   const homeDir = await mkdtemp(path.join(canonicalTemp, 'fast-browser-migration-preinstall-'));
   const paths = resolvePaths({ homeDir, pluginRoot: path.resolve(import.meta.dirname, '../..') });
@@ -2004,28 +2116,32 @@ test('migration cleanup leaves prior routing unchanged before next routing insta
   });
   await writeFile(paths.configFile, `${JSON.stringify(previousConfig, null, 2)}\n`, { mode: 0o600 });
   const codexAgent = path.join(paths.homeDir, '.codex', 'agents', 'browser_driver.toml');
-  const priorAgentBytes = await readFile(codexAgent, 'utf8');
 
-  await assert.rejects(
-    migrate(
-      {
-        dryRun: false,
-        rollback: null,
-        hosts: ['claude'],
-        source: '/repo/mattstack',
+  const report = await migrate(
+    {
+      dryRun: false,
+      rollback: null,
+      hosts: ['claude'],
+      source: '/repo/mattstack',
+    },
+    {
+      paths,
+      installClaude: async () => ({ host: 'claude', changed: false, changes: [] }),
+      getCodexVersion: async () => {
+        assert.fail('Codex version must not be probed for a removed prior host');
       },
-      {
-        paths,
-        installClaude: async () => ({ host: 'claude', changed: false, changes: [] }),
-        getCodexVersion: async () => {
-          throw new Error('injected Codex version failure');
-        },
-      },
-    ),
-    ({ stage }) => stage === 'install',
+      verify: async () => {},
+    },
   );
 
-  assert.equal(await readFile(codexAgent, 'utf8'), priorAgentBytes);
+  assert.equal(report.changed, false);
+  await assert.rejects(access(codexAgent), { code: 'ENOENT' });
+  const persisted = JSON.parse(await readFile(paths.configFile, 'utf8'));
+  assert.deepEqual(persisted.hosts, { claude: true, codex: false });
+  await preflightRoutingRemoval({
+    paths,
+    managedState: { profile: persisted.profile, ...persisted.managed },
+  });
 });
 
 test('migration config preflight fails closed on every injected loader error before apply', async () => {

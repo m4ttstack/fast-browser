@@ -19,6 +19,11 @@ import { migrate } from '../../lib/commands/migrate.mjs';
 import { setup } from '../../lib/commands/setup.mjs';
 import { resolvePaths } from '../../lib/core/paths.mjs';
 import {
+  nodeFileTransactionIo,
+  ROUTING_TRANSACTION_RECOVERY_REQUIRED,
+  RoutingTransactionError,
+} from '../../lib/hosts/file-transaction.mjs';
+import {
   installRouting,
   prepareRoutingTransition,
   preflightRoutingRemoval,
@@ -339,6 +344,55 @@ test('setup uses the exact routing receipt when config persistence fails', async
     'save',
     'routing:rollback',
   ]);
+});
+
+test('setup maps a routing recovery-required apply failure to its fixed recovery result', async () => {
+  let saves = 0;
+
+  await assert.rejects(
+    setup(request({ hosts: ['claude'], profile: 'full' }), {
+      checkPlatform: async () => {},
+      detectHosts: async () => ['claude'],
+      ensureDataDirs: async () => {},
+      loadRuntimeLock: async () => ({
+        productVersion: '0.1.0-alpha.1',
+        runtime: { sha256: 'a'.repeat(64), sourceCommit: 'abc' },
+        extension: { id: 'extension-id', version: '1.0.0' },
+      }),
+      installRuntime: async () => ({ version: '0.1.0-alpha.1' }),
+      installExtension: async () => ({ unpacked: '/tmp/extension' }),
+      installClaude: async () => ({ host: 'claude', changed: false, changes: [] }),
+      installBuiltinMacros: async () => {},
+      prepareRoutingTransition: async () => ({
+        nextState: { profile: 'full', files: [], blocks: [] },
+        apply: async () => {
+          throw new RoutingTransactionError(
+            'routing transaction recovery required',
+            ROUTING_TRANSACTION_RECOVERY_REQUIRED,
+          );
+        },
+      }),
+      saveConfig: async () => {
+        saves += 1;
+      },
+      loadConfig: async () => null,
+      paths: {},
+      interactive: true,
+    }),
+    (error) => {
+      assert.equal(error.name, 'LifecycleError');
+      assert.equal(error.stage, 'save-config');
+      assert.equal(
+        error.message,
+        'Setup could not save config; installed routing requires recovery.',
+      );
+      assert.equal(error.code, 'ROUTING_TRANSACTION_RECOVERY_REQUIRED');
+      assert.equal(error.partialState, null);
+      return true;
+    },
+  );
+
+  assert.equal(saves, 0);
 });
 
 test('setup preserves external routing drift and redacts exact prior receipt state', async (t) => {
@@ -874,6 +928,94 @@ test('migration receipt preserves external routing drift and reports recovery re
 
   assert.equal(preparations, 1);
   assert.equal(await readFile(routingPath, 'utf8'), 'external routing drift\n');
+});
+
+test('migration reports recovery when real routing apply and automatic reversal both fail', async (t) => {
+  const homeDir = await mkdtemp(path.join(
+    await realpath(tmpdir()),
+    'fast-browser-migration-apply-recovery-',
+  ));
+  const paths = resolvePaths({
+    homeDir,
+    pluginRoot: path.resolve(import.meta.dirname, '../..'),
+  });
+  await mkdir(paths.dataDir, { recursive: true, mode: 0o700 });
+  t.after(() => rm(homeDir, { recursive: true, force: true }));
+  const routingPath = path.join(
+    homeDir,
+    '.claude',
+    'rules',
+    'fast-browser-routing.md',
+  );
+  const consentPath = path.join(
+    homeDir,
+    '.claude',
+    'rules',
+    'fast-browser-verification-consent.md',
+  );
+  let mutationCalls = 0;
+  let saves = 0;
+  let verifications = 0;
+  const transactionIo = {
+    ...nodeFileTransactionIo,
+    async mutate(change) {
+      const call = mutationCalls;
+      mutationCalls += 1;
+      if (call === 1 || call === 2) {
+        throw new Error('/Users/maintainer/secret-routing-mutation');
+      }
+      return nodeFileTransactionIo.mutate(change);
+    },
+  };
+
+  await assert.rejects(
+    migrate(
+      {
+        dryRun: false,
+        rollback: null,
+        hosts: ['claude'],
+        source: '/repo/mattstack',
+      },
+      {
+        paths,
+        loadConfig: async () => ({
+          ...migrationConfig(),
+          profile: 'full',
+        }),
+        installClaude: async () => ({ host: 'claude', changed: false, changes: [] }),
+        prepareRoutingTransition: async (options) => prepareRoutingTransition({
+          ...options,
+          transactionIo,
+        }),
+        saveConfig: async () => {
+          saves += 1;
+        },
+        verify: async () => {
+          verifications += 1;
+        },
+      },
+    ),
+    (error) => {
+      assert.equal(error.name, 'MigrationError');
+      assert.equal(error.stage, 'recovery');
+      assert.equal(
+        error.message,
+        'migration recovery required after installed-state cleanup failed',
+      );
+      assert.equal(error.partialState, null);
+      assert.doesNotMatch(
+        JSON.stringify(error),
+        /Users|maintainer|secret-routing-mutation|fast-browser-routing/,
+      );
+      return true;
+    },
+  );
+
+  assert.equal(mutationCalls, 3);
+  assert.equal(saves, 0);
+  assert.equal(verifications, 0);
+  await access(routingPath);
+  await assert.rejects(access(consentPath), { code: 'ENOENT' });
 });
 
 test('default setup directory preflight refuses a symlinked data root without outside writes', async (t) => {
