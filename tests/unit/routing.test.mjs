@@ -99,6 +99,67 @@ test('safe installs only the Codex agent and exact prompt-oriented MCP policy', 
   assert.equal(await readFile(configFile, 'utf8'), config);
 });
 
+test('routing installs only resources owned by the selected hosts', async (t) => {
+  const paths = await temporaryPaths(t);
+
+  const claude = await installRouting({
+    profile: 'full',
+    hosts: ['claude'],
+    paths,
+  });
+
+  assert.deepEqual(
+    claude.files.map(({ path: target }) => path.relative(paths.homeDir, target)).sort(),
+    [
+      '.claude/rules/fast-browser-routing.md',
+      '.claude/rules/fast-browser-verification-consent.md',
+    ],
+  );
+  assert.deepEqual(claude.blocks, []);
+  assert.equal(await exists(path.join(paths.homeDir, '.codex')), false);
+
+  const codex = await installRouting({
+    profile: 'full',
+    hosts: ['codex'],
+    paths,
+    codexVersion: 'codex-cli 0.145.0',
+    managedState: claude,
+  });
+
+  assert.equal(await exists(path.join(paths.homeDir, '.claude', 'rules')), true);
+  assert.equal(
+    await exists(path.join(
+      paths.homeDir,
+      '.claude',
+      'rules',
+      'fast-browser-routing.md',
+    )),
+    false,
+  );
+  assert.deepEqual(
+    codex.files.map(({ path: target }) => path.relative(paths.homeDir, target)),
+    ['.codex/agents/browser_driver.toml'],
+  );
+  assert.deepEqual(
+    codex.blocks.map(({ path: target }) => path.relative(paths.homeDir, target)).sort(),
+    ['.codex/AGENTS.md', '.codex/config.toml'],
+  );
+
+  const claudeSafe = await installRouting({
+    profile: 'safe',
+    hosts: ['claude'],
+    paths,
+    managedState: codex,
+  });
+  assert.deepEqual(claudeSafe.files, []);
+  assert.deepEqual(claudeSafe.blocks, []);
+  assert.equal(await exists(path.join(paths.homeDir, '.codex', 'agents')), true);
+  assert.equal(
+    await exists(path.join(paths.homeDir, '.codex', 'agents', 'browser_driver.toml')),
+    false,
+  );
+});
+
 test('full installs dedicated Claude rules and routes through AGENTS.override.md', async (t) => {
   const paths = await temporaryPaths(t);
   const codexDir = path.join(paths.homeDir, '.codex');

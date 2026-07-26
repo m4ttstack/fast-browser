@@ -93,6 +93,42 @@ test('setup orchestrates lifecycle work in the exact deterministic order', async
   assert.equal(report.doctor.ok, true);
 });
 
+test('setup carries selected hosts and the detected Codex version into routing', async () => {
+  let routingInput;
+  await setup(request({ hosts: ['codex'], profile: 'safe' }), {
+    checkPlatform: async () => {},
+    detectHosts: async () => ['codex'],
+    getCodexVersion: async () => 'codex-cli 0.145.0',
+    ensureDataDirs: async () => {},
+    loadRuntimeLock: async () => ({
+      productVersion: '0.1.0-alpha.1',
+      sourceCommit: 'abc',
+      runtime: { sha256: 'a'.repeat(64), sourceCommit: 'abc' },
+      extension: { id: 'extension-id', version: '1.0.0' },
+    }),
+    installRuntime: async () => ({ version: '0.1.0-alpha.1' }),
+    installExtension: async () => ({ unpacked: '/tmp/extension' }),
+    installCodex: async () => ({ changed: true, changes: ['plugin-installed'] }),
+    installBuiltinMacros: async () => {},
+    installRouting: async (input) => {
+      routingInput = input;
+      return { profile: 'safe', files: [], blocks: [] };
+    },
+    saveConfig: async () => {},
+    doctor: async () => ({ schemaVersion: 1, ok: true, checks: [] }),
+    loadConfig: async () => null,
+    paths: {
+      homeDir: '/home/test',
+      dataDir: '/home/test/.fast-browser',
+      configFile: '/home/test/.fast-browser/config.json',
+    },
+    interactive: true,
+  });
+
+  assert.deepEqual(routingInput.hosts, ['codex']);
+  assert.equal(routingInput.codexVersion, 'codex-cli 0.145.0');
+});
+
 test('second matching setup is a true mutation no-op', async () => {
   const events = [];
   const current = {

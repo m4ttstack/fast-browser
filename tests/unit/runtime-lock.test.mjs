@@ -67,6 +67,41 @@ test('parses a complete lock and returns only its supported fields', () => {
   assert.deepEqual(parseRuntimeLock(input), fixtureLock());
 });
 
+test('rejects every runtime protocol version except exactly 2', () => {
+  for (const protocolVersion of [1, 3]) {
+    const input = fixtureLock();
+    input.protocolVersion = protocolVersion;
+    assert.throws(
+      () => parseRuntimeLock(input),
+      /protocolVersion.*exactly 2/i,
+      `protocol ${protocolVersion}`,
+    );
+  }
+});
+
+test('bundled and local-candidate loaders reject protocol drift before returning a lock', async (t) => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'fast-browser-protocol-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+
+  for (const [kind, protocolVersion] of [['bundled', 1], ['local', 3]]) {
+    const lock = fixtureLock();
+    lock.protocolVersion = protocolVersion;
+    if (kind === 'local') {
+      delete lock.runtime.url;
+      delete lock.extension.url;
+    }
+    const selected = path.join(directory, `${kind}.json`);
+    await writeFile(selected, JSON.stringify(lock));
+    await assert.rejects(
+      loadRuntimeLock(kind === 'bundled'
+        ? { bundledPath: selected }
+        : { bundledPath: path.join(directory, 'unused.json'), overridePath: selected }),
+      /protocolVersion.*exactly 2/i,
+      kind,
+    );
+  }
+});
+
 test('rejects malformed checksums before installation', () => {
   for (const sha256 of ['a'.repeat(63), 'a'.repeat(65), `${'a'.repeat(63)}g`]) {
     const input = fixtureLock();

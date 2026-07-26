@@ -5,7 +5,11 @@ import path from 'node:path';
 import test from 'node:test';
 
 import { configure } from '../../lib/commands/configure.mjs';
-import { doctor } from '../../lib/commands/doctor.mjs';
+import {
+  doctor,
+  isPreferredCodexModelRejection,
+  runCodexBrowserDriverSmoke,
+} from '../../lib/commands/doctor.mjs';
 import { migrate } from '../../lib/commands/migrate.mjs';
 import { setup } from '../../lib/commands/setup.mjs';
 import { uninstall } from '../../lib/commands/uninstall.mjs';
@@ -79,6 +83,319 @@ test('doctor returns every stable check in order and catches individual failures
   assert.doesNotMatch(JSON.stringify(report), /Users|secret/);
 });
 
+test('doctor keeps the 17-check schema healthy for an unselected host', async () => {
+  const passing = Object.fromEntries(DOCTOR_CHECK_IDS
+    .filter((id) => ![
+      'claude-cli',
+      'claude-plugin',
+      'claude-routing',
+      'codex-cli',
+      'codex-plugin',
+      'codex-routing',
+      'browser-driver',
+    ].includes(id))
+    .map((id) => [id, async () => ({
+      status: 'pass',
+      message: `${id} passed.`,
+      remediation: null,
+    })]));
+  const report = await doctor(
+    { profile: 'safe' },
+    {
+      config: validConfig({
+        hosts: { claude: true, codex: false },
+        managed: { files: [], blocks: [] },
+      }),
+      detectHosts: async () => ['claude'],
+      preflightClaude: async () => ({ installed: true }),
+      preflightRouting: async () => {},
+      checks: passing,
+      paths: {
+        homeDir: '/home/test',
+        dataDir: '/home/test/.fast-browser',
+        configFile: '/home/test/.fast-browser/config.json',
+        runtimeDir: '/home/test/.fast-browser/runtime',
+        extensionDir: '/home/test/.fast-browser/extension',
+        pluginRoot: '/plugin',
+      },
+    },
+  );
+
+  assert.equal(report.checks.length, 17);
+  assert.equal(report.ok, true);
+  for (const id of ['codex-cli', 'codex-plugin', 'codex-routing', 'browser-driver']) {
+    assert.equal(report.checks.find((check) => check.id === id).status, 'pass');
+  }
+});
+
+test('Codex browser-driver smoke uses one bounded ephemeral read-only execution', async () => {
+  const calls = [];
+  await runCodexBrowserDriverSmoke({
+    cwd: '/repo',
+    run: async (command, args, options) => {
+      calls.push([command, args, options]);
+      return {
+        exitCode: 0,
+        stdout: `${JSON.stringify({
+          type: 'item.completed',
+          item: { type: 'agent_message', text: 'FAST_BROWSER_DRIVER_OK' },
+        })}\n`,
+        stderr: '',
+      };
+    },
+  });
+
+  assert.deepEqual(calls, [[
+    'codex',
+    [
+      'exec',
+      '--ephemeral',
+      '--sandbox',
+      'read-only',
+      '--ask-for-approval',
+      'never',
+      '--json',
+      '--skip-git-repo-check',
+      '-C',
+      '/repo',
+      'Delegate to browser_driver. Return exactly FAST_BROWSER_DRIVER_OK without using browser tools.',
+    ],
+    { timeoutMs: 10_000 },
+  ]]);
+});
+
+test('Codex smoke recognizes only structured rejection of the preferred model', async () => {
+  let preferred;
+  try {
+    await runCodexBrowserDriverSmoke({
+      cwd: '/repo',
+      run: async () => ({
+        exitCode: 1,
+        stdout: `${JSON.stringify({
+          type: 'error',
+          error: {
+            code: 'model_not_found',
+            model: 'gpt-5.6-terra',
+            message: 'preferred model unavailable',
+          },
+        })}\n`,
+        stderr: '',
+      }),
+    });
+  } catch (error) {
+    preferred = error;
+  }
+  assert.equal(isPreferredCodexModelRejection(preferred), true);
+
+  let unrelated;
+  try {
+    await runCodexBrowserDriverSmoke({
+      cwd: '/repo',
+      run: async () => ({
+        exitCode: 1,
+        stdout: '',
+        stderr: 'model_not_found gpt-5.6-terra',
+      }),
+    });
+  } catch (error) {
+    unrelated = error;
+  }
+  assert.equal(isPreferredCodexModelRejection(unrelated), false);
+});
+
+test('doctor rewrites one still-owned preferred Codex agent, persists its hash, and retries once', async () => {
+  const events = [];
+  const original = validConfig({
+    hosts: { claude: false, codex: true },
+    managed: {
+      files: [{
+        path: '/home/test/.codex/agents/browser_driver.toml',
+        sha256: 'a'.repeat(64),
+      }],
+      blocks: [{
+        path: '/home/test/.codex/config.toml',
+        id: 'mcp-policy-v1',
+        kind: 'toml',
+        sha256: 'b'.repeat(64),
+        containerCreated: true,
+      }],
+    },
+  });
+  const updatedState = {
+    profile: 'safe',
+    files: [{
+      path: '/home/test/.codex/agents/browser_driver.toml',
+      sha256: 'c'.repeat(64),
+    }],
+    blocks: original.managed.blocks,
+  };
+  let attempts = 0;
+  let saved;
+  const checks = Object.fromEntries(DOCTOR_CHECK_IDS
+    .filter((id) => id !== 'browser-driver')
+    .map((id) => [id, async () => ({
+      status: 'pass',
+      message: `${id} passed.`,
+      remediation: null,
+    })]));
+
+  const report = await doctor(
+    { profile: 'safe' },
+    {
+      config: original,
+      checks,
+      preflightRouting: async () => events.push('preflight-routing'),
+      runCodexAgentSmoke: async () => {
+        attempts += 1;
+        events.push(`smoke:${attempts}`);
+        if (attempts === 1) {
+          const error = new Error('preferred model unavailable');
+          error.name = 'CodexBrowserDriverSmokeError';
+          error.code = 'MODEL_NOT_FOUND';
+          error.model = 'gpt-5.6-terra';
+          throw error;
+        }
+      },
+      rewriteOwnedCodexAgent: async ({ managedState }) => {
+        events.push(`rewrite:${managedState.files[0].sha256}`);
+        return updatedState;
+      },
+      saveConfig: async (_paths, config) => {
+        events.push('save-config');
+        saved = config;
+      },
+      paths: {
+        homeDir: '/home/test',
+        dataDir: '/home/test/.fast-browser',
+        configFile: '/home/test/.fast-browser/config.json',
+        runtimeDir: '/home/test/.fast-browser/runtime',
+        extensionDir: '/home/test/.fast-browser/extension',
+        pluginRoot: '/plugin',
+      },
+    },
+  );
+
+  assert.equal(report.ok, true);
+  assert.deepEqual(events, [
+    'preflight-routing',
+    'smoke:1',
+    `rewrite:${'a'.repeat(64)}`,
+    'save-config',
+    'smoke:2',
+  ]);
+  assert.equal(saved.managed.files[0].sha256, 'c'.repeat(64));
+  assert.equal(attempts, 2);
+});
+
+test('doctor never rewrites or retries an unrelated Codex smoke failure', async () => {
+  let rewrites = 0;
+  let attempts = 0;
+  const config = validConfig({
+    hosts: { claude: false, codex: true },
+    managed: {
+      files: [{
+        path: '/home/test/.codex/agents/browser_driver.toml',
+        sha256: 'a'.repeat(64),
+      }],
+      blocks: [],
+    },
+  });
+  const checks = Object.fromEntries(DOCTOR_CHECK_IDS
+    .filter((id) => id !== 'browser-driver')
+    .map((id) => [id, async () => ({
+      status: 'pass',
+      message: `${id} passed.`,
+      remediation: null,
+    })]));
+
+  const report = await doctor(
+    { profile: 'safe' },
+    {
+      config,
+      checks,
+      preflightRouting: async () => {},
+      runCodexAgentSmoke: async () => {
+        attempts += 1;
+        throw new Error('network unavailable for gpt-5.6-terra');
+      },
+      rewriteOwnedCodexAgent: async () => {
+        rewrites += 1;
+      },
+      paths: {
+        homeDir: '/home/test',
+        dataDir: '/home/test/.fast-browser',
+        configFile: '/home/test/.fast-browser/config.json',
+        runtimeDir: '/home/test/.fast-browser/runtime',
+        extensionDir: '/home/test/.fast-browser/extension',
+        pluginRoot: '/plugin',
+      },
+    },
+  );
+
+  assert.equal(report.ok, false);
+  assert.equal(report.checks.find(({ id }) => id === 'browser-driver').status, 'fail');
+  assert.equal(attempts, 1);
+  assert.equal(rewrites, 0);
+});
+
+test('doctor stops after an ownership mismatch instead of retrying a rewritten Codex agent', async () => {
+  let attempts = 0;
+  let saves = 0;
+  const config = validConfig({
+    hosts: { claude: false, codex: true },
+    managed: {
+      files: [{
+        path: '/home/test/.codex/agents/browser_driver.toml',
+        sha256: 'a'.repeat(64),
+      }],
+      blocks: [],
+    },
+  });
+  const checks = Object.fromEntries(DOCTOR_CHECK_IDS
+    .filter((id) => id !== 'browser-driver')
+    .map((id) => [id, async () => ({
+      status: 'pass',
+      message: `${id} passed.`,
+      remediation: null,
+    })]));
+
+  const report = await doctor(
+    { profile: 'safe' },
+    {
+      config,
+      checks,
+      preflightRouting: async () => {},
+      runCodexAgentSmoke: async () => {
+        attempts += 1;
+        const error = new Error('preferred model unavailable');
+        error.name = 'CodexBrowserDriverSmokeError';
+        error.code = 'MODEL_NOT_FOUND';
+        error.model = 'gpt-5.6-terra';
+        throw error;
+      },
+      rewriteOwnedCodexAgent: async () => {
+        throw new Error('Codex agent ownership hash changed');
+      },
+      saveConfig: async () => {
+        saves += 1;
+      },
+      paths: {
+        homeDir: '/home/test',
+        dataDir: '/home/test/.fast-browser',
+        configFile: '/home/test/.fast-browser/config.json',
+        runtimeDir: '/home/test/.fast-browser/runtime',
+        extensionDir: '/home/test/.fast-browser/extension',
+        pluginRoot: '/plugin',
+      },
+    },
+  );
+
+  assert.equal(report.ok, false);
+  assert.equal(report.checks.find(({ id }) => id === 'browser-driver').status, 'fail');
+  assert.equal(attempts, 1);
+  assert.equal(saves, 0);
+});
+
 test('doctor real composition accepts complete injected platform adapters with no stubs', async () => {
   const config = validConfig({
     profile: 'safe',
@@ -129,6 +446,7 @@ test('doctor real composition accepts complete injected platform adapters with n
       preflightClaude: async () => ({ installed: true }),
       preflightCodex: async () => ({ installed: true }),
       preflightRouting: async () => ({ files: [], blocks: [] }),
+      runCodexAgentSmoke: async () => {},
       checkRuntime: async () => {},
       checkExtensionArtifact: async () => {},
       detectChromeExtension: async () => [{
@@ -455,8 +773,8 @@ test('configure composes full defaults, applies explicit overrides, saves before
     },
     {
       loadConfig: async () => current,
-      installRouting: async ({ profile, managedState }) => {
-        events.push(`routing:${profile}:${managedState.profile ?? 'none'}`);
+      installRouting: async ({ profile, hosts, managedState }) => {
+        events.push(`routing:${profile}:${hosts.join('+')}:${managedState.profile ?? 'none'}`);
         return managed;
       },
       saveConfig: async (_paths, config) => events.push(`save:${config.sessions.retentionDays}`),
@@ -472,7 +790,7 @@ test('configure composes full defaults, applies explicit overrides, saves before
     files: [{ path: '/owned', sha256: 'a'.repeat(64) }],
     blocks: [],
   });
-  assert.deepEqual(events, ['routing:full:safe', 'save:17']);
+  assert.deepEqual(events, ['routing:full:claude+codex:safe', 'save:17']);
 });
 
 test('configure auto connection invokes secure pairing and full recording defaults', async () => {
@@ -702,8 +1020,12 @@ test('migrate composes deterministic host, routing, verification, and cleanup ad
         events.push('install-codex');
         return { host: 'codex', changed: false, changes: [] };
       },
-      installRouting: async () => {
-        events.push('install-routing');
+      getCodexVersion: async () => {
+        events.push('codex-version');
+        return 'codex-cli 0.145.0';
+      },
+      installRouting: async ({ hosts, codexVersion }) => {
+        events.push(`install-routing:${hosts.join('+')}:${codexVersion}`);
         return { profile: 'safe', files: [], blocks: [] };
       },
       saveConfig: async () => events.push('save-config'),
@@ -728,7 +1050,8 @@ test('migrate composes deterministic host, routing, verification, and cleanup ad
     'apply',
     'install-claude',
     'install-codex',
-    'install-routing',
+    'codex-version',
+    'install-routing:claude+codex:codex-cli 0.145.0',
     'save-config',
     'doctor',
     'remove-routing',
