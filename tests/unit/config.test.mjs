@@ -57,6 +57,23 @@ test('parsing returns a clean supported config without unknown keys', () => {
   });
 });
 
+test('config preserves validated routing ownership records for exact cleanup', () => {
+  const managed = {
+    files: [{ path: '/home/test/.codex/agents/browser_driver.toml', sha256: 'a'.repeat(64) }],
+    blocks: [{
+      path: '/home/test/.codex/config.toml',
+      id: 'mcp-policy-v1',
+      kind: 'toml',
+      sha256: 'b'.repeat(64),
+      containerCreated: true,
+    }],
+  };
+  assert.deepEqual(
+    parseConfig(configFor({ managed })),
+    configFor({ managed }),
+  );
+});
+
 test('rejects unsupported schema versions', () => {
   assert.throws(
     () => parseConfig(configFor({ schemaVersion: 2 })),

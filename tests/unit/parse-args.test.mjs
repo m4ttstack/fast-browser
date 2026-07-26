@@ -43,3 +43,45 @@ test('rejects unsupported platforms and flags through usage errors', () => {
   assert.throws(() => parseArgs(['setup', '--host', 'firefox']), /--host/);
   assert.throws(() => parseArgs(['uninstall', '--unknown']), /--unknown/);
 });
+
+test('parses configure profile and strict help or version requests', () => {
+  assert.equal(parseArgs(['configure', '--profile', 'full']).profile, 'full');
+  assert.equal(parseArgs(['--help']).help, true);
+  assert.equal(parseArgs(['--version']).version, true);
+});
+
+test('rejects duplicate and conflicting options', () => {
+  assert.throws(
+    () => parseArgs(['setup', '--profile', 'safe', '--profile', 'full']),
+    /duplicate.*--profile/i,
+  );
+  assert.throws(
+    () => parseArgs(['configure', '--record-sessions', '--no-record-sessions']),
+    /conflicting.*record-sessions/i,
+  );
+  assert.throws(
+    () => parseArgs(['migrate', '--dry-run', '--rollback', 'manifest.json']),
+    /conflicting.*--dry-run.*--rollback/i,
+  );
+  assert.throws(
+    () => parseArgs(['setup', '--host', 'claude', '--host', 'claude']),
+    /duplicate.*--host/i,
+  );
+});
+
+test('usage errors never echo unknown or invalid secret-like values', () => {
+  for (const argv of [
+    ['setup', '--token=sk-do-not-print-this-secret'],
+    ['setup', '--host', 'sk-do-not-print-this-secret'],
+    ['setup', '--profile', 'sk-do-not-print-this-secret'],
+    ['configure', '--retention-days', '999-secret'],
+  ]) {
+    assert.throws(
+      () => parseArgs(argv),
+      (error) => {
+        assert.doesNotMatch(error.message, /sk-do-not-print-this-secret|999-secret/);
+        return true;
+      },
+    );
+  }
+});

@@ -35,6 +35,18 @@ test('returns the command result without throwing for a nonzero exit', async () 
   assert.doesNotMatch(JSON.stringify(result), /must-not-appear/);
 });
 
+test('writes bounded explicit stdin without changing the process result contract', async () => {
+  const result = await run(process.execPath, [
+    '-e',
+    "let text=''; process.stdin.setEncoding('utf8'); process.stdin.on('data', c => text += c); process.stdin.on('end', () => process.stdout.write(text));",
+  ], {
+    input: '{"jsonrpc":"2.0"}\n',
+  });
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.stdout, '{"jsonrpc":"2.0"}\n');
+  assert.equal(result.stderr, '');
+});
+
 test('caps stdout and stderr independently and marks each truncation', async () => {
   const result = await run(process.execPath, [
     '-e',
