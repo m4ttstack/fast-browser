@@ -1,12 +1,16 @@
 import assert from 'node:assert/strict';
+import { realpath } from 'node:fs/promises';
+import path from 'node:path';
 import test from 'node:test';
 
 import { detectHosts } from '../../lib/hosts/detect.mjs';
 import { installClaude, uninstallClaude } from '../../lib/hosts/claude.mjs';
 import { installCodex, uninstallCodex } from '../../lib/hosts/codex.mjs';
 
-const source = '/worktrees/fast-browser-dual-host';
+const pluginRoot = path.resolve(import.meta.dirname, '../..');
+const source = path.resolve(pluginRoot, '../..');
 const gitSource = 'mattstack/mattstack';
+const TRUNCATION_MARKER = '\n[output truncated at 1048576 bytes]\n';
 
 function result(command, args, stdout = '', overrides = {}) {
   return {
@@ -32,7 +36,8 @@ function scriptedRunner(responses) {
   return { calls, run };
 }
 
-const claudeNoPlugins = 'No plugins installed\n';
+const claudeNoPlugins =
+  'No plugins installed. Use `claude plugin install` to install a plugin.\n';
 const claudeNoMarketplaces = 'No marketplaces configured\n';
 const claudeInstalledCurrent = `Installed plugins:
 
@@ -353,6 +358,158 @@ test('uses local marketplaces live without sparse flags or refresh commands', as
   assert.equal(codexCurrent.calls.length, 2);
 });
 
+test('normalizes relative local sources before commands', async () => {
+  const cases = [
+    {
+      install: installClaude,
+      input: '.',
+      expected: await realpath('.'),
+      responses: [
+        { stdout: claudeNoPlugins },
+        { stdout: claudeNoMarketplaces },
+        { stdout: 'marketplace added' },
+        { stdout: 'plugin installed' },
+      ],
+      mutation(commandSource) {
+        return [
+          'claude',
+          ['plugin', 'marketplace', 'add', commandSource, '--scope', 'user'],
+        ];
+      },
+    },
+    {
+      install: installCodex,
+      input: '..',
+      expected: await realpath('..'),
+      responses: [
+        { stdout: codexEmptyPlugins },
+        { stdout: codexNoMarketplaces },
+        { stdout: '{"marketplaceName":"mattstack","alreadyAdded":false}' },
+        { stdout: '{"pluginId":"fast-browser@mattstack"}' },
+      ],
+      mutation(commandSource) {
+        return ['codex', ['plugin', 'marketplace', 'add', commandSource, '--json']];
+      },
+    },
+    {
+      install: installClaude,
+      input: './',
+      expected: await realpath('./'),
+      responses: [
+        { stdout: claudeNoPlugins },
+        { stdout: claudeNoMarketplaces },
+        { stdout: 'marketplace added' },
+        { stdout: 'plugin installed' },
+      ],
+      mutation(commandSource) {
+        return [
+          'claude',
+          ['plugin', 'marketplace', 'add', commandSource, '--scope', 'user'],
+        ];
+      },
+    },
+    {
+      install: installCodex,
+      input: '../',
+      expected: await realpath('../'),
+      responses: [
+        { stdout: codexEmptyPlugins },
+        { stdout: codexNoMarketplaces },
+        { stdout: '{"marketplaceName":"mattstack","alreadyAdded":false}' },
+        { stdout: '{"pluginId":"fast-browser@mattstack"}' },
+      ],
+      mutation(commandSource) {
+        return ['codex', ['plugin', 'marketplace', 'add', commandSource, '--json']];
+      },
+    },
+  ];
+
+  for (const fixture of cases) {
+    const { calls, run } = scriptedRunner([...fixture.responses]);
+    await fixture.install({ source: fixture.input, run });
+    assert.deepEqual(calls[2], fixture.mutation(fixture.expected));
+  }
+});
+
+test('relative local input is idempotent against canonical host paths', async () => {
+  const relativeSource = path.relative(process.cwd(), source);
+  const claude = scriptedRunner([
+    { stdout: claudeInstalledCurrent },
+    { stdout: claudeMarketplace },
+  ]);
+  const codex = scriptedRunner([
+    { stdout: codexPlugins() },
+    { stdout: codexMarketplace },
+  ]);
+
+  assert.deepEqual(
+    await installClaude({ source: relativeSource, run: claude.run }),
+    { host: 'claude', changed: false, changes: [] },
+  );
+  assert.deepEqual(
+    await installCodex({ source: relativeSource, run: codex.run }),
+    { host: 'codex', changed: false, changes: [] },
+  );
+  assert.equal(claude.calls.length, 2);
+  assert.equal(codex.calls.length, 2);
+});
+
+test('requires the exact marketplace source type as well as source text', async () => {
+  const claude = scriptedRunner([
+    { stdout: claudeInstalledCurrent },
+    {
+      stdout: `Configured marketplaces:
+
+  ❯ mattstack
+    Source: Directory (${gitSource})
+`,
+    },
+  ]);
+  const codex = scriptedRunner([
+    { stdout: codexPlugins('0.1.0-alpha.1', gitSource) },
+    {
+      stdout: JSON.stringify({
+        marketplaces: [{
+          name: 'mattstack',
+          root: '/cache/mattstack',
+          marketplaceSource: { sourceType: 'local', source: gitSource },
+        }],
+      }),
+    },
+  ]);
+
+  await assert.rejects(
+    installClaude({ source: gitSource, run: claude.run }),
+    /mattstack marketplace is configured from a different source/,
+  );
+  await assert.rejects(
+    installCodex({ source: gitSource, run: codex.run }),
+    /mattstack marketplace is configured from a different source/,
+  );
+  assert.equal(claude.calls.length, 2);
+  assert.equal(codex.calls.length, 2);
+});
+
+test('rejects unsupported local-like source forms before running a CLI', async () => {
+  const unsupported = ['~', '~/repo', 'file:///tmp/repo', 'C:\\repo', 'foo/bar/baz'];
+  for (const candidate of unsupported) {
+    const calls = [];
+    const runner = async (...args) => {
+      calls.push(args);
+      throw new Error('runner must not be called');
+    };
+    await assert.rejects(
+      installClaude({ source: candidate, run: runner }),
+      { message: 'unsupported marketplace source' },
+    );
+    await assert.rejects(
+      installCodex({ source: candidate, run: runner }),
+      { message: 'unsupported marketplace source' },
+    );
+    assert.equal(calls.length, 0);
+  }
+});
+
 test('Claude text parsing does not treat substring mentions as installed or configured', async () => {
   const { calls, run } = scriptedRunner([
     {
@@ -381,6 +538,61 @@ test('Claude text parsing does not treat substring mentions as installed or conf
     'claude',
     ['plugin', 'marketplace', 'add', source, '--scope', 'user'],
   ]);
+});
+
+test('Claude rejects malformed or truncated plugin-list text before mutation', async () => {
+  const malformedOutputs = [
+    'arbitrary fast-browser@mattstack text',
+    `${claudeInstalledCurrent}${TRUNCATION_MARKER}`,
+    `Installed plugins:
+
+  ❯ fast-browser@mattstack
+    Scope: user
+    Status: ✔ enabled
+`,
+  ];
+
+  for (const stdout of malformedOutputs) {
+    const { calls, run } = scriptedRunner([
+      { stdout },
+      { stdout: claudeNoMarketplaces },
+    ]);
+
+    await assert.rejects(installClaude({ source, run }), (error) => {
+      assert.equal(error.message, 'claude plugin list returned unrecognized output');
+      assert.doesNotMatch(JSON.stringify(error), /arbitrary|output truncated/);
+      return true;
+    });
+    assert.equal(calls.length, 2);
+  }
+});
+
+test('Claude rejects malformed or truncated marketplace-list text before mutation', async () => {
+  const malformedOutputs = [
+    'mattstack might be configured',
+    `${claudeMarketplace}${TRUNCATION_MARKER}`,
+    `Configured marketplaces:
+
+  ❯ mattstack
+`,
+  ];
+
+  for (const stdout of malformedOutputs) {
+    const { calls, run } = scriptedRunner([
+      { stdout: claudeNoPlugins },
+      { stdout },
+    ]);
+
+    await assert.rejects(installClaude({ source, run }), (error) => {
+      assert.equal(
+        error.message,
+        'claude plugin marketplace list returned unrecognized output',
+      );
+      assert.doesNotMatch(JSON.stringify(error), /might be configured|output truncated/);
+      return true;
+    });
+    assert.equal(calls.length, 2);
+  }
 });
 
 test('rejects a marketplace name collision whose source is not exact', async () => {
@@ -447,6 +659,122 @@ test('Codex rejects malformed install JSON and preserves completed changes', asy
     assert.doesNotMatch(JSON.stringify(error), /install-json-secret|pluginId/);
     return true;
   });
+});
+
+test('Codex validates marketplace add identity and status before recording a change', async () => {
+  const invalidResults = [
+    '{}',
+    '{"marketplaceName":"other","alreadyAdded":false}',
+    '{"marketplaceName":"mattstack","alreadyAdded":true}',
+  ];
+
+  for (const stdout of invalidResults) {
+    const { calls, run } = scriptedRunner([
+      { stdout: codexEmptyPlugins },
+      { stdout: codexNoMarketplaces },
+      { stdout },
+    ]);
+
+    await assert.rejects(installCodex({ source, run }), (error) => {
+      assert.equal(error.message, 'codex plugin marketplace returned unexpected JSON');
+      assert.deepEqual(error.result, {
+        host: 'codex',
+        changed: false,
+        changes: [],
+        next: 'Retry installing fast-browser@mattstack.',
+      });
+      return true;
+    });
+    assert.equal(calls.length, 3);
+  }
+});
+
+test('Codex validates upgrade, remove, and add result identities', async () => {
+  const gitMarketplace = {
+    stdout: JSON.stringify({
+      marketplaces: [{
+        name: 'mattstack',
+        root: '/cache/mattstack',
+        marketplaceSource: { sourceType: 'git', source: gitSource },
+      }],
+    }),
+  };
+  const cases = [
+    {
+      responses: [
+        { stdout: codexPlugins('0.1.0-alpha.1', gitSource) },
+        gitMarketplace,
+        { stdout: '{"marketplaceName":"other"}' },
+      ],
+      message: 'codex plugin marketplace returned unexpected JSON',
+      changes: [],
+      changed: false,
+      calls: 3,
+    },
+    {
+      responses: [
+        { stdout: codexPlugins('0.0.9', gitSource) },
+        gitMarketplace,
+        { stdout: '{"marketplaceName":"mattstack"}' },
+        { stdout: '{"pluginId":"other@mattstack"}' },
+      ],
+      message: 'codex plugin remove returned unexpected JSON',
+      changes: ['marketplace-refreshed'],
+      changed: false,
+      calls: 4,
+    },
+    {
+      responses: [
+        { stdout: codexEmptyPlugins },
+        { stdout: codexNoMarketplaces },
+        { stdout: '{"marketplaceName":"mattstack","alreadyAdded":false}' },
+        { stdout: '{"pluginId":"other@mattstack"}' },
+      ],
+      message: 'codex plugin add returned unexpected JSON',
+      changes: ['marketplace-added'],
+      changed: true,
+      calls: 4,
+    },
+  ];
+
+  for (const fixture of cases) {
+    const { calls, run } = scriptedRunner([...fixture.responses]);
+    await assert.rejects(installCodex({
+      source: fixture === cases[2] ? source : gitSource,
+      run,
+    }), (error) => {
+      assert.equal(error.message, fixture.message);
+      assert.deepEqual(error.result.changes, fixture.changes);
+      assert.equal(error.result.changed, fixture.changed);
+      return true;
+    });
+    assert.equal(calls.length, fixture.calls);
+  }
+});
+
+test('Codex rejects contradictory or wrong-source installed records before mutation', async () => {
+  const fixtures = [
+    (plugin) => { plugin.installed = false; },
+    (plugin) => { plugin.name = 'not-fast-browser'; },
+    (plugin) => { plugin.marketplaceSource.sourceType = 'git'; },
+    (plugin) => { plugin.source.path = `${source}/plugins/not-fast-browser`; },
+    (plugin) => { plugin.source.path = `${source}/plugins/fast-browser/../escape`; },
+  ];
+
+  for (const mutate of fixtures) {
+    const value = JSON.parse(codexPlugins());
+    mutate(value.installed[0]);
+    const { calls, run } = scriptedRunner([
+      { stdout: JSON.stringify(value) },
+      { stdout: codexMarketplace },
+    ]);
+
+    await assert.rejects(installCodex({ source, run }), (error) => {
+      assert.equal(error.message, 'codex plugin list returned unexpected JSON');
+      return true;
+    });
+    assert.equal(calls.length, 2);
+  }
 });
 
 test('detectHosts omits ENOENT, retains installed CLIs with nonzero exits, and orders deterministically', async () => {

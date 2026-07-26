@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { PassThrough } from 'node:stream';
 import test from 'node:test';
 
-import { run } from '../../lib/core/process.mjs';
+import { createProcessRunner, run } from '../../lib/core/process.mjs';
 
 const CAPTURE_LIMIT = 1024 * 1024;
 const TRUNCATION_MARKER = '\n[output truncated at 1048576 bytes]\n';
@@ -53,6 +58,47 @@ test('caps stdout and stderr independently and marks each truncation', async () 
   );
 });
 
+test('keeps 2, 3, and 4-byte UTF-8 valid at both stream boundaries', async () => {
+  const cases = [
+    { character: 'é', prefix: '' },
+    { character: '€', prefix: 'x' },
+    { character: '😀', prefix: '' },
+  ];
+
+  for (const { character, prefix } of cases) {
+    const result = await run(process.execPath, [
+      '-e',
+      [
+        `const output = ${JSON.stringify(prefix)} + ${JSON.stringify(character)}.repeat(${CAPTURE_LIMIT});`,
+        'process.stdout.write(output);',
+        'process.stderr.write(output);',
+      ].join(''),
+    ]);
+
+    for (const output of [result.stdout, result.stderr]) {
+      assert.ok(output.endsWith(TRUNCATION_MARKER));
+      assert.ok(Buffer.byteLength(output, 'utf8') <= CAPTURE_LIMIT);
+      assert.doesNotMatch(output, /\uFFFD/);
+    }
+  }
+});
+
+test('bounds replacement text produced by invalid UTF-8 bytes', async () => {
+  const result = await run(process.execPath, [
+    '-e',
+    [
+      `const output = Buffer.alloc(${CAPTURE_LIMIT + 1000}, 0xff);`,
+      'process.stdout.write(output);',
+      'process.stderr.write(output);',
+    ].join(''),
+  ]);
+
+  for (const output of [result.stdout, result.stderr]) {
+    assert.ok(output.endsWith(TRUNCATION_MARKER));
+    assert.ok(Buffer.byteLength(output, 'utf8') <= CAPTURE_LIMIT);
+  }
+});
+
 test('reports a missing executable without exposing environment values', async () => {
   await assert.rejects(
     run('fast-browser-command-that-does-not-exist', [], {
@@ -88,4 +134,100 @@ test('terminates a timed-out child and returns no captured environment values', 
       return true;
     },
   );
+});
+
+function fakeChild(pid = 4242) {
+  const child = new EventEmitter();
+  child.pid = pid;
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  child.kill = () => true;
+  return child;
+}
+
+test('settles on a fixed deadline and ignores late child events after group termination', async () => {
+  const child = fakeChild();
+  const signals = [];
+  const fakeRun = createProcessRunner({
+    spawnImplementation: () => child,
+    killImplementation: (pid, signal) => signals.push([pid, signal]),
+    forceKillMs: 5,
+    finalSettlementMs: 15,
+    platform: 'darwin',
+  });
+
+  await assert.rejects(
+    fakeRun('synthetic-command', [], { timeoutMs: 1 }),
+    {
+      code: 'ETIMEDOUT',
+      message: 'synthetic-command timed out after 1ms',
+    },
+  );
+  assert.deepEqual(signals, [
+    [-4242, 'SIGTERM'],
+    [-4242, 'SIGKILL'],
+    [-4242, 'SIGKILL'],
+  ]);
+  assert.doesNotThrow(() => {
+    child.emit('error', new Error('late child diagnostic'));
+    child.stdout.emit('error', new Error('late stdout diagnostic'));
+    child.stderr.emit('error', new Error('late stderr diagnostic'));
+    child.emit('close', 0, null);
+  });
+});
+
+test('timeout kills a synthetic POSIX process group whose descendant retains stdio', async (t) => {
+  const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), 'fast-browser-process-group-'));
+  const pidFile = path.join(temporaryRoot, 'descendant.pid');
+  let descendantPid;
+  t.after(async () => {
+    if (descendantPid) {
+      try {
+        process.kill(descendantPid, 'SIGKILL');
+      } catch {
+        // It was terminated with its process group.
+      }
+    }
+    await rm(temporaryRoot, { recursive: true, force: true });
+  });
+
+  const descendant = [
+    "process.on('SIGTERM', () => {});",
+    'setInterval(() => {}, 1000);',
+  ].join('');
+  const parent = [
+    "const { spawn } = require('node:child_process');",
+    "const { writeFileSync } = require('node:fs');",
+    `const child = spawn(process.execPath, ['-e', ${JSON.stringify(descendant)}],`,
+    "  { stdio: ['ignore', 'inherit', 'inherit'] });",
+    'writeFileSync(process.argv[1], String(child.pid));',
+    "process.on('SIGTERM', () => {});",
+    'setInterval(() => {}, 1000);',
+  ].join('');
+  const startedAt = Date.now();
+
+  await assert.rejects(
+    run(process.execPath, ['-e', parent, pidFile], { timeoutMs: 80 }),
+    { code: 'ETIMEDOUT' },
+  );
+  assert.ok(Date.now() - startedAt < 1000);
+
+  descendantPid = Number.parseInt(await readFile(pidFile, 'utf8'), 10);
+  await new Promise((resolve, reject) => {
+    const deadline = Date.now() + 500;
+    const check = () => {
+      try {
+        process.kill(descendantPid, 0);
+        if (Date.now() >= deadline) {
+          reject(new Error(`descendant ${descendantPid} survived process-group timeout`));
+          return;
+        }
+        setTimeout(check, 10);
+      } catch (error) {
+        if (error.code === 'ESRCH') resolve();
+        else reject(error);
+      }
+    };
+    check();
+  });
 });
