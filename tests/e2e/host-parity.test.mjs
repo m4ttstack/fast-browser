@@ -196,6 +196,42 @@ test('Claude parser rejects Claude in Chrome tool use', () => {
   );
 });
 
+test('Claude parser rejects browser tools from a non-Fast Browser MCP server', () => {
+  const events = [
+    JSON.stringify({
+      type: 'assistant',
+      message: {
+        content: [{
+          type: 'tool_use',
+          id: 'wrong-browser-server',
+          name: 'mcp__browser_use__browser_navigate',
+          input: { url: 'http://127.0.0.1:43111' },
+        }],
+      },
+    }),
+    JSON.stringify({
+      type: 'result',
+      subtype: 'success',
+      is_error: false,
+      result: JSON.stringify({
+        host: 'claude',
+        ok: true,
+        orderId: 'CLAUDE-TEAM-5',
+        browserCalls: 1,
+        elapsedMs: 0,
+        tools: ['browser_navigate'],
+      }),
+    }),
+  ].join('\n');
+
+  assert.throws(
+    () => parseClaudeEvents(events, { elapsedMs: 1 }),
+    {
+      message: 'Claude non-Fast Browser browser tool use is forbidden',
+    },
+  );
+});
+
 test('Codex parser rejects browser-use and computer-use tool events', () => {
   const cases = [
     {
@@ -226,6 +262,51 @@ test('Codex parser rejects browser-use and computer-use tool events', () => {
   }
 });
 
+test('Codex parser rejects browser tools from a non-Fast Browser MCP server', () => {
+  const events = [
+    JSON.stringify({
+      type: 'item.completed',
+      item: {
+        id: 'wrong-browser-server',
+        type: 'mcp_tool_call',
+        server: 'playwright',
+        tool: 'browser_snapshot',
+        status: 'completed',
+      },
+    }),
+    JSON.stringify({
+      type: 'item.completed',
+      item: {
+        id: 'final-message',
+        type: 'agent_message',
+        text: JSON.stringify({
+          host: 'codex',
+          ok: true,
+          orderId: 'CODEX-TEAM-5',
+          browserCalls: 1,
+          elapsedMs: 0,
+          tools: ['browser_snapshot'],
+        }),
+      },
+    }),
+    JSON.stringify({
+      type: 'turn.completed',
+      usage: {
+        input_tokens: 10,
+        cached_input_tokens: 0,
+        output_tokens: 10,
+      },
+    }),
+  ].join('\n');
+
+  assert.throws(
+    () => parseCodexEvents(events, { elapsedMs: 1 }),
+    {
+      message: 'Codex non-Fast Browser browser tool use is forbidden',
+    },
+  );
+});
+
 test('host parsers reject malformed JSON without echoing its contents', () => {
   const secret = 'sk-synthetic-do-not-echo';
   for (const parse of [parseClaudeEvents, parseCodexEvents]) {
@@ -240,13 +321,42 @@ test('host parsers reject malformed JSON without echoing its contents', () => {
   }
 });
 
-test('host parsers fail closed on unknown event types', () => {
+test('host parsers redact hostile unknown event types', () => {
+  const secret = 'sk-hostile-event-type';
   for (const parse of [parseClaudeEvents, parseCodexEvents]) {
     assert.throws(
-      () => parse('{"type":"future.tool.event"}', { elapsedMs: 1 }),
-      /unsupported host event type: future\.tool\.event/,
+      () => parse(JSON.stringify({
+        type: `future.tool.event.${secret}`,
+      }), { elapsedMs: 1 }),
+      (error) => {
+        assert.equal(error.message, 'unsupported host event type');
+        assert.doesNotMatch(error.message, /sk-hostile/);
+        return true;
+      },
     );
   }
+});
+
+test('Codex parser redacts hostile unknown item types', () => {
+  const secret = 'sk-hostile-item-type';
+  assert.throws(
+    () => parseCodexEvents(JSON.stringify({
+      type: 'item.completed',
+      item: {
+        id: 'hostile-item',
+        type: `future_tool_${secret}`,
+        status: 'completed',
+      },
+    }), { elapsedMs: 1 }),
+    (error) => {
+      assert.equal(
+        error.message,
+        'host event line 1 has an unsupported Codex item type',
+      );
+      assert.doesNotMatch(error.message, /sk-hostile/);
+      return true;
+    },
+  );
 });
 
 test('host parsers reject host error events', () => {

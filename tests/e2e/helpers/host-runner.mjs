@@ -139,7 +139,7 @@ function observedResult(value, host, tools, elapsedMs) {
 
 function assertKnownType(type, allowed) {
   if (!allowed.has(type)) {
-    throw new Error(`unsupported host event type: ${type}`);
+    throw new Error('unsupported host event type');
   }
 }
 
@@ -173,7 +173,19 @@ export function parseClaudeEvents(text, { elapsedMs = 0 } = {}) {
           throw new Error('Claude in Chrome tool use is forbidden');
         }
         const tool = finalToolSegment(content.name);
-        if (tool?.startsWith('browser_')) tools.push(tool);
+        if (tool?.startsWith('browser_')) {
+          const identity = content.name.split('__');
+          if (
+            identity.length !== 3
+            || identity[0] !== 'mcp'
+            || identity[1] !== 'fast_browser'
+          ) {
+            throw new Error(
+              'Claude non-Fast Browser browser tool use is forbidden',
+            );
+          }
+          tools.push(tool);
+        }
       }
     }
     if (event.type === 'result') {
@@ -236,7 +248,17 @@ export function parseCodexEvents(text, { elapsedMs = 0 } = {}) {
       throw new Error('Codex browser-use and computer-use tools are forbidden');
     }
     if (!CODEX_ITEM_TYPES.has(item.type)) {
-      throw eventError(line, `has an unsupported Codex item type: ${item.type}`);
+      throw eventError(line, 'has an unsupported Codex item type');
+    }
+    if (
+      item.type === 'mcp_tool_call'
+      && typeof item.tool === 'string'
+      && item.tool.startsWith('browser_')
+      && item.server !== 'fast_browser'
+    ) {
+      throw new Error(
+        'Codex non-Fast Browser browser tool use is forbidden',
+      );
     }
     if (event.type !== 'item.completed') continue;
     if (item.type === 'mcp_tool_call') {
