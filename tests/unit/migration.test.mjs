@@ -375,6 +375,73 @@ test('a colliding live heading remains unchanged and gains one deterministic leg
   assert.equal(await readFile(paths.macroIndexFile, 'utf8'), once);
 });
 
+for (const destinationState of ['absent', 'identical']) {
+  test(`same-heading import keeps a distinct legacy section when its macro is ${destinationState}`, async (t) => {
+    const homeDir = await fixtureHome(t, `migration-same-heading-${destinationState}-`);
+    const paths = migrationPaths(homeDir);
+    await mkdir(paths.macrosDir, { recursive: true });
+    const live = '# Live\n\n## personal-checkout\n\n- Description: Live owner.\n'
+      + '- Script: ~/.fast-browser/macros/live-personal-checkout.js\n';
+    await writeFile(paths.macroIndexFile, live);
+    const legacyMacro = await readFile(
+      path.join(homeDir, '.playwright-mcp', 'macros', 'personal-checkout.js'),
+    );
+    if (destinationState === 'identical') {
+      await writeFile(path.join(paths.macrosDir, 'personal-checkout.js'), legacyMacro);
+    }
+    const sourceIndex = await readFile(
+      path.join(homeDir, '.playwright-mcp', 'macros', 'MACROS.md'),
+      'utf8',
+    );
+    const normalizedSection = sourceIndex
+      .slice(sourceIndex.indexOf('## personal-checkout'))
+      .replace(
+        '/Users/example/.playwright-mcp/macros/personal-checkout.js',
+        '~/.fast-browser/macros/personal-checkout.js',
+      )
+      .trimEnd();
+    const identity = sha256(Buffer.from(normalizedSection)).slice(0, 8);
+
+    const inventory = await inventoryFixture(homeDir);
+    await importLegacyData({ inventory, paths });
+    const once = await readFile(paths.macroIndexFile, 'utf8');
+    assert.ok(once.startsWith(live));
+    assert.match(once, new RegExp(`## personal-checkout \\(legacy ${identity}\\)`));
+    assert.match(
+      once,
+      /Script: ~\/\.fast-browser\/macros\/personal-checkout\.js/,
+    );
+    await importLegacyData({ inventory, paths });
+    assert.equal(await readFile(paths.macroIndexFile, 'utf8'), once);
+  });
+}
+
+test('same-heading import does not duplicate a truly represented normalized section', async (t) => {
+  const homeDir = await fixtureHome(t);
+  const paths = migrationPaths(homeDir);
+  await mkdir(paths.macrosDir, { recursive: true });
+  const sourceIndex = await readFile(
+    path.join(homeDir, '.playwright-mcp', 'macros', 'MACROS.md'),
+    'utf8',
+  );
+  const represented = sourceIndex
+    .slice(sourceIndex.indexOf('## personal-checkout'))
+    .replace(
+      '/Users/example/.playwright-mcp/macros/personal-checkout.js',
+      '~/.fast-browser/macros/personal-checkout.js',
+    )
+    .trimEnd();
+  const live = `# Live\n\n${represented}\n`;
+  await writeFile(paths.macroIndexFile, live);
+  await writeFile(
+    path.join(paths.macrosDir, 'personal-checkout.js'),
+    await readFile(path.join(homeDir, '.playwright-mcp', 'macros', 'personal-checkout.js')),
+  );
+
+  await importLegacyData({ inventory: await inventoryFixture(homeDir), paths });
+  assert.equal(await readFile(paths.macroIndexFile, 'utf8'), live);
+});
+
 test('import rejects source and target symlink collisions without outside writes', async (t) => {
   const homeDir = await fixtureHome(t);
   const paths = migrationPaths(homeDir);
@@ -581,6 +648,63 @@ test('rollback rejects a symlinked restored-file parent without external writes'
   assert.equal(await lstatOrNull(
     path.join(homeDir, '.claude', 'agents', 'browser-driver.md'),
   ), null);
+});
+
+test('rollback re-preflights after token read replaces a parent with a symlink', async (t) => {
+  const homeDir = await fixtureHome(t);
+  const { result } = await applyFixture(homeDir);
+  const external = await mkdtemp(path.join(await realpath(os.tmpdir()), 'rollback-token-swap-'));
+  t.after(() => rm(external, { recursive: true, force: true }));
+  const rules = path.join(homeDir, '.claude', 'rules');
+
+  await assert.rejects(
+    () => rollbackMigration(result.rollbackManifestPath, {
+      homeDir,
+      readMigratedToken: async () => {
+        await rm(rules, { recursive: true });
+        await symlink(external, rules);
+        return secretFixture;
+      },
+    }),
+    /symlink|parent/,
+  );
+  assert.deepEqual(await readdir(external), []);
+  assert.equal(await lstatOrNull(
+    path.join(homeDir, '.claude', 'agents', 'browser-driver.md'),
+  ), null);
+  assert.equal(await lstatOrNull(
+    path.join(homeDir, '.claude', 'rules', 'playwright-first.md'),
+  ), null);
+});
+
+test('rollback undoes earlier restores when a later filesystem operation fails', async (t) => {
+  const homeDir = await fixtureHome(t);
+  const { result } = await applyFixture(homeDir);
+  const skillsDir = path.join(homeDir, '.claude', 'skills');
+  const skillsMode = await mode(skillsDir);
+  const claudeJson = path.join(homeDir, '.claude.json');
+  const migratedJson = await readFile(claudeJson);
+  await chmod(skillsDir, 0o555);
+
+  try {
+    await assert.rejects(
+      () => rollbackMigration(result.rollbackManifestPath, {
+        homeDir,
+        readMigratedToken: async () => secretFixture,
+      }),
+      /EACCES|operation not permitted|permission denied/i,
+    );
+  } finally {
+    await chmod(skillsDir, skillsMode);
+  }
+
+  for (const relative of [
+    '.claude/agents/browser-driver.md',
+    '.claude/rules/playwright-first.md',
+    '.claude/rules/playwright-verification.md',
+    ...links.map(([entry]) => entry),
+  ]) assert.equal(await lstatOrNull(path.join(homeDir, relative)), null);
+  assert.deepEqual(await readFile(claudeJson), migratedJson);
 });
 
 test('rollback validates schema, supplied home, confinement, and recognized targets', async (t) => {
