@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>Order flow fixture</title>
+  </head>
+  <body>
+    <main id="app">
+      <button type="button" id="start-order">Start order</button>
+    </main>
+    <script>
+      const app = document.querySelector('#app');
+      const state = { customer: '', plan: 'starter', seats: 1 };
+
+      function orderId() {
+        return `${state.customer.trim().toUpperCase()}-${state.plan.toUpperCase()}-${state.seats}`;
+      }
+
+      function showCustomer() {
+        app.innerHTML = `
+          <label>Customer name <input name="customer" type="text"></label>
+          <button type="button" id="continue">Continue</button>
+        `;
+        document.querySelector('[name="customer"]').focus();
+        document.querySelector('#continue').addEventListener('click', () => {
+          state.customer = document.querySelector('[name="customer"]').value;
+          showPlan();
+        });
+      }
+
+      function showPlan() {
+        app.innerHTML = `
+          <label>Plan
+            <select name="plan">
+              <option value="starter">Starter</option>
+              <option value="team">Team</option>
+              <option value="scale">Scale</option>
+            </select>
+          </label>
+          <label>Seats <input name="seats" type="number" min="1" value="1"></label>
+          <button type="button" id="review">Review order</button>
+        `;
+        const plan = document.querySelector('[name="plan"]');
+        const seats = document.querySelector('[name="seats"]');
+        plan.addEventListener('change', () => { state.plan = plan.value; });
+        document.querySelector('#review').addEventListener('click', () => {
+          state.plan = plan.value;
+          state.seats = Number(seats.value);
+          showReview();
+        });
+      }
+
+      function showReview() {
+        app.innerHTML = `
+          <h1>Review order</h1>
+          <p>${state.customer} — ${state.plan} — ${state.seats}</p>
+          <button type="button" id="place-order">Place order</button>
+        `;
+        document.querySelector('#place-order').addEventListener('click', showComplete);
+      }
+
+      function showComplete() {
+        app.innerHTML = '<h1>Order complete</h1><p data-testid="order-id"></p>';
+        document.querySelector('[data-testid="order-id"]').textContent = orderId();
+      }
+
+      document.querySelector('#start-order').addEventListener('click', showCustomer);
+    </script>
+  </body>
+</html>
