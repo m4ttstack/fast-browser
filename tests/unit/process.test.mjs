@@ -176,6 +176,91 @@ test('settles on a fixed deadline and ignores late child events after group term
   });
 });
 
+function stopRaceFixture() {
+  const child = fakeChild();
+  const destroyCalls = { stdout: 0, stderr: 0 };
+  for (const streamName of ['stdout', 'stderr']) {
+    const stream = child[streamName];
+    const destroy = stream.destroy.bind(stream);
+    stream.destroy = (...args) => {
+      destroyCalls[streamName] += 1;
+      return destroy(...args);
+    };
+  }
+  const signals = [];
+  const fakeRun = createProcessRunner({
+    spawnImplementation: () => child,
+    killImplementation: (pid, signal) => {
+      signals.push([pid, signal]);
+      if (signal === 'SIGTERM') {
+        queueMicrotask(() => {
+          child.stdout.write('stdout during grace');
+          child.stderr.write('stderr during grace');
+          child.stdout.emit('error', new Error('grace stdout diagnostic'));
+          child.stderr.emit('error', new Error('grace stderr diagnostic'));
+          child.emit('error', Object.assign(new Error('grace child diagnostic'), {
+            code: 'EGRACE',
+          }));
+        });
+      }
+    },
+    forceKillMs: 5,
+    finalSettlementMs: 15,
+    platform: 'darwin',
+  });
+  return { child, destroyCalls, fakeRun, signals };
+}
+
+async function assertGraceErrorsPreserveStopReason({
+  expected,
+  start,
+}) {
+  const fixture = stopRaceFixture();
+  const startedAt = Date.now();
+  await assert.rejects(start(fixture.fakeRun), expected);
+  assert.ok(Date.now() - startedAt < 100);
+  assert.deepEqual(fixture.signals, [
+    [-4242, 'SIGTERM'],
+    [-4242, 'SIGKILL'],
+    [-4242, 'SIGKILL'],
+  ]);
+  assert.deepEqual(fixture.destroyCalls, { stdout: 1, stderr: 1 });
+  assert.doesNotThrow(() => {
+    fixture.child.stdout.emit('error', new Error('late stdout diagnostic'));
+    fixture.child.stderr.emit('error', new Error('late stderr diagnostic'));
+    fixture.child.emit('error', new Error('late child diagnostic'));
+  });
+}
+
+test('timeout reason survives child and stream errors during the grace window', {
+  timeout: 1000,
+}, async () => {
+  await assertGraceErrorsPreserveStopReason({
+    expected: {
+      code: 'ETIMEDOUT',
+      message: 'grace-command timed out after 1ms',
+    },
+    start: (fakeRun) => fakeRun('grace-command', [], { timeoutMs: 1 }),
+  });
+});
+
+test('abort reason survives child and stream errors during the grace window', {
+  timeout: 1000,
+}, async () => {
+  const controller = new AbortController();
+  await assertGraceErrorsPreserveStopReason({
+    expected: {
+      code: 'ABORT_ERR',
+      message: 'aborted while running grace-command',
+    },
+    start: (fakeRun) => {
+      const promise = fakeRun('grace-command', [], { signal: controller.signal });
+      controller.abort();
+      return promise;
+    },
+  });
+});
+
 test('timeout kills a synthetic POSIX process group whose descendant retains stdio', async (t) => {
   const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), 'fast-browser-process-group-'));
   const pidFile = path.join(temporaryRoot, 'descendant.pid');
