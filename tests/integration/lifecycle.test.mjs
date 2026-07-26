@@ -28,6 +28,7 @@ import {
   prepareRoutingTransition,
   preflightRoutingRemoval,
 } from '../../lib/hosts/routing.mjs';
+import { parseRuntimeLock } from '../../lib/runtime/lock.mjs';
 
 function request(overrides = {}) {
   return {
@@ -65,7 +66,8 @@ test('setup orchestrates lifecycle work in the exact deterministic order', async
     ensureDataDirs: record('ensure-data-dirs'),
     loadRuntimeLock: async () => ({
       productVersion: '0.1.0-alpha.1',
-      runtime: { sha256: 'a'.repeat(64), sourceCommit: 'abc' },
+      sourceCommit: 'abc',
+      runtime: { sha256: 'a'.repeat(64) },
       extension: { id: 'extension-id', version: '1.0.0' },
     }),
     installRuntime: record('install-runtime', { version: '0.1.0-alpha.1' }),
@@ -112,6 +114,62 @@ test('setup orchestrates lifecycle work in the exact deterministic order', async
   assert.equal(report.doctor.ok, true);
 });
 
+test('setup persists the accepted lock top-level source commit', async () => {
+  const sourceCommit = 'abc123';
+  const lock = parseRuntimeLock({
+    schemaVersion: 1,
+    productVersion: '0.1.0-alpha.1',
+    sourceCommit,
+    protocolVersion: 2,
+    runtime: {
+      url: 'https://github.com/a/b/releases/download/v1/fast-browser-mcp-0.1.0-alpha.1.tar.gz',
+      file: 'fast-browser-mcp-0.1.0-alpha.1.tar.gz',
+      sha256: 'a'.repeat(64),
+      node: '>=20',
+    },
+    extension: {
+      url: 'https://github.com/a/b/releases/download/v1/fast-browser-extension-0.1.0-alpha.1.zip',
+      file: 'fast-browser-extension-0.1.0-alpha.1.zip',
+      sha256: 'b'.repeat(64),
+      id: 'a'.repeat(32),
+      version: '0.2.1',
+    },
+  });
+  let savedConfig;
+
+  const report = await setup(request(), {
+    checkPlatform: async () => {},
+    detectHosts: async () => ['claude', 'codex'],
+    getCodexVersion: async () => 'codex-cli 0.145.0',
+    ensureDataDirs: async () => {},
+    loadRuntimeLock: async () => lock,
+    installRuntime: async () => ({ version: '0.1.0-alpha.1' }),
+    installExtension: async () => ({ unpacked: '/tmp/extension' }),
+    installClaude: async () => ({ host: 'claude', changed: false, changes: [] }),
+    installCodex: async () => ({ host: 'codex', changed: false, changes: [] }),
+    installBuiltinMacros: async () => {},
+    prepareRoutingTransition: async () => ({
+      nextState: { profile: 'full', files: [], blocks: [] },
+      apply: async () => ({ rollback: async () => {} }),
+    }),
+    saveConfig: async (_paths, config) => {
+      savedConfig = config;
+    },
+    pruneSessions: async () => ({ removedPaths: [], removedBytes: 0 }),
+    doctor: async () => ({ schemaVersion: 1, ok: true, checks: [] }),
+    loadConfig: async () => null,
+    paths: {
+      homeDir: '/home/test',
+      dataDir: '/home/test/.fast-browser',
+      configFile: '/home/test/.fast-browser/config.json',
+    },
+    interactive: true,
+  });
+
+  assert.equal(savedConfig.runtime.sourceCommit, sourceCommit);
+  assert.equal(report.config.runtime.sourceCommit, sourceCommit);
+});
+
 test('setup carries selected hosts and the detected Codex version into routing', async () => {
   let routingInput;
   await setup(request({ hosts: ['codex'], profile: 'safe' }), {
@@ -122,7 +180,7 @@ test('setup carries selected hosts and the detected Codex version into routing',
     loadRuntimeLock: async () => ({
       productVersion: '0.1.0-alpha.1',
       sourceCommit: 'abc',
-      runtime: { sha256: 'a'.repeat(64), sourceCommit: 'abc' },
+      runtime: { sha256: 'a'.repeat(64) },
       extension: { id: 'extension-id', version: '1.0.0' },
     }),
     installRuntime: async () => ({ version: '0.1.0-alpha.1' }),
@@ -168,7 +226,8 @@ test('setup removes a prior Codex host without probing its unavailable version',
     ensureDataDirs: async () => {},
     loadRuntimeLock: async () => ({
       productVersion: '0.1.0-alpha.1',
-      runtime: { sha256: 'a'.repeat(64), sourceCommit: 'abc' },
+      sourceCommit: 'abc',
+      runtime: { sha256: 'a'.repeat(64) },
       extension: { id: 'extension-id', version: '1.0.0' },
     }),
     installRuntime: async () => ({ version: '0.1.0-alpha.1' }),
@@ -305,7 +364,8 @@ test('setup uses the exact routing receipt when config persistence fails', async
       ensureDataDirs: async () => {},
       loadRuntimeLock: async () => ({
         productVersion: '0.1.0-alpha.1',
-        runtime: { sha256: 'a'.repeat(64), sourceCommit: 'abc' },
+        sourceCommit: 'abc',
+        runtime: { sha256: 'a'.repeat(64) },
         extension: { id: 'extension-id', version: '1.0.0' },
       }),
       installRuntime: async () => ({ version: '0.1.0-alpha.1' }),
@@ -346,6 +406,93 @@ test('setup uses the exact routing receipt when config persistence fails', async
   ]);
 });
 
+test('post-routing config validation restores exact routing before host cleanup', async (t) => {
+  const homeDir = await mkdtemp(path.join(tmpdir(), 'fast-browser-setup-config-validation-'));
+  t.after(() => rm(homeDir, { recursive: true, force: true }));
+  const paths = resolvePaths({
+    homeDir,
+    pluginRoot: path.resolve(import.meta.dirname, '../..'),
+  });
+  const codexDir = path.join(homeDir, '.codex');
+  const codexConfig = path.join(codexDir, 'config.toml');
+  const codexAgents = path.join(codexDir, 'AGENTS.md');
+  const priorConfig = 'model = "gpt-5.4"\n';
+  const priorAgents = '# User instructions\n';
+  await mkdir(codexDir, { recursive: true });
+  await Promise.all([
+    writeFile(codexConfig, priorConfig, { mode: 0o600 }),
+    writeFile(codexAgents, priorAgents, { mode: 0o600 }),
+  ]);
+
+  const events = [];
+  const error = await setup(request(), {
+    checkPlatform: async () => {},
+    detectHosts: async () => ['claude', 'codex'],
+    getCodexVersion: async () => 'codex-cli 0.145.0',
+    loadRuntimeLock: async () => ({
+      productVersion: '0.1.0-alpha.1',
+      sourceCommit: undefined,
+      runtime: { sha256: 'a'.repeat(64) },
+      extension: { id: 'extension-id', version: '1.0.0' },
+    }),
+    installRuntime: async () => ({ version: '0.1.0-alpha.1' }),
+    installExtension: async () => ({ unpacked: '/tmp/extension' }),
+    installClaude: async () => ({
+      host: 'claude',
+      changed: true,
+      changes: ['plugin-installed'],
+    }),
+    installCodex: async () => ({
+      host: 'codex',
+      changed: true,
+      changes: ['plugin-installed'],
+    }),
+    uninstallCodex: async () => events.push('cleanup-codex'),
+    uninstallClaude: async () => events.push('cleanup-claude'),
+    installBuiltinMacros: async () => {},
+    prepareRoutingTransition: async (input) => {
+      const prepared = await prepareRoutingTransition(input);
+      return {
+        nextState: prepared.nextState,
+        apply: async () => {
+          events.push('routing:apply');
+          const receipt = await prepared.apply();
+          return {
+            rollback: async () => {
+              events.push('routing:rollback');
+              await receipt.rollback();
+            },
+          };
+        },
+      };
+    },
+    saveConfig: async () => events.push('save-config'),
+    loadConfig: async () => null,
+    paths,
+    interactive: true,
+  }).then(
+    () => null,
+    (setupError) => setupError,
+  );
+
+  assert.equal(error.name, 'LifecycleError');
+  assert.equal(error.stage, 'save-config');
+  assert.equal(error.message, 'Setup could not save config; routing was rolled back.');
+  assert.deepEqual(events, [
+    'routing:apply',
+    'routing:rollback',
+    'cleanup-codex',
+    'cleanup-claude',
+  ]);
+  assert.equal(await readFile(codexConfig, 'utf8'), priorConfig);
+  assert.equal(await readFile(codexAgents, 'utf8'), priorAgents);
+  await Promise.all([
+    access(path.join(homeDir, '.claude', 'rules', 'fast-browser-routing.md')),
+    access(path.join(homeDir, '.claude', 'rules', 'fast-browser-verification-consent.md')),
+    access(path.join(homeDir, '.codex', 'agents', 'browser_driver.toml')),
+  ].map((operation) => assert.rejects(operation, { code: 'ENOENT' })));
+});
+
 test('setup maps a routing recovery-required apply failure to its fixed recovery result', async () => {
   let saves = 0;
 
@@ -356,7 +503,8 @@ test('setup maps a routing recovery-required apply failure to its fixed recovery
       ensureDataDirs: async () => {},
       loadRuntimeLock: async () => ({
         productVersion: '0.1.0-alpha.1',
-        runtime: { sha256: 'a'.repeat(64), sourceCommit: 'abc' },
+        sourceCommit: 'abc',
+        runtime: { sha256: 'a'.repeat(64) },
         extension: { id: 'extension-id', version: '1.0.0' },
       }),
       installRuntime: async () => ({ version: '0.1.0-alpha.1' }),
@@ -412,7 +560,8 @@ test('setup preserves external routing drift and redacts exact prior receipt sta
       ensureDataDirs: async () => {},
       loadRuntimeLock: async () => ({
         productVersion: '0.1.0-alpha.1',
-        runtime: { sha256: 'a'.repeat(64), sourceCommit: 'abc' },
+        sourceCommit: 'abc',
+        runtime: { sha256: 'a'.repeat(64) },
         extension: { id: 'extension-id', version: '1.0.0' },
       }),
       installRuntime: async () => ({ version: '0.1.0-alpha.1' }),
@@ -484,7 +633,8 @@ test('setup restores prior routing after config persistence failure', async (t) 
     ensureDataDirs: async () => {},
     loadRuntimeLock: async () => ({
       productVersion: '0.1.0-alpha.1',
-      runtime: { sha256: 'a'.repeat(64), sourceCommit: 'abc' },
+      sourceCommit: 'abc',
+      runtime: { sha256: 'a'.repeat(64) },
       extension: { id: 'extension-id', version: '1.0.0' },
     }),
     installRuntime: async () => ({ version: '0.1.0-alpha.1' }),
@@ -551,7 +701,8 @@ test('setup restores the exact prior Codex routing container when an override ap
       ensureDataDirs: async () => {},
       loadRuntimeLock: async () => ({
         productVersion: '0.1.0-alpha.1',
-        runtime: { sha256: 'a'.repeat(64), sourceCommit: 'abc' },
+        sourceCommit: 'abc',
+        runtime: { sha256: 'a'.repeat(64) },
         extension: { id: 'extension-id', version: '1.0.0' },
       }),
       installRuntime: async () => ({ version: '0.1.0-alpha.1' }),
@@ -608,7 +759,8 @@ test('setup rollback preserves prior Codex agent ownership across version drift'
       ensureDataDirs: async () => {},
       loadRuntimeLock: async () => ({
         productVersion: '0.1.0-alpha.1',
-        runtime: { sha256: 'a'.repeat(64), sourceCommit: 'abc' },
+        sourceCommit: 'abc',
+        runtime: { sha256: 'a'.repeat(64) },
         extension: { id: 'extension-id', version: '1.0.0' },
       }),
       installRuntime: async () => ({ version: '0.1.0-alpha.1' }),
@@ -639,7 +791,8 @@ test('partial host installation uses reviewed cleanup and exposes only redacted 
       ensureDataDirs: async () => {},
       loadRuntimeLock: async () => ({
         productVersion: '0.1.0-alpha.1',
-        runtime: { sha256: 'a'.repeat(64), sourceCommit: 'abc' },
+        sourceCommit: 'abc',
+        runtime: { sha256: 'a'.repeat(64) },
         extension: { id: 'extension-id', version: '1.0.0' },
       }),
       installRuntime: async () => ({ version: '0.1.0-alpha.1' }),
@@ -687,7 +840,8 @@ test('post-save retention failure preserves the tracked installation', async () 
       ensureDataDirs: async () => {},
       loadRuntimeLock: async () => ({
         productVersion: '0.1.0-alpha.1',
-        runtime: { sha256: 'a'.repeat(64), sourceCommit: 'abc' },
+        sourceCommit: 'abc',
+        runtime: { sha256: 'a'.repeat(64) },
         extension: { id: 'extension-id', version: '1.0.0' },
       }),
       installRuntime: async () => ({ version: '0.1.0-alpha.1' }),

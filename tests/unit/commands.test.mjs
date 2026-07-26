@@ -2614,7 +2614,8 @@ test('CLI production dispatch composes setup entirely from injected adapters', a
       ensureDataDirs: async () => events.push('dirs'),
       loadRuntimeLock: async () => ({
         productVersion: '0.1.0-alpha.1',
-        runtime: { sha256: 'a'.repeat(64), sourceCommit: 'abc' },
+        sourceCommit: 'abc',
+        runtime: { sha256: 'a'.repeat(64) },
         extension: { id: 'extension-id', version: '1.0.0' },
       }),
       installRuntime: async () => ({ version: '0.1.0-alpha.1' }),
