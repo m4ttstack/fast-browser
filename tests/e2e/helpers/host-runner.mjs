@@ -181,12 +181,6 @@ function observedResult(value, host, tools, elapsedMs) {
   };
 }
 
-function assertKnownType(type, allowed) {
-  if (!allowed.has(type)) {
-    throw new Error('unsupported host event type');
-  }
-}
-
 export function parseClaudeEvents(text, { elapsedMs = 0 } = {}) {
   const tools = [];
   let result = null;
@@ -291,7 +285,13 @@ export function parseCodexEvents(text, { elapsedMs = 0 } = {}) {
   let lastAgentMessageText = null;
   let completed = false;
   for (const { event, line } of parseEventLines(text)) {
-    assertKnownType(event.type, CODEX_EVENT_TYPES);
+    // Tolerate host stream drift: an outer event type we don't recognize is
+    // skipped rather than fatal, symmetric with Claude's top-level
+    // tolerance. Every event type we DO act on below (error/turn.failed
+    // rejection, turn.completed, and all item handling) is unaffected,
+    // since those types remain in CODEX_EVENT_TYPES and are never skipped
+    // here.
+    if (!CODEX_EVENT_TYPES.has(event.type)) continue;
     if (event.type === 'error' || event.type === 'turn.failed') {
       throw new Error('Codex host reported an error');
     }
@@ -480,10 +480,9 @@ async function promptFor(host, origin) {
 // explain it. Persist it under the OS tmpdir for offline debugging; the
 // thrown error's own (fixed) message is never changed by this.
 async function captureHostEvidence(host, stdout) {
-  const evidencePath = path.join(
-    os.tmpdir(),
-    `fast-browser-host-${host}-${Date.now()}.jsonl`,
-  );
+  // A fixed per-host filename (overwritten on every failure) caps how many
+  // evidence files can accumulate, instead of one new file per failed run.
+  const evidencePath = path.join(os.tmpdir(), `fast-browser-host-${host}-latest.jsonl`);
   await writeFile(evidencePath, stdout, 'utf8');
   console.error(`[host-evidence] ${evidencePath}`);
 }

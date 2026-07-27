@@ -616,6 +616,79 @@ test('Codex parser still rejects a side-channel command_execution among unknown 
   );
 });
 
+test('Codex parser tolerates an unknown top-level event type while still parsing the rest of the run', () => {
+  const events = [
+    JSON.stringify({ type: 'thread.started', thread_id: 'synthetic-codex-thread' }),
+    JSON.stringify({ type: 'session.metadata', model: 'gpt-5-codex', anything: 'ignored' }),
+    JSON.stringify({ type: 'turn.started' }),
+    JSON.stringify({
+      type: 'item.completed',
+      item: {
+        id: 'item-1',
+        type: 'mcp_tool_call',
+        server: 'fast_browser',
+        tool: 'browser_navigate',
+        status: 'completed',
+      },
+    }),
+    JSON.stringify({
+      type: 'item.completed',
+      item: {
+        id: 'item-final',
+        type: 'agent_message',
+        text: JSON.stringify({
+          host: 'codex',
+          ok: true,
+          orderId: 'CODEX-ENVELOPE-TOLERANT',
+        }),
+      },
+    }),
+    JSON.stringify({ type: 'turn.completed' }),
+  ].join('\n');
+
+  assert.deepEqual(parseCodexEvents(events, { elapsedMs: 15 }), {
+    host: 'codex',
+    ok: true,
+    orderId: 'CODEX-ENVELOPE-TOLERANT',
+    browserCalls: 1,
+    elapsedMs: 15,
+    tools: ['browser_navigate'],
+  });
+});
+
+test('Codex parser does not fabricate completion from a signal buried inside an unknown event type', () => {
+  // The only "completion-looking" data in this stream lives inside a
+  // session.metadata event's own fields, never as a real top-level
+  // turn.completed event. Tolerating unknown event types must not scan
+  // their payloads for anything resembling completion.
+  const events = [
+    JSON.stringify({ type: 'thread.started', thread_id: 'synthetic-codex-thread' }),
+    JSON.stringify({ type: 'turn.started' }),
+    JSON.stringify({
+      type: 'session.metadata',
+      turn: { completed: true },
+      status: 'turn.completed',
+    }),
+    JSON.stringify({
+      type: 'item.completed',
+      item: {
+        id: 'item-final',
+        type: 'agent_message',
+        text: JSON.stringify({
+          host: 'codex',
+          ok: true,
+          orderId: 'CODEX-NEVER-COMPLETES',
+        }),
+      },
+    }),
+  ].join('\n');
+
+  assert.throws(
+    () => parseCodexEvents(events, { elapsedMs: 1 }),
+    { message: 'Codex host did not complete its turn' },
+  );
+});
+
 test('host parsers reject malformed JSON without echoing its contents', () => {
   const secret = 'sk-synthetic-do-not-echo';
   for (const parse of [parseClaudeEvents, parseCodexEvents]) {
@@ -630,17 +703,17 @@ test('host parsers reject malformed JSON without echoing its contents', () => {
   }
 });
 
-test('Codex parser redacts hostile unknown top-level event types', () => {
-  // Codex's outer event-type envelope stays strict (unlike Claude's, and
-  // unlike Codex's inner item types); this must keep throwing and keep
-  // redacting.
+test('Codex parser tolerates an unknown top-level event type without leaking its content', () => {
+  // Codex's outer event-type envelope is now tolerant, symmetric with
+  // Claude's; a stream containing only a hostile unknown event still fails
+  // for an unrelated, fixed reason, never echoing the hostile input.
   const secret = 'sk-hostile-event-type';
   assert.throws(
     () => parseCodexEvents(JSON.stringify({
       type: `future.tool.event.${secret}`,
     }), { elapsedMs: 1 }),
     (error) => {
-      assert.equal(error.message, 'unsupported host event type');
+      assert.equal(error.message, 'Codex host did not complete its turn');
       assert.doesNotMatch(error.message, /sk-hostile/);
       return true;
     },
@@ -853,7 +926,9 @@ test('runClaudeHost writes host evidence to the OS tmpdir on a parse failure', a
     assert.ok(evidenceLog, 'expected a [host-evidence] log line');
     evidencePath = evidenceLog.slice('[host-evidence] '.length);
     assert.ok(evidencePath.startsWith(os.tmpdir()));
-    assert.match(path.basename(evidencePath), /^fast-browser-host-claude-\d+\.jsonl$/);
+    // A fixed per-host filename (overwritten each run) caps accumulation,
+    // rather than an unbounded epoch-timestamped file per failure.
+    assert.equal(path.basename(evidencePath), 'fast-browser-host-claude-latest.jsonl');
 
     const contents = await readFile(evidencePath, 'utf8');
     assert.equal(contents, invalidStream);
