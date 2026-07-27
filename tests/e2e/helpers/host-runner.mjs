@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
-import { readFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { fileURLToPath } from 'node:url';
@@ -112,6 +113,24 @@ function stripResultFence(value) {
   return lines.slice(start, end).join('\n').trim();
 }
 
+function parseJsonObject(text) {
+  const parsed = JSON.parse(text);
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('not a JSON object');
+  }
+  return parsed;
+}
+
+// Tolerates a model wrapping the JSON object in prose (for example "Here is
+// the result: {...}. Let me know if you need anything else."). Returns null
+// when no plausible object substring exists at all.
+function extractJsonObjectSubstring(value) {
+  const start = value.indexOf('{');
+  const end = value.lastIndexOf('}');
+  if (start === -1 || end === -1 || end < start) return null;
+  return value.slice(start, end + 1);
+}
+
 function structuredResult(value, host) {
   if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
     return value;
@@ -119,13 +138,18 @@ function structuredResult(value, host) {
   if (typeof value !== 'string') {
     throw new Error(`${labelFor(host)} host did not return a JSON result`);
   }
+  const stripped = stripResultFence(value);
   try {
-    const parsed = JSON.parse(stripResultFence(value));
-    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      throw new Error();
-    }
-    return parsed;
+    return parseJsonObject(stripped);
   } catch {
+    const extracted = extractJsonObjectSubstring(stripped);
+    if (extracted !== null) {
+      try {
+        return parseJsonObject(extracted);
+      } catch {
+        // fall through to the fixed error below
+      }
+    }
     throw new Error(`${labelFor(host)} host did not return a JSON result`);
   }
 }
@@ -167,7 +191,10 @@ export function parseClaudeEvents(text, { elapsedMs = 0 } = {}) {
   const tools = [];
   let result = null;
   for (const { event, line } of parseEventLines(text)) {
-    assertKnownType(event.type, CLAUDE_EVENT_TYPES);
+    // Tolerate host stream drift: an event type we don't recognize is
+    // skipped rather than fatal. Every event type we DO act on below (and
+    // the security checks within it) is unaffected.
+    if (!CLAUDE_EVENT_TYPES.has(event.type)) continue;
     if (event.type === 'assistant' || event.type === 'user') {
       if (
         event.message === null
@@ -182,7 +209,9 @@ export function parseClaudeEvents(text, { elapsedMs = 0 } = {}) {
           || typeof content !== 'object'
           || !CLAUDE_CONTENT_TYPES.has(content.type)
         ) {
-          throw eventError(line, 'has an unsupported Claude content block');
+          // Tolerate unknown content block types; keep scanning the rest of
+          // the array so a later tool_use is never skipped.
+          continue;
         }
         if (content.type !== 'tool_use') continue;
         if (typeof content.name !== 'string') {
@@ -273,15 +302,19 @@ export function parseCodexEvents(text, { elapsedMs = 0 } = {}) {
       && event.type !== 'item.completed'
     ) continue;
     const item = codexItem(event, line);
+    // Forbidden-tool and side-channel checks run on every item, regardless
+    // of whether its type is one we otherwise recognize, before any
+    // tolerance skip below.
     if (forbiddenCodexTool(item)) {
       throw new Error('Codex browser-use and computer-use tools are forbidden');
     }
     if (forbiddenCodexSideChannel(item)) {
       throw new Error('Codex side-channel browser use is forbidden');
     }
-    if (!CODEX_ITEM_TYPES.has(item.type)) {
-      throw eventError(line, 'has an unsupported Codex item type');
-    }
+    // Tolerate host stream drift: an item type we don't recognize is skipped
+    // rather than fatal, now that the forbidden checks above have already
+    // run against it.
+    if (!CODEX_ITEM_TYPES.has(item.type)) continue;
     if (
       item.type === 'mcp_tool_call'
       && typeof item.tool === 'string'
@@ -443,6 +476,18 @@ async function promptFor(host, origin) {
   return (await readFile(promptPath, 'utf8')).replaceAll('{{ORIGIN}}', origin);
 }
 
+// A parse/validation failure otherwise discards the raw stdout that would
+// explain it. Persist it under the OS tmpdir for offline debugging; the
+// thrown error's own (fixed) message is never changed by this.
+async function captureHostEvidence(host, stdout) {
+  const evidencePath = path.join(
+    os.tmpdir(),
+    `fast-browser-host-${host}-${Date.now()}.jsonl`,
+  );
+  await writeFile(evidencePath, stdout, 'utf8');
+  console.error(`[host-evidence] ${evidencePath}`);
+}
+
 export async function runClaudeHost({
   origin,
   pluginRoot,
@@ -462,9 +507,14 @@ export async function runClaudeHost({
     timeoutMs,
     spawnImpl,
   });
-  return parseClaudeEvents(processResult.stdout, {
-    elapsedMs: processResult.elapsedMs,
-  });
+  try {
+    return parseClaudeEvents(processResult.stdout, {
+      elapsedMs: processResult.elapsedMs,
+    });
+  } catch (error) {
+    await captureHostEvidence('claude', processResult.stdout);
+    throw error;
+  }
 }
 
 export async function runCodexHost({
@@ -484,7 +534,12 @@ export async function runCodexHost({
     timeoutMs,
     spawnImpl,
   });
-  return parseCodexEvents(processResult.stdout, {
-    elapsedMs: processResult.elapsedMs,
-  });
+  try {
+    return parseCodexEvents(processResult.stdout, {
+      elapsedMs: processResult.elapsedMs,
+    });
+  } catch (error) {
+    await captureHostEvidence('codex', processResult.stdout);
+    throw error;
+  }
 }

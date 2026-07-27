@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
+import { readFile, rm } from 'node:fs/promises';
 import net from 'node:net';
+import os from 'node:os';
 import { performance } from 'node:perf_hooks';
 import { PassThrough } from 'node:stream';
 import path from 'node:path';
@@ -264,6 +266,34 @@ test('Claude parser strips a whitespace-only line after the closing result fence
   });
 });
 
+test('Claude parser extracts the JSON object when prose surrounds it', () => {
+  const events = [
+    claudeToolUse(
+      'mcp__plugin_fast-browser_fast-browser__browser_navigate',
+      { url: 'http://127.0.0.1:43111' },
+    ),
+    JSON.stringify({
+      type: 'result',
+      subtype: 'success',
+      is_error: false,
+      result: `Here is the result you asked for: ${JSON.stringify({
+        host: 'claude',
+        ok: true,
+        orderId: 'CLAUDE-PROSE',
+      })}. Let me know if you need anything else.`,
+    }),
+  ].join('\n');
+
+  assert.deepEqual(parseClaudeEvents(events, { elapsedMs: 4 }), {
+    host: 'claude',
+    ok: true,
+    orderId: 'CLAUDE-PROSE',
+    browserCalls: 1,
+    elapsedMs: 4,
+    tools: ['browser_navigate'],
+  });
+});
+
 test('Claude parser accepts a minimal three-key model result', () => {
   const parsed = parseClaudeEvents(
     claudeEventsWithFinalResult({ host: 'claude', ok: true, orderId: 'CLAUDE-MIN-1' }),
@@ -387,6 +417,61 @@ test('Claude parser rejects browser tools from a non-Fast Browser MCP server', (
   );
 });
 
+test('Claude parser tolerates unknown top-level events and content types while still counting tools', () => {
+  const events = [
+    JSON.stringify({ type: 'future_top_level_event', anything: 'ignored' }),
+    JSON.stringify({
+      type: 'assistant',
+      message: {
+        content: [
+          { type: 'future_content_block', anything: 'ignored' },
+          {
+            type: 'tool_use',
+            id: 'tool-1',
+            name: 'mcp__plugin_fast-browser_fast-browser__browser_navigate',
+            input: { url: 'http://127.0.0.1:43111' },
+          },
+        ],
+      },
+    }),
+    claudeFinalResult({ host: 'claude', ok: true, orderId: 'CLAUDE-TOLERANT' }),
+  ].join('\n');
+
+  assert.deepEqual(parseClaudeEvents(events, { elapsedMs: 9 }), {
+    host: 'claude',
+    ok: true,
+    orderId: 'CLAUDE-TOLERANT',
+    browserCalls: 1,
+    elapsedMs: 9,
+    tools: ['browser_navigate'],
+  });
+});
+
+test('Claude parser still rejects a forbidden tool when an unknown content type appears alongside it', () => {
+  const events = [
+    JSON.stringify({
+      type: 'assistant',
+      message: {
+        content: [
+          { type: 'future_content_block', anything: 'ignored' },
+          {
+            type: 'tool_use',
+            id: 'wrong-namespace',
+            name: 'mcp__fast_browser__browser_navigate',
+            input: { url: 'http://127.0.0.1:43111' },
+          },
+        ],
+      },
+    }),
+    claudeFinalResult({ host: 'claude', ok: true, orderId: 'CLAUDE-TEAM-5' }),
+  ].join('\n');
+
+  assert.throws(
+    () => parseClaudeEvents(events, { elapsedMs: 1 }),
+    { message: 'Claude non-Fast Browser browser tool use is forbidden' },
+  );
+});
+
 test('Codex parser rejects browser-use and computer-use tool events', () => {
   const cases = [
     {
@@ -459,6 +544,78 @@ test('Codex parser rejects browser tools from a non-Fast Browser MCP server', ()
   );
 });
 
+test('Codex parser tolerates an unknown item type while still parsing the rest of the run', () => {
+  const events = [
+    JSON.stringify({ type: 'thread.started', thread_id: 'synthetic-codex-thread' }),
+    JSON.stringify({ type: 'turn.started' }),
+    JSON.stringify({
+      type: 'item.completed',
+      item: { id: 'future-item', type: 'future_codex_item', status: 'completed' },
+    }),
+    JSON.stringify({
+      type: 'item.completed',
+      item: {
+        id: 'item-1',
+        type: 'mcp_tool_call',
+        server: 'fast_browser',
+        tool: 'browser_navigate',
+        status: 'completed',
+      },
+    }),
+    JSON.stringify({
+      type: 'item.completed',
+      item: {
+        id: 'item-final',
+        type: 'agent_message',
+        text: JSON.stringify({
+          host: 'codex',
+          ok: true,
+          orderId: 'CODEX-TOLERANT',
+        }),
+      },
+    }),
+    JSON.stringify({ type: 'turn.completed' }),
+  ].join('\n');
+
+  assert.deepEqual(parseCodexEvents(events, { elapsedMs: 12 }), {
+    host: 'codex',
+    ok: true,
+    orderId: 'CODEX-TOLERANT',
+    browserCalls: 1,
+    elapsedMs: 12,
+    tools: ['browser_navigate'],
+  });
+});
+
+test('Codex parser still rejects a side-channel command_execution among unknown item types', () => {
+  const events = [
+    JSON.stringify({ type: 'thread.started', thread_id: 'synthetic-codex-thread' }),
+    JSON.stringify({ type: 'turn.started' }),
+    JSON.stringify({
+      type: 'item.completed',
+      item: { id: 'future-item-1', type: 'future_codex_item_a', status: 'completed' },
+    }),
+    JSON.stringify({
+      type: 'item.completed',
+      item: {
+        id: 'item-side-channel',
+        type: 'command_execution',
+        command: 'node --input-type=module -e "spawn fast-browser-mcp.mjs directly"',
+        status: 'completed',
+      },
+    }),
+    JSON.stringify({
+      type: 'item.completed',
+      item: { id: 'future-item-2', type: 'future_codex_item_b', status: 'completed' },
+    }),
+  ].join('\n');
+
+  assert.throws(
+    () => parseCodexEvents(events, { elapsedMs: 1 }),
+    { message: 'Codex side-channel browser use is forbidden' },
+  );
+});
+
 test('host parsers reject malformed JSON without echoing its contents', () => {
   const secret = 'sk-synthetic-do-not-echo';
   for (const parse of [parseClaudeEvents, parseCodexEvents]) {
@@ -473,23 +630,44 @@ test('host parsers reject malformed JSON without echoing its contents', () => {
   }
 });
 
-test('host parsers redact hostile unknown event types', () => {
+test('Codex parser redacts hostile unknown top-level event types', () => {
+  // Codex's outer event-type envelope stays strict (unlike Claude's, and
+  // unlike Codex's inner item types); this must keep throwing and keep
+  // redacting.
   const secret = 'sk-hostile-event-type';
-  for (const parse of [parseClaudeEvents, parseCodexEvents]) {
-    assert.throws(
-      () => parse(JSON.stringify({
-        type: `future.tool.event.${secret}`,
-      }), { elapsedMs: 1 }),
-      (error) => {
-        assert.equal(error.message, 'unsupported host event type');
-        assert.doesNotMatch(error.message, /sk-hostile/);
-        return true;
-      },
-    );
-  }
+  assert.throws(
+    () => parseCodexEvents(JSON.stringify({
+      type: `future.tool.event.${secret}`,
+    }), { elapsedMs: 1 }),
+    (error) => {
+      assert.equal(error.message, 'unsupported host event type');
+      assert.doesNotMatch(error.message, /sk-hostile/);
+      return true;
+    },
+  );
 });
 
-test('Codex parser redacts hostile unknown item types', () => {
+test('Claude parser tolerates an unknown top-level event type without leaking its content', () => {
+  // Claude's outer event-type envelope is now tolerant (host stream drift);
+  // a stream containing nothing else still fails for an unrelated, fixed
+  // reason, never echoing the hostile input.
+  const secret = 'sk-hostile-event-type';
+  assert.throws(
+    () => parseClaudeEvents(JSON.stringify({
+      type: `future.tool.event.${secret}`,
+    }), { elapsedMs: 1 }),
+    (error) => {
+      assert.equal(error.message, 'Claude host did not return a result');
+      assert.doesNotMatch(error.message, /sk-hostile/);
+      return true;
+    },
+  );
+});
+
+test('Codex parser tolerates an unknown item type without leaking its content', () => {
+  // Codex's inner item types are now tolerant (host stream drift); a stream
+  // containing only a hostile unknown item still fails for an unrelated,
+  // fixed reason, never echoing the hostile input.
   const secret = 'sk-hostile-item-type';
   assert.throws(
     () => parseCodexEvents(JSON.stringify({
@@ -501,10 +679,7 @@ test('Codex parser redacts hostile unknown item types', () => {
       },
     }), { elapsedMs: 1 }),
     (error) => {
-      assert.equal(
-        error.message,
-        'host event line 1 has an unsupported Codex item type',
-      );
+      assert.equal(error.message, 'Codex host did not complete its turn');
       assert.doesNotMatch(error.message, /sk-hostile/);
       return true;
     },
@@ -629,6 +804,63 @@ test('host process waits for final stdout after exit until streams close', async
   child.emit('close', 0, null);
 
   assert.equal((await pending).stdout, 'final JSONL line\n');
+});
+
+test('runClaudeHost writes host evidence to the OS tmpdir on a parse failure', async () => {
+  const child = new EventEmitter();
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  child.kill = () => true;
+  const spawnImpl = () => child;
+
+  const originalConsoleError = console.error;
+  const logs = [];
+  console.error = (...args) => {
+    logs.push(args.join(' '));
+  };
+
+  // Not valid JSON at all, so this fails inside parseEventLines regardless
+  // of any envelope-tolerance behavior; the exact error message is not the
+  // point of this test, only that the raw stream gets persisted.
+  const invalidStream = 'not-json-at-all\n';
+  let evidencePath;
+  try {
+    // runClaudeHost awaits a real file read (the prompt template) before
+    // runHostProcess attaches its 'close' listener; emitting synchronously
+    // would race and drop the event. Wait for the listener to actually be
+    // attached first.
+    const closeListenerAttached = new Promise((resolve) => {
+      child.on('newListener', function onNewListener(eventName) {
+        if (eventName !== 'close') return;
+        child.off('newListener', onNewListener);
+        resolve();
+      });
+    });
+
+    const pending = runClaudeHost({
+      origin: 'http://127.0.0.1:43111',
+      pluginRoot,
+      cwd,
+      spawnImpl,
+    });
+    await closeListenerAttached;
+    child.stdout.write(invalidStream);
+    child.emit('close', 0, null);
+
+    await assert.rejects(pending, /is not valid JSON/);
+
+    const evidenceLog = logs.find((line) => line.startsWith('[host-evidence] '));
+    assert.ok(evidenceLog, 'expected a [host-evidence] log line');
+    evidencePath = evidenceLog.slice('[host-evidence] '.length);
+    assert.ok(evidencePath.startsWith(os.tmpdir()));
+    assert.match(path.basename(evidencePath), /^fast-browser-host-claude-\d+\.jsonl$/);
+
+    const contents = await readFile(evidencePath, 'utf8');
+    assert.equal(contents, invalidStream);
+  } finally {
+    console.error = originalConsoleError;
+    if (evidencePath) await rm(evidencePath, { force: true });
+  }
 });
 
 test('withOneRetry returns the first attempt result without retrying on success', async () => {
