@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
+import net from 'node:net';
+import { performance } from 'node:perf_hooks';
 import { PassThrough } from 'node:stream';
 import path from 'node:path';
 import test from 'node:test';
@@ -20,63 +22,86 @@ const pluginRoot = fileURLToPath(new URL('../../', import.meta.url));
 const cwd = path.resolve(pluginRoot, '../..');
 const live = process.env.FAST_BROWSER_LIVE_E2E === '1';
 
+function claudeToolUse(name, input = {}) {
+  return JSON.stringify({
+    type: 'assistant',
+    message: {
+      content: [{
+        type: 'tool_use',
+        id: `tool-${name}`,
+        name,
+        input,
+      }],
+    },
+  });
+}
+
+function claudeFinalResult(value) {
+  return JSON.stringify({
+    type: 'result',
+    subtype: 'success',
+    is_error: false,
+    result: JSON.stringify(value),
+  });
+}
+
+function claudeEventsWithFinalResult(resultValue, { toolCount = 1 } = {}) {
+  const toolEvents = Array.from({ length: toolCount }, (_, index) => claudeToolUse(
+    'mcp__plugin_fast-browser_fast-browser__browser_navigate',
+    { url: `http://127.0.0.1:43111/${index}` },
+  ));
+  return [...toolEvents, claudeFinalResult(resultValue)].join('\n');
+}
+
+// Real Claude Code events observed live: the final `result` field arrives as a
+// STRING wrapped in a markdown code fence, and a benign ToolSearch tool_use
+// appears alongside the real namespaced Fast Browser tool_use events.
 const CLAUDE_SUCCESS = [
   JSON.stringify({
     type: 'system',
     subtype: 'init',
     session_id: 'synthetic-claude-session',
   }),
-  JSON.stringify({
-    type: 'assistant',
-    message: {
-      content: [{
-        type: 'tool_use',
-        id: 'tool-1',
-        name: 'mcp__fast_browser__browser_navigate',
-        input: { url: 'http://127.0.0.1:43111' },
-      }],
-    },
-  }),
-  JSON.stringify({
-    type: 'assistant',
-    message: {
-      content: [{
-        type: 'tool_use',
-        id: 'tool-2',
-        name: 'mcp__fast_browser__browser_snapshot',
-        input: {},
-      }],
-    },
-  }),
-  JSON.stringify({
-    type: 'assistant',
-    message: {
-      content: [{
-        type: 'tool_use',
-        id: 'tool-3',
-        name: 'mcp__fast_browser__browser_run_code_unsafe',
-        input: { code: 'async page => ({ orderId: await page.title() })' },
-      }],
-    },
-  }),
+  claudeToolUse('ToolSearch', { query: 'select:browser_navigate' }),
+  claudeToolUse(
+    'mcp__plugin_fast-browser_fast-browser__browser_navigate',
+    { url: 'http://127.0.0.1:43111' },
+  ),
+  claudeToolUse('mcp__plugin_fast-browser_fast-browser__browser_snapshot'),
+  claudeToolUse(
+    'mcp__plugin_fast-browser_fast-browser__browser_run_code_unsafe',
+    { code: 'async page => ({ orderId: await page.title() })' },
+  ),
   JSON.stringify({
     type: 'result',
     subtype: 'success',
     is_error: false,
-    result: JSON.stringify({
-      host: 'claude',
-      ok: true,
-      orderId: 'CLAUDE-TEAM-5',
-      browserCalls: 999,
-      elapsedMs: 999,
-      tools: [],
-    }),
+    result: [
+      '```json',
+      JSON.stringify({
+        host: 'claude',
+        ok: true,
+        orderId: 'CLAUDE-TEAM-5',
+      }, null, 2),
+      '```',
+    ].join('\n'),
   }),
 ].join('\n');
 
+// Real Codex events observed live: multiple agent_message items appear
+// (preamble prose, then the final pure-JSON message), and a collab_tool_call
+// item type appears alongside the whitelisted item types.
 const CODEX_SUCCESS = [
   JSON.stringify({ type: 'thread.started', thread_id: 'synthetic-codex-thread' }),
   JSON.stringify({ type: 'turn.started' }),
+  JSON.stringify({
+    type: 'item.completed',
+    item: {
+      id: 'item-preamble',
+      type: 'agent_message',
+      text: 'Navigating to the order form now.',
+    },
+  }),
   JSON.stringify({
     type: 'item.completed',
     item: {
@@ -100,6 +125,15 @@ const CODEX_SUCCESS = [
   JSON.stringify({
     type: 'item.completed',
     item: {
+      id: 'item-collab',
+      type: 'collab_tool_call',
+      name: 'plan_update',
+      status: 'completed',
+    },
+  }),
+  JSON.stringify({
+    type: 'item.completed',
+    item: {
       id: 'item-3',
       type: 'mcp_tool_call',
       server: 'fast_browser',
@@ -110,15 +144,12 @@ const CODEX_SUCCESS = [
   JSON.stringify({
     type: 'item.completed',
     item: {
-      id: 'item-4',
+      id: 'item-final',
       type: 'agent_message',
       text: JSON.stringify({
         host: 'codex',
         ok: true,
         orderId: 'CODEX-TEAM-5',
-        browserCalls: 999,
-        elapsedMs: 999,
-        tools: [],
       }),
     },
   }),
@@ -162,32 +193,102 @@ test('Codex parser returns the model result with observed Fast Browser metrics',
   });
 });
 
-test('Claude parser rejects Claude in Chrome tool use', () => {
-  const events = [
-    JSON.stringify({
-      type: 'assistant',
-      message: {
-        content: [{
-          type: 'tool_use',
-          id: 'wrong-tool',
-          name: 'mcp__claude-in-chrome__navigate',
-          input: {},
-        }],
-      },
-    }),
-    JSON.stringify({
-      type: 'result',
-      subtype: 'success',
-      is_error: false,
-      result: JSON.stringify({
+test('Claude parser accepts a minimal three-key model result', () => {
+  const parsed = parseClaudeEvents(
+    claudeEventsWithFinalResult({ host: 'claude', ok: true, orderId: 'CLAUDE-MIN-1' }),
+    { elapsedMs: 7 },
+  );
+  assert.deepEqual(parsed, {
+    host: 'claude',
+    ok: true,
+    orderId: 'CLAUDE-MIN-1',
+    browserCalls: 1,
+    elapsedMs: 7,
+    tools: ['browser_navigate'],
+  });
+});
+
+test('Claude parser rejects a model result with an unknown extra key', () => {
+  assert.throws(
+    () => parseClaudeEvents(
+      claudeEventsWithFinalResult({
         host: 'claude',
         ok: true,
-        orderId: 'CLAUDE-TEAM-5',
-        browserCalls: 0,
-        elapsedMs: 0,
-        tools: [],
+        orderId: 'CLAUDE-MIN-1',
+        note: 'unexpected',
       }),
+      { elapsedMs: 1 },
+    ),
+    { message: 'Claude host returned an invalid result' },
+  );
+});
+
+test('Claude parser throws when no Fast Browser tool calls were observed', () => {
+  const events = claudeFinalResult({
+    host: 'claude',
+    ok: true,
+    orderId: 'CLAUDE-NO-TOOLS',
+  });
+
+  assert.throws(
+    () => parseClaudeEvents(events, { elapsedMs: 1 }),
+    { message: 'Claude host used no Fast Browser tools' },
+  );
+});
+
+test('Codex parser throws when no Fast Browser tool calls were observed', () => {
+  const events = [
+    JSON.stringify({ type: 'thread.started', thread_id: 'synthetic-codex-thread' }),
+    JSON.stringify({ type: 'turn.started' }),
+    JSON.stringify({
+      type: 'item.completed',
+      item: {
+        id: 'item-final',
+        type: 'agent_message',
+        text: JSON.stringify({
+          host: 'codex',
+          ok: true,
+          orderId: 'CODEX-NO-TOOLS',
+        }),
+      },
     }),
+    JSON.stringify({ type: 'turn.completed' }),
+  ].join('\n');
+
+  assert.throws(
+    () => parseCodexEvents(events, { elapsedMs: 1 }),
+    { message: 'Codex host used no Fast Browser tools' },
+  );
+});
+
+test('Codex parser rejects side-channel Fast Browser MCP server spawning', () => {
+  const forbiddenCommands = [
+    'node --input-type=module -e "spawn fast-browser-mcp.mjs directly"',
+    'node -e "import(\'@modelcontextprotocol/sdk/client/index.js\')"',
+  ];
+  for (const command of forbiddenCommands) {
+    for (const type of ['item.started', 'item.updated', 'item.completed']) {
+      const events = JSON.stringify({
+        type,
+        item: {
+          id: 'item-side-channel',
+          type: 'command_execution',
+          command,
+          status: 'completed',
+        },
+      });
+      assert.throws(
+        () => parseCodexEvents(events, { elapsedMs: 1 }),
+        { message: 'Codex side-channel browser use is forbidden' },
+      );
+    }
+  }
+});
+
+test('Claude parser rejects Claude in Chrome tool use', () => {
+  const events = [
+    claudeToolUse('mcp__claude-in-chrome__navigate'),
+    claudeFinalResult({ host: 'claude', ok: true, orderId: 'CLAUDE-TEAM-5' }),
   ].join('\n');
 
   assert.throws(
@@ -197,31 +298,14 @@ test('Claude parser rejects Claude in Chrome tool use', () => {
 });
 
 test('Claude parser rejects browser tools from a non-Fast Browser MCP server', () => {
+  // The old expected namespace `mcp__fast_browser__<tool>` is not the real
+  // Claude Code tool identity and must remain forbidden.
   const events = [
-    JSON.stringify({
-      type: 'assistant',
-      message: {
-        content: [{
-          type: 'tool_use',
-          id: 'wrong-browser-server',
-          name: 'mcp__browser_use__browser_navigate',
-          input: { url: 'http://127.0.0.1:43111' },
-        }],
-      },
-    }),
-    JSON.stringify({
-      type: 'result',
-      subtype: 'success',
-      is_error: false,
-      result: JSON.stringify({
-        host: 'claude',
-        ok: true,
-        orderId: 'CLAUDE-TEAM-5',
-        browserCalls: 1,
-        elapsedMs: 0,
-        tools: ['browser_navigate'],
-      }),
-    }),
+    claudeToolUse(
+      'mcp__fast_browser__browser_navigate',
+      { url: 'http://127.0.0.1:43111' },
+    ),
+    claudeFinalResult({ host: 'claude', ok: true, orderId: 'CLAUDE-TEAM-5' }),
   ].join('\n');
 
   assert.throws(
@@ -283,9 +367,6 @@ test('Codex parser rejects browser tools from a non-Fast Browser MCP server', ()
           host: 'codex',
           ok: true,
           orderId: 'CODEX-TEAM-5',
-          browserCalls: 1,
-          elapsedMs: 0,
-          tools: ['browser_snapshot'],
         }),
       },
     }),
@@ -479,9 +560,37 @@ test('host process waits for final stdout after exit until streams close', async
   assert.equal((await pending).stdout, 'final JSONL line\n');
 });
 
+test(
+  'order fixture close() resolves quickly despite a held-open keep-alive connection',
+  { timeout: 5_000 },
+  async () => {
+    const fixture = await startOrderFixture();
+    const url = new URL(fixture.origin);
+    const socket = net.connect(Number(url.port), url.hostname);
+    await new Promise((resolve, reject) => {
+      socket.once('connect', resolve);
+      socket.once('error', reject);
+    });
+    // A connected-but-idle socket, the way Chrome leaves one behind for a
+    // live tab, must not block close(). If it does, force it closed after a
+    // bounded wait so this test fails fast instead of hanging the suite.
+    const startedAt = performance.now();
+    const closed = fixture.close();
+    const forceUnblock = setTimeout(() => socket.destroy(), 3_000);
+    await closed;
+    clearTimeout(forceUnblock);
+    const elapsedMs = performance.now() - startedAt;
+    socket.destroy();
+    assert.ok(
+      elapsedMs < 1_000,
+      `expected close() to resolve under 1000ms, took ${elapsedMs}ms`,
+    );
+  },
+);
+
 test('Claude Code completes the Fast Browser flow', {
   skip: !live,
-  timeout: 330_000,
+  timeout: 660_000,
 }, async (t) => {
   const fixture = await startOrderFixture();
   t.after(fixture.close);
@@ -497,7 +606,7 @@ test('Claude Code completes the Fast Browser flow', {
 
 test('Codex completes the Fast Browser flow', {
   skip: !live,
-  timeout: 330_000,
+  timeout: 660_000,
 }, async (t) => {
   const fixture = await startOrderFixture();
   t.after(fixture.close);

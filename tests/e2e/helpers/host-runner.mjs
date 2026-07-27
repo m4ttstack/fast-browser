@@ -4,8 +4,11 @@ import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { fileURLToPath } from 'node:url';
 
-const HOST_TIMEOUT_MS = 300_000;
+const HOST_TIMEOUT_MS = 600_000;
 const MAX_OUTPUT_BYTES = 5 * 1024 * 1024;
+// The real Claude Code tool identity for Fast Browser MCP tools; see
+// task-3-harness-fix-brief.md ground truth.
+const CLAUDE_FAST_BROWSER_TOOL_PREFIX = 'mcp__plugin_fast-browser_fast-browser__';
 const CLAUDE_EVENT_TYPES = new Set([
   'assistant',
   'rate_limit_event',
@@ -32,6 +35,7 @@ const CODEX_EVENT_TYPES = new Set([
 ]);
 const CODEX_ITEM_TYPES = new Set([
   'agent_message',
+  'collab_tool_call',
   'command_execution',
   'file_change',
   'mcp_tool_call',
@@ -39,13 +43,14 @@ const CODEX_ITEM_TYPES = new Set([
   'todo_list',
   'web_search',
 ]);
-const RESULT_KEYS = new Set([
-  'browserCalls',
-  'elapsedMs',
-  'host',
-  'ok',
-  'orderId',
-  'tools',
+const REQUIRED_RESULT_KEYS = new Set(['host', 'ok', 'orderId']);
+// The model may also report these, but the harness always overwrites them
+// with its own observed values, so their presence and shape are not
+// validated here.
+const OPTIONAL_RESULT_KEYS = new Set(['browserCalls', 'elapsedMs', 'tools']);
+const ALLOWED_RESULT_KEYS = new Set([
+  ...REQUIRED_RESULT_KEYS,
+  ...OPTIONAL_RESULT_KEYS,
 ]);
 
 function labelFor(host) {
@@ -85,6 +90,22 @@ function finalToolSegment(name) {
   return name.split('__').at(-1);
 }
 
+// Real final messages arrive wrapped in a markdown code fence (for example
+// "```json\n{...}\n```"); strip at most one leading and one trailing fence
+// line before parsing.
+function stripResultFence(value) {
+  const lines = value.split(/\r?\n/);
+  let start = 0;
+  let end = lines.length;
+  if (start < end && /^```(json)?$/.test(lines[start].trim())) {
+    start += 1;
+  }
+  if (end > start && lines[end - 1].trim() === '```') {
+    end -= 1;
+  }
+  return lines.slice(start, end).join('\n').trim();
+}
+
 function structuredResult(value, host) {
   if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
     return value;
@@ -93,7 +114,7 @@ function structuredResult(value, host) {
     throw new Error(`${labelFor(host)} host did not return a JSON result`);
   }
   try {
-    const parsed = JSON.parse(value);
+    const parsed = JSON.parse(stripResultFence(value));
     if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
       throw new Error();
     }
@@ -106,21 +127,11 @@ function structuredResult(value, host) {
 function validateResult(value, host) {
   const keys = Object.keys(value);
   if (
-    keys.length !== RESULT_KEYS.size
-    || keys.some((key) => !RESULT_KEYS.has(key))
+    keys.some((key) => !ALLOWED_RESULT_KEYS.has(key))
     || value.host !== host
     || value.ok !== true
     || typeof value.orderId !== 'string'
     || value.orderId.length === 0
-    || !Number.isInteger(value.browserCalls)
-    || value.browserCalls < 0
-    || typeof value.elapsedMs !== 'number'
-    || !Number.isFinite(value.elapsedMs)
-    || value.elapsedMs < 0
-    || !Array.isArray(value.tools)
-    || value.tools.some((tool) => (
-      typeof tool !== 'string' || !tool.startsWith('browser_')
-    ))
   ) {
     throw new Error(`${labelFor(host)} host returned an invalid result`);
   }
@@ -129,6 +140,9 @@ function validateResult(value, host) {
 
 function observedResult(value, host, tools, elapsedMs) {
   validateResult(value, host);
+  if (tools.length < 1) {
+    throw new Error(`${labelFor(host)} host used no Fast Browser tools`);
+  }
   return {
     ...value,
     browserCalls: tools.length,
@@ -174,12 +188,7 @@ export function parseClaudeEvents(text, { elapsedMs = 0 } = {}) {
         }
         const tool = finalToolSegment(content.name);
         if (tool?.startsWith('browser_')) {
-          const identity = content.name.split('__');
-          if (
-            identity.length !== 3
-            || identity[0] !== 'mcp'
-            || identity[1] !== 'fast_browser'
-          ) {
+          if (content.name !== `${CLAUDE_FAST_BROWSER_TOOL_PREFIX}${tool}`) {
             throw new Error(
               'Claude non-Fast Browser browser tool use is forbidden',
             );
@@ -228,9 +237,23 @@ function forbiddenCodexTool(item) {
   );
 }
 
+function forbiddenCodexSideChannel(item) {
+  return (
+    item.type === 'command_execution'
+    && typeof item.command === 'string'
+    && (
+      item.command.includes('fast-browser-mcp')
+      || item.command.includes('@modelcontextprotocol')
+    )
+  );
+}
+
 export function parseCodexEvents(text, { elapsedMs = 0 } = {}) {
   const tools = [];
-  let result = null;
+  // Codex emits multiple agent_message items (preamble prose, then the
+  // final message); only the last completed one is the result candidate.
+  // Earlier ones are validated as strings but never JSON-parsed.
+  let lastAgentMessageText = null;
   let completed = false;
   for (const { event, line } of parseEventLines(text)) {
     assertKnownType(event.type, CODEX_EVENT_TYPES);
@@ -246,6 +269,9 @@ export function parseCodexEvents(text, { elapsedMs = 0 } = {}) {
     const item = codexItem(event, line);
     if (forbiddenCodexTool(item)) {
       throw new Error('Codex browser-use and computer-use tools are forbidden');
+    }
+    if (forbiddenCodexSideChannel(item)) {
+      throw new Error('Codex side-channel browser use is forbidden');
     }
     if (!CODEX_ITEM_TYPES.has(item.type)) {
       throw eventError(line, 'has an unsupported Codex item type');
@@ -280,11 +306,12 @@ export function parseCodexEvents(text, { elapsedMs = 0 } = {}) {
       if (typeof item.text !== 'string') {
         throw eventError(line, 'has an invalid Codex agent message');
       }
-      result = structuredResult(item.text, 'codex');
+      lastAgentMessageText = item.text;
     }
   }
   if (!completed) throw new Error('Codex host did not complete its turn');
-  if (result === null) throw new Error('Codex host did not return a result');
+  if (lastAgentMessageText === null) throw new Error('Codex host did not return a result');
+  const result = structuredResult(lastAgentMessageText, 'codex');
   return observedResult(result, 'codex', tools, elapsedMs);
 }
 
@@ -407,10 +434,7 @@ function requireLocalOrigin(origin) {
 
 async function promptFor(host, origin) {
   const promptPath = fileURLToPath(new URL(`../prompts/${host}.txt`, import.meta.url));
-  const schemaPath = fileURLToPath(new URL('../host-result.schema.json', import.meta.url));
-  return (await readFile(promptPath, 'utf8'))
-    .replaceAll('{{ORIGIN}}', origin)
-    .replaceAll('{{SCHEMA_PATH}}', schemaPath);
+  return (await readFile(promptPath, 'utf8')).replaceAll('{{ORIGIN}}', origin);
 }
 
 export async function runClaudeHost({

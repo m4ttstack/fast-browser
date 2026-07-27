@@ -5,10 +5,7 @@
   "required": [
     "host",
     "ok",
-    "orderId",
-    "browserCalls",
-    "elapsedMs",
-    "tools"
+    "orderId"
   ],
   "properties": {
     "host": {
@@ -23,21 +20,6 @@
     "orderId": {
       "type": "string",
       "minLength": 1
-    },
-    "browserCalls": {
-      "type": "integer",
-      "minimum": 0
-    },
-    "elapsedMs": {
-      "type": "number",
-      "minimum": 0
-    },
-    "tools": {
-      "type": "array",
-      "items": {
-        "type": "string",
-        "pattern": "^browser_"
-      }
     }
   }
 }

@@ -6,7 +6,7 @@ Open the exact local origin {{ORIGIN}}. Complete an order for customer CODEX,
 plan Team, and 5 seats. Finish the flow in no more than 8 Fast Browser calls.
 Prefer browser_navigate, browser_snapshot, and one browser_run_code_unsafe call.
 
-Your final response must contain only one JSON object conforming to
-{{SCHEMA_PATH}}. Set host to "codex", ok to true, orderId to the order ID shown
-by the completed page, and report the Fast Browser calls and tool names you used.
-Set elapsedMs to 0; the harness replaces it with observed process time.
+Your final response must contain ONLY one JSON object, with no code fences and
+no prose, of the exact form
+{"host":"codex","ok":true,"orderId":"<the order ID shown on the completed page>"}.
+Extra keys are forbidden.
