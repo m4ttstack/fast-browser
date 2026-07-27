@@ -3,8 +3,8 @@
   "version": "0.1.0-alpha.1",
   "description": "Fast Playwright browser automation for Claude Code and Codex",
   "type": "module",
-  "private": true,
-  "license": "UNLICENSED",
+  "private": false,
+  "license": "MIT",
   "engines": {
     "node": ">=20"
   },
@@ -23,6 +23,7 @@
     "skills/",
     "templates/",
     "runtime-lock.json",
+    "LICENSE",
     "README.md",
     "SECURITY.md",
     "THIRD_PARTY_NOTICES.md"

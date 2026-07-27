@@ -249,12 +249,20 @@ test('npm package contains only portable deployable Fast Browser assets', async 
   assert.match(normalizedRootReadme, /source checkout alone is not an installable candidate/i);
   assert.match(
     normalizedRootReadme,
-    /--runtime-lock \/absolute\/path\/to\/fast-browser-release-0\.1\.0-alpha\.5\.json/,
+    /--runtime-lock \/absolute\/path\/to\/fast-browser-release-[0-9a-z.-]+\.json/,
   );
 
+  // Derived from the lock, never pinned literally. These assertions used to
+  // name alpha.5 and its source commit, so after the lock moved to alpha.7
+  // they were enforcing a provenance claim that no longer described the bytes
+  // the installer fetches -- the test was holding the staleness in place
+  // rather than catching it.
+  const lock = JSON.parse(
+    await readFile(new URL('../../runtime-lock.json', import.meta.url), 'utf8'),
+  );
   const notices = textByPath.get('THIRD_PARTY_NOTICES.md');
   assert.match(notices, /not public/i);
-  assert.match(notices, /eac35fdd5df3df6afc51fd2ae33bc305c2bc8cb2/);
-  assert.match(notices, /fast-browser-mcp-0\.1\.0-alpha\.5\.tar\.gz/);
-  assert.match(notices, /fast-browser-extension-0\.1\.0-alpha\.5\.zip/);
+  for (const value of [lock.sourceCommit, lock.runtime.file, lock.extension.file]) {
+    assert.ok(notices.includes(value), `notices must record ${value}`);
+  }
 });

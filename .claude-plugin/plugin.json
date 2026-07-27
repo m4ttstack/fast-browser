@@ -5,6 +5,6 @@
   "author": {
     "name": "Matt Erickson"
   },
-  "license": "UNLICENSED",
+  "license": "MIT",
   "skills": "./skills/"
 }

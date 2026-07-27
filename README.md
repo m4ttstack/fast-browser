@@ -5,7 +5,8 @@ runtime and Chrome extension for Claude Code, Codex, or both. It includes the
 same three browser skills for both hosts, plus host-specific routing and a
 delegated browser driver.
 
-This package is still `private: true` and `UNLICENSED`. The source checkout
+This package is MIT licensed (see LICENSE); the Playwright-derived runtime and
+extension artifacts it installs remain Apache-2.0. The source checkout
 alone is not an installable candidate: its bundled lock points to a runtime
 commit, tag, and release assets that are not public. The only current candidate
 flow requires a separately produced local release bundle.
