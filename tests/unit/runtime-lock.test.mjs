@@ -228,25 +228,43 @@ test('bundled lock pins the intended candidate identity and immutable artifact U
 
   assert.deepEqual(lock, {
     schemaVersion: 1,
-    productVersion: '0.1.0-alpha.5',
-    sourceCommit: 'eac35fdd5df3df6afc51fd2ae33bc305c2bc8cb2',
+    productVersion: '0.1.0-alpha.6',
+    sourceCommit: '1dc09a6329e0fbe4f2cf2145ec1194c714584606',
     protocolVersion: 2,
     runtime: {
       url: 'https://github.com/m4ttheweric/playwright/releases/download/'
-        + 'fast-browser-v0.1.0-alpha.5/fast-browser-mcp-0.1.0-alpha.5.tar.gz',
-      file: 'fast-browser-mcp-0.1.0-alpha.5.tar.gz',
-      sha256: 'ce9bd45a24b87ed39546bf1e54b721b31794f8d417e0b08de5788ee8c886716d',
+        + 'fast-browser-v0.1.0-alpha.6/fast-browser-mcp-0.1.0-alpha.6.tar.gz',
+      file: 'fast-browser-mcp-0.1.0-alpha.6.tar.gz',
+      sha256: 'd6f2ef7c2e3971dc77223b898d40f0f719518b46b8e82c5291e1baa6fd7a0e45',
       node: '>=20',
     },
     extension: {
       url: 'https://github.com/m4ttheweric/playwright/releases/download/'
-        + 'fast-browser-v0.1.0-alpha.5/fast-browser-extension-0.1.0-alpha.5.zip',
-      file: 'fast-browser-extension-0.1.0-alpha.5.zip',
-      sha256: '748b1c310d432c36afa337661f4bb445b706e7551a4122a8c0bb939a2daa35f6',
+        + 'fast-browser-v0.1.0-alpha.6/fast-browser-extension-0.1.0-alpha.6.zip',
+      file: 'fast-browser-extension-0.1.0-alpha.6.zip',
+      sha256: '34266a9e9422980ba1b82ddb4f39641021159768bdbda22c55544e583d570070',
       id: 'bjlfojdaaanoliidngocnbcalhpfmlie',
-      version: '0.2.2',
+      version: '0.2.3',
     },
   });
+});
+
+// The literal pin above is a deliberate gate: re-pinning must be an explicit
+// edit. These invariants additionally catch shape drift a copied-in literal
+// would not, such as a URL left pointing at the previous release.
+test('bundled lock is internally consistent whatever it pins', async () => {
+  const bundledPath = new URL('../../runtime-lock.json', import.meta.url);
+  const lock = await loadRuntimeLock({ bundledPath });
+
+  for (const artifact of [lock.runtime, lock.extension]) {
+    assert.match(artifact.sha256, /^[0-9a-f]{64}$/);
+    assert.ok(artifact.url.startsWith('https://'));
+    assert.ok(artifact.url.endsWith(`/${artifact.file}`));
+    assert.ok(artifact.file.includes(lock.productVersion));
+    assert.ok(artifact.url.includes(`fast-browser-v${lock.productVersion}/`));
+  }
+  assert.notEqual(lock.runtime.sha256, lock.extension.sha256);
+  assert.match(lock.sourceCommit, /^[0-9a-f]{40}$/);
 });
 
 function launcherConfig(profile = 'safe', mode = 'manual') {
