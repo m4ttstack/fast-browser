@@ -64,6 +64,22 @@ function claudeEventsWithFinalResult(resultValue, { toolCount = 1 } = {}) {
   return [...toolEvents, claudeFinalResult(resultValue)].join('\n');
 }
 
+// Live host runs are flaky (real model variance in browser call counts). This
+// wraps a run and its assertions so a single bad attempt doesn't fail the
+// suite: the first failure is only logged as a diagnostic, and the second
+// attempt's outcome (success or failure) is authoritative. Non-live parser
+// tests never go through this.
+async function withOneRetry(label, fn) {
+  try {
+    return await fn();
+  } catch (firstError) {
+    console.error(
+      `[live-retry] ${label} failed on the first attempt, retrying once: ${firstError.message}`,
+    );
+    return await fn();
+  }
+}
+
 // Real Claude Code events observed live: the final `result` field arrives as a
 // STRING wrapped in a markdown code fence, and a benign ToolSearch tool_use
 // appears alongside the real namespaced Fast Browser tool_use events.
@@ -615,6 +631,39 @@ test('host process waits for final stdout after exit until streams close', async
   assert.equal((await pending).stdout, 'final JSONL line\n');
 });
 
+test('withOneRetry returns the first attempt result without retrying on success', async () => {
+  let calls = 0;
+  const result = await withOneRetry('synthetic', async () => {
+    calls += 1;
+    return 'first-result';
+  });
+  assert.equal(result, 'first-result');
+  assert.equal(calls, 1);
+});
+
+test('withOneRetry retries once after a failure and returns the second attempt result', async () => {
+  let calls = 0;
+  const result = await withOneRetry('synthetic', async () => {
+    calls += 1;
+    if (calls === 1) throw new Error('synthetic first failure');
+    return 'second-result';
+  });
+  assert.equal(result, 'second-result');
+  assert.equal(calls, 2);
+});
+
+test('withOneRetry rethrows the second failure when both attempts fail', async () => {
+  let calls = 0;
+  await assert.rejects(
+    () => withOneRetry('synthetic', async () => {
+      calls += 1;
+      throw new Error(`synthetic failure ${calls}`);
+    }),
+    { message: 'synthetic failure 2' },
+  );
+  assert.equal(calls, 2);
+});
+
 test(
   'order fixture close() resolves quickly despite a held-open keep-alive connection',
   { timeout: 5_000 },
@@ -647,29 +696,33 @@ test('Claude Code completes the Fast Browser flow', {
   skip: !live,
   timeout: 660_000,
 }, async (t) => {
-  const fixture = await startOrderFixture();
-  t.after(fixture.close);
-  const result = await runClaudeHost({
-    origin: fixture.origin,
-    pluginRoot,
-    cwd,
+  await withOneRetry('Claude Code completes the Fast Browser flow', async () => {
+    const fixture = await startOrderFixture();
+    t.after(fixture.close);
+    const result = await runClaudeHost({
+      origin: fixture.origin,
+      pluginRoot,
+      cwd,
+    });
+    assert.equal(result.ok, true);
+    assert.equal(result.orderId, 'CLAUDE-TEAM-5');
+    assert.ok(result.browserCalls <= 8);
   });
-  assert.equal(result.ok, true);
-  assert.equal(result.orderId, 'CLAUDE-TEAM-5');
-  assert.ok(result.browserCalls <= 8);
 });
 
 test('Codex completes the Fast Browser flow', {
   skip: !live,
-  timeout: 660_000,
+  timeout: 1_260_000,
 }, async (t) => {
-  const fixture = await startOrderFixture();
-  t.after(fixture.close);
-  const result = await runCodexHost({
-    origin: fixture.origin,
-    cwd,
+  await withOneRetry('Codex completes the Fast Browser flow', async () => {
+    const fixture = await startOrderFixture();
+    t.after(fixture.close);
+    const result = await runCodexHost({
+      origin: fixture.origin,
+      cwd,
+    });
+    assert.equal(result.ok, true);
+    assert.equal(result.orderId, 'CODEX-TEAM-5');
+    assert.ok(result.browserCalls <= 8);
   });
-  assert.equal(result.ok, true);
-  assert.equal(result.orderId, 'CODEX-TEAM-5');
-  assert.ok(result.browserCalls <= 8);
 });

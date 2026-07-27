@@ -3,8 +3,11 @@ profile policy for this task. Do not use browser-use:browser, any browser-use
 plugin, computer-use tools, or any other browser automation tool.
 
 Open the exact local origin {{ORIGIN}}. Complete an order for customer CODEX,
-plan Team, and 5 seats. Finish the flow in no more than 8 Fast Browser calls.
-Prefer browser_navigate, browser_snapshot, and one browser_run_code_unsafe call.
+plan Team, and 5 seats. You MUST work in this shape: call browser_navigate at
+most once, then call browser_snapshot at most once to scout the page, then
+complete the ENTIRE remaining flow (filling every field, clicking, and
+submitting) in ONE browser_run_code_unsafe call. Do not click, type, or
+snapshot step-by-step. Never exceed 8 total Fast Browser calls.
 
 Your final response must contain ONLY one JSON object, with no code fences and
 no prose, of the exact form
