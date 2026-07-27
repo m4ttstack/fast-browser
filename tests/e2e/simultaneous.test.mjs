@@ -14,6 +14,16 @@ import { startIdentityClient } from './helpers/identity-client.mjs';
 const execFile = promisify(execFileCallback);
 const pluginRoot = fileURLToPath(new URL('../../', import.meta.url));
 const live = process.env.FAST_BROWSER_LIVE_E2E === '1';
+// The tab-group label check is independently gated behind this being
+// explicitly set, never inferred or defaulted: Chrome refuses
+// --remote-debugging-port on the default user-data-dir a real paired
+// profile must use (proven live: identical flag on an isolated
+// --user-data-dir answered CDP; the default profile stayed refused; an
+// isolated profile cannot host the pairing). So this is permanently
+// unreachable on any Chrome that actually has the extension paired, and the
+// live test must never attempt it, nor fabricate its result, unless a human
+// opts in by setting this themselves against a Chrome they configured for it.
+const cdpUrl = process.env.FAST_BROWSER_LIVE_CDP_URL;
 
 const CHROME_APP_NAME = 'Google Chrome';
 
@@ -280,6 +290,7 @@ const EVIDENCE_KEYS = new Set([
   'schemaVersion',
   'completedAt',
   'clients',
+  'groupLabelsVerified',
   'groupLabelsDistinct',
   'chromeWasFrontmostAtStart',
   'focusChangedToFixtureTab',
@@ -315,9 +326,24 @@ function requireBoolean(value, label) {
   }
 }
 
+function requireNull(value, label) {
+  if (value !== null) {
+    throw new TypeError(`${label} must be null`);
+  }
+}
+
 // Only this exact key set may ever reach the evidence file: raw samples, tab
 // titles, URLs beyond the two allowed order IDs, tokens, or absolute home
 // paths all throw here instead of silently passing through.
+//
+// The tab-group label check is independently gated (it only runs when
+// FAST_BROWSER_LIVE_CDP_URL is explicitly set; see the live test below and
+// task-3-simultaneous-report.md for why: Chrome refuses
+// --remote-debugging-port on the default user-data-dir a real pairing must
+// use). groupLabelsVerified records whether that check ran at all.
+// groupLabelsDistinct and every client label must be null when it did not
+// (never a fabricated boolean/string standing in for an unmade observation),
+// and must be a real boolean / non-empty string when it did.
 export function serializeLiveEvidence(evidence) {
   assertOnlyKeys(evidence, EVIDENCE_KEYS, 'evidence');
   if (evidence.schemaVersion !== 1) {
@@ -329,14 +355,23 @@ export function serializeLiveEvidence(evidence) {
   if (!Array.isArray(evidence.clients) || evidence.clients.length !== 2) {
     throw new Error('evidence.clients must contain exactly two entries');
   }
+  requireBoolean(evidence.groupLabelsVerified, 'evidence.groupLabelsVerified');
+  if (evidence.groupLabelsVerified) {
+    requireBoolean(evidence.groupLabelsDistinct, 'evidence.groupLabelsDistinct');
+  } else {
+    requireNull(evidence.groupLabelsDistinct, 'evidence.groupLabelsDistinct (must be null when groupLabelsVerified is false)');
+  }
   for (const client of evidence.clients) {
     assertOnlyKeys(client, CLIENT_KEYS, 'evidence client');
-    requireNonEmptyString(client.label, 'evidence client label');
+    if (evidence.groupLabelsVerified) {
+      requireNonEmptyString(client.label, 'evidence client label');
+    } else {
+      requireNull(client.label, 'evidence client label (must be null when groupLabelsVerified is false)');
+    }
     requireNonEmptyString(client.orderId, 'evidence client orderId');
     requireNonNegativeNumber(client.browserCalls, 'evidence client browserCalls');
     requireNonNegativeNumber(client.elapsedMs, 'evidence client elapsedMs');
   }
-  requireBoolean(evidence.groupLabelsDistinct, 'evidence.groupLabelsDistinct');
   requireBoolean(evidence.chromeWasFrontmostAtStart, 'evidence.chromeWasFrontmostAtStart');
   requireBoolean(evidence.focusChangedToFixtureTab, 'evidence.focusChangedToFixtureTab');
   requireBoolean(evidence.killClaudeLeftCodexFunctional, 'evidence.killClaudeLeftCodexFunctional');
@@ -344,7 +379,9 @@ export function serializeLiveEvidence(evidence) {
   return `${JSON.stringify(evidence, null, 2)}\n`;
 }
 
-function validEvidence() {
+// groupLabelsVerified: true variant. The tab-group label check ran (i.e.
+// FAST_BROWSER_LIVE_CDP_URL was set) and both labels were actually observed.
+function validVerifiedEvidence() {
   return {
     schemaVersion: 1,
     completedAt: '2026-07-25T00:00:00.000Z',
@@ -352,6 +389,7 @@ function validEvidence() {
       { label: 'Claude #1', orderId: 'CLAUDE-TEAM-5', browserCalls: 2, elapsedMs: 1200 },
       { label: 'Codex #2', orderId: 'CODEX-SCALE-12', browserCalls: 2, elapsedMs: 1400 },
     ],
+    groupLabelsVerified: true,
     groupLabelsDistinct: true,
     chromeWasFrontmostAtStart: false,
     focusChangedToFixtureTab: false,
@@ -360,36 +398,92 @@ function validEvidence() {
   };
 }
 
-test('serializeLiveEvidence accepts a fully-populated evidence object with exactly the allowed keys', () => {
-  const serialized = serializeLiveEvidence(validEvidence());
-  assert.deepEqual(JSON.parse(serialized), validEvidence());
+// groupLabelsVerified: false variant. The tab-group label check was skipped
+// (FAST_BROWSER_LIVE_CDP_URL was not set: a permanently unreachable path on
+// any Chrome profile hosting the real pairing, per the proven environment
+// fact that Chrome refuses --remote-debugging-port on its default
+// user-data-dir). Nothing about the label was observed, so groupLabelsDistinct
+// and every client label are explicit null, never a fabricated value.
+function validUnverifiedEvidence() {
+  return {
+    ...validVerifiedEvidence(),
+    clients: [
+      { label: null, orderId: 'CLAUDE-TEAM-5', browserCalls: 2, elapsedMs: 1200 },
+      { label: null, orderId: 'CODEX-SCALE-12', browserCalls: 2, elapsedMs: 1400 },
+    ],
+    groupLabelsVerified: false,
+    groupLabelsDistinct: null,
+  };
+}
+
+test('serializeLiveEvidence accepts a fully-populated verified evidence object with exactly the allowed keys', () => {
+  const serialized = serializeLiveEvidence(validVerifiedEvidence());
+  assert.deepEqual(JSON.parse(serialized), validVerifiedEvidence());
+});
+
+test('serializeLiveEvidence accepts the unverified group-label shape (label check was skipped)', () => {
+  const serialized = serializeLiveEvidence(validUnverifiedEvidence());
+  assert.deepEqual(JSON.parse(serialized), validUnverifiedEvidence());
+});
+
+test('serializeLiveEvidence rejects groupLabelsDistinct true when groupLabelsVerified is false', () => {
+  // The exact fabricated-looking shape this schema exists to reject: a
+  // claimed distinctness result for a check that never ran.
+  const evidence = { ...validUnverifiedEvidence(), groupLabelsDistinct: true };
+  assert.throws(() => serializeLiveEvidence(evidence), TypeError);
+});
+
+test('serializeLiveEvidence rejects a non-null client label when groupLabelsVerified is false', () => {
+  const evidence = validUnverifiedEvidence();
+  evidence.clients[0] = { ...evidence.clients[0], label: 'Claude #1' };
+  assert.throws(() => serializeLiveEvidence(evidence), TypeError);
+});
+
+test('serializeLiveEvidence rejects a null groupLabelsDistinct when groupLabelsVerified is true', () => {
+  const evidence = { ...validVerifiedEvidence(), groupLabelsDistinct: null };
+  assert.throws(() => serializeLiveEvidence(evidence), TypeError);
+});
+
+test('serializeLiveEvidence rejects a null client label when groupLabelsVerified is true', () => {
+  const evidence = validVerifiedEvidence();
+  evidence.clients[0] = { ...evidence.clients[0], label: null };
+  assert.throws(() => serializeLiveEvidence(evidence), TypeError);
+});
+
+test('serializeLiveEvidence rejects a missing groupLabelsVerified flag', () => {
+  const evidence = validVerifiedEvidence();
+  delete evidence.groupLabelsVerified;
+  assert.throws(() => serializeLiveEvidence(evidence), TypeError);
 });
 
 test('serializeLiveEvidence rejects an unexpected top-level key', () => {
-  const evidence = { ...validEvidence(), rawSampleLog: ['Google Chrome'] };
+  const evidence = { ...validVerifiedEvidence(), rawSampleLog: ['Google Chrome'] };
   assert.throws(() => serializeLiveEvidence(evidence), /forbidden key/);
 });
 
 test('serializeLiveEvidence rejects an unexpected client key', () => {
-  const evidence = validEvidence();
+  const evidence = validVerifiedEvidence();
   evidence.clients[0] = { ...evidence.clients[0], pageTitle: 'Order complete' };
   assert.throws(() => serializeLiveEvidence(evidence), /forbidden key/);
 });
 
 test('serializeLiveEvidence rejects fewer or more than two client entries', () => {
-  const oneClient = { ...validEvidence(), clients: [validEvidence().clients[0]] };
+  const oneClient = { ...validVerifiedEvidence(), clients: [validVerifiedEvidence().clients[0]] };
   assert.throws(() => serializeLiveEvidence(oneClient), /exactly two/);
-  const threeClients = { ...validEvidence(), clients: [...validEvidence().clients, validEvidence().clients[0]] };
+  const threeClients = {
+    ...validVerifiedEvidence(),
+    clients: [...validVerifiedEvidence().clients, validVerifiedEvidence().clients[0]],
+  };
   assert.throws(() => serializeLiveEvidence(threeClients), /exactly two/);
 });
 
 test('serializeLiveEvidence rejects a non-boolean flag', () => {
-  const evidence = { ...validEvidence(), groupLabelsDistinct: 'true' };
+  const evidence = { ...validVerifiedEvidence(), groupLabelsDistinct: 'true' };
   assert.throws(() => serializeLiveEvidence(evidence), TypeError);
 });
 
 test('serializeLiveEvidence rejects a malformed completedAt timestamp', () => {
-  const evidence = { ...validEvidence(), completedAt: 'not-a-timestamp' };
+  const evidence = { ...validVerifiedEvidence(), completedAt: 'not-a-timestamp' };
   assert.throws(() => serializeLiveEvidence(evidence), TypeError);
 });
 
@@ -520,20 +614,35 @@ test('two identity-carrying Fast Browser clients drive the paired real Chrome si
   const focus = reduceFocusSamples(samples, { fixtureOrigins: [fixtureA.origin, fixtureB.origin] });
   assert.equal(focus.focusChangedToFixtureTab, false);
 
-  const [labelsA, labelsB] = await Promise.all([
-    clientA.queryGroupLabels(),
-    clientB.queryGroupLabels(),
-  ]);
-  const labelA = labelsA.find((title) => title.startsWith('Claude '));
-  const labelB = labelsB.find((title) => title.startsWith('Codex '));
-  assert.ok(labelA, 'expected a Claude-prefixed tab-group label');
-  assert.ok(labelB, 'expected a Codex-prefixed tab-group label');
-  assertDistinctGroupLabels(labelA, labelB);
-  // Derived directly from the two observed label strings (not a bare
-  // literal): assertDistinctGroupLabels above would already have thrown if
-  // this were false, but the evidence value itself must come from the
-  // actual comparison, never a hardcoded "true" alongside it.
-  const groupLabelsDistinct = labelA !== labelB;
+  // Independently gated: only attempt the CDP-based label query when
+  // FAST_BROWSER_LIVE_CDP_URL was explicitly set. It is not part of the
+  // FAST_BROWSER_LIVE_E2E-gated run by default because it is permanently
+  // unreachable against a Chrome that actually hosts the real pairing (see
+  // the cdpUrl comment above and task-3-simultaneous-report.md). When
+  // skipped: no CDP connection is attempted, no distinctness assertion
+  // runs, and the evidence below records this honestly rather than
+  // fabricating a result.
+  let labelA = null;
+  let labelB = null;
+  let groupLabelsVerified = false;
+  let groupLabelsDistinct = null;
+  if (cdpUrl) {
+    const [labelsA, labelsB] = await Promise.all([
+      clientA.queryGroupLabels(),
+      clientB.queryGroupLabels(),
+    ]);
+    labelA = labelsA.find((title) => title.startsWith('Claude '));
+    labelB = labelsB.find((title) => title.startsWith('Codex '));
+    assert.ok(labelA, 'expected a Claude-prefixed tab-group label');
+    assert.ok(labelB, 'expected a Codex-prefixed tab-group label');
+    assertDistinctGroupLabels(labelA, labelB);
+    // Derived directly from the two observed label strings (not a bare
+    // literal): assertDistinctGroupLabels above would already have thrown
+    // if this were false, but the evidence value itself must come from the
+    // actual comparison, never a hardcoded "true" alongside it.
+    groupLabelsDistinct = labelA !== labelB;
+    groupLabelsVerified = true;
+  }
 
   // kill() resolves only after the child has actually exited (see
   // identity-client.mjs), so this ordering cannot race the OS: clientB is
@@ -564,6 +673,7 @@ test('two identity-carrying Fast Browser clients drive the paired real Chrome si
       { label: labelA, orderId: resultA.orderId, browserCalls: resultA.browserCalls, elapsedMs: resultA.elapsedMs },
       { label: labelB, orderId: resultB.orderId, browserCalls: resultB.browserCalls, elapsedMs: resultB.elapsedMs },
     ],
+    groupLabelsVerified,
     groupLabelsDistinct,
     chromeWasFrontmostAtStart: focus.chromeWasFrontmostAtStart,
     focusChangedToFixtureTab: focus.focusChangedToFixtureTab,
