@@ -22,7 +22,10 @@ import { fileURLToPath } from 'node:url';
 import { applyMigration } from '../../lib/migration/apply.mjs';
 import { createMigrationBackup } from '../../lib/migration/backup.mjs';
 import { importLegacyData } from '../../lib/migration/import-data.mjs';
-import { inventoryLegacy } from '../../lib/migration/inventory.mjs';
+import {
+  inventoryLegacy,
+  UNMANAGED_TOKEN_KEY_PLACEHOLDER,
+} from '../../lib/migration/inventory.mjs';
 import { rollbackMigration } from '../../lib/migration/rollback.mjs';
 
 const fixtureRoot = fileURLToPath(new URL('../fixtures/legacy-home/', import.meta.url));
@@ -75,6 +78,17 @@ function sha256(bytes) {
 
 async function inventoryFixture(homeDir) {
   return inventoryLegacy(migrationPaths(homeDir));
+}
+
+async function readClaudeJson(homeDir) {
+  return JSON.parse(await readFile(path.join(homeDir, '.claude.json'), 'utf8'));
+}
+
+async function writeClaudeJson(homeDir, value) {
+  await writeFile(
+    path.join(homeDir, '.claude.json'),
+    `${JSON.stringify(value, null, 2)}\n`,
+  );
 }
 
 async function applyFixture(homeDir, overrides = {}) {
@@ -133,21 +147,172 @@ test('inventory recognizes only exact legacy registrations and import roots', as
   assert.equal(serialized.includes('keep.txt'), false);
 });
 
-test('inventory ignores malformed and lookalike registrations', async (t) => {
+test('inventory never mutates lookalike registrations but reports them as unmanaged candidates', async (t) => {
   const homeDir = await fixtureHome(t);
-  const claudeJson = path.join(homeDir, '.claude.json');
   assert.equal((await inventoryFixture(homeDir)).jsonEdits.length, 1);
-  const value = JSON.parse(await readFile(claudeJson, 'utf8'));
+  const value = await readClaudeJson(homeDir);
   value.mcpServers.playwright.args = ['@playwright/mcp@latest'];
   value.mcpServers['playwright-copy'] = {
     command: 'npx',
     args: ['@playwright/mcp@latest', '--extension'],
   };
-  await writeFile(claudeJson, `${JSON.stringify(value, null, 2)}\n`);
+  await writeClaudeJson(homeDir, value);
 
   const inventory = await inventoryFixture(homeDir);
   assert.deepEqual(inventory.jsonEdits, []);
-  assert.equal(JSON.stringify(inventory).includes('playwright-copy'), false);
+  assert.deepEqual(inventory.unmanagedCandidates, [
+    {
+      key: 'playwright',
+      command: 'npx',
+      argCount: 1,
+      envKeys: [UNMANAGED_TOKEN_KEY_PLACEHOLDER],
+    },
+    {
+      key: 'playwright-copy',
+      command: 'npx',
+      argCount: 2,
+      envKeys: [],
+    },
+  ]);
+  const serialized = JSON.stringify(inventory);
+  assert.equal(serialized.includes(secretFixture), false);
+  assert.equal(serialized.includes('@playwright/mcp@latest'), false);
+});
+
+test('inventory recognizes the local development node invocation of Playwright MCP', async (t) => {
+  const homeDir = await fixtureHome(t, 'fast-browser-migration-node-dev-');
+  const value = await readClaudeJson(homeDir);
+  value.mcpServers.playwright = {
+    command: 'node',
+    args: [
+      '/Users/example/dev/playwright/packages/playwright-mcp/lib/mcp-server.js',
+      '--snapshot-mode=none',
+      '--save-session',
+    ],
+    env: {
+      PLAYWRIGHT_MCP_EXTENSION: 'local-extension-id',
+      PLAYWRIGHT_MCP_EXTENSION_TOKEN: secretFixture,
+      PLAYWRIGHT_MCP_OUTPUT_DIR: '/Users/example/.playwright-mcp/output',
+      PLAYWRIGHT_MCP_TIMEOUT_SETTLE: '5000',
+    },
+  };
+  await writeClaudeJson(homeDir, value);
+
+  const inventory = await inventoryFixture(homeDir);
+  assert.equal(inventory.jsonEdits.length, 1);
+  assert.equal(inventory.jsonEdits[0].pointer, '/mcpServers/playwright');
+  assert.equal(
+    inventory.jsonEdits[0].tokenPointer,
+    '/mcpServers/playwright/env/PLAYWRIGHT_MCP_EXTENSION_TOKEN',
+  );
+  assert.deepEqual(inventory.unmanagedCandidates, []);
+  assert.equal(JSON.stringify(inventory).includes(secretFixture), false);
+});
+
+test('inventory keeps recognizing the published npx invocation unchanged', async (t) => {
+  const homeDir = await fixtureHome(t, 'fast-browser-migration-npx-unchanged-');
+  const inventory = await inventoryFixture(homeDir);
+  assert.deepEqual(inventory.jsonEdits.map((entry) => entry.pointer), ['/mcpServers/playwright']);
+  assert.equal(
+    inventory.jsonEdits[0].tokenPointer,
+    '/mcpServers/playwright/env/PLAYWRIGHT_MCP_EXTENSION_TOKEN',
+  );
+  assert.deepEqual(inventory.unmanagedCandidates, []);
+});
+
+test('inventory reports an unrecognized node Playwright candidate without mutating it', async (t) => {
+  const homeDir = await fixtureHome(t, 'fast-browser-migration-node-unmanaged-');
+  const value = await readClaudeJson(homeDir);
+  value.mcpServers.playwright = {
+    command: 'node',
+    args: ['/Users/example/dev/playwright/lib/mcp-server.js', '--headless'],
+    env: {
+      SOME_OTHER_VAR: 'value',
+    },
+  };
+  await writeClaudeJson(homeDir, value);
+
+  const inventory = await inventoryFixture(homeDir);
+  assert.deepEqual(inventory.jsonEdits, []);
+  assert.deepEqual(inventory.unmanagedCandidates, [{
+    key: 'playwright',
+    command: 'node',
+    argCount: 2,
+    envKeys: ['SOME_OTHER_VAR'],
+  }]);
+});
+
+test('inventory never reports an MCP server with no playwright signal anywhere', async (t) => {
+  const homeDir = await fixtureHome(t, 'fast-browser-migration-unrelated-');
+  const value = await readClaudeJson(homeDir);
+  value.mcpServers.other = {
+    command: 'other-server',
+    args: ['--flag'],
+    env: { OTHER_VAR: 'x' },
+  };
+  await writeClaudeJson(homeDir, value);
+
+  const inventory = await inventoryFixture(homeDir);
+  assert.deepEqual(inventory.unmanagedCandidates.map((entry) => entry.key), []);
+  assert.equal(JSON.stringify(inventory).includes('other-server'), false);
+});
+
+test('unmanaged candidates never expose env values or a raw token key name', async (t) => {
+  const homeDir = await fixtureHome(t, 'fast-browser-migration-candidate-redaction-');
+  const value = await readClaudeJson(homeDir);
+  value.mcpServers['playwright-dev'] = {
+    command: 'node',
+    args: ['/Users/example/dev/playwright/lib/mcp-server.js'],
+    env: {
+      PLAYWRIGHT_MCP_EXTENSION_TOKEN: 'super-secret-dev-token',
+      PLAYWRIGHT_MCP_OUTPUT_DIR: '/Users/example/.playwright-mcp/output',
+    },
+  };
+  await writeClaudeJson(homeDir, value);
+
+  const inventory = await inventoryFixture(homeDir);
+  const candidate = inventory.unmanagedCandidates.find((entry) => entry.key === 'playwright-dev');
+  assert.deepEqual(candidate, {
+    key: 'playwright-dev',
+    command: 'node',
+    argCount: 1,
+    envKeys: [UNMANAGED_TOKEN_KEY_PLACEHOLDER, 'PLAYWRIGHT_MCP_OUTPUT_DIR'],
+  });
+  const serialized = JSON.stringify(inventory);
+  assert.equal(serialized.includes('super-secret-dev-token'), false);
+  assert.equal(serialized.includes('/Users/example/.playwright-mcp/output'), false);
+});
+
+test('unmanaged candidates are informational only and do not affect apply or rollback', async (t) => {
+  const homeDir = await fixtureHome(t, 'fast-browser-migration-candidate-apply-');
+  const value = await readClaudeJson(homeDir);
+  const unmanagedEntry = {
+    command: 'node',
+    args: ['/Users/example/dev/playwright/lib/mcp-server.js'],
+    env: { PLAYWRIGHT_MCP_OUTPUT_DIR: '/tmp/output' },
+  };
+  value.mcpServers['playwright-dev'] = unmanagedEntry;
+  await writeClaudeJson(homeDir, value);
+
+  const inventoryBefore = await inventoryFixture(homeDir);
+  assert.equal(inventoryBefore.unmanagedCandidates.length, 1);
+
+  const { result } = await applyFixture(homeDir);
+  const current = await readClaudeJson(homeDir);
+  assert.equal('playwright' in current.mcpServers, false);
+  assert.deepEqual(current.mcpServers['playwright-dev'], unmanagedEntry);
+
+  let reads = 0;
+  await rollbackMigration(result.rollbackManifestPath, {
+    homeDir,
+    readMigratedToken: async () => {
+      reads += 1;
+      return secretFixture;
+    },
+  });
+  assert.equal(reads, 1);
+  const restored = await readClaudeJson(homeDir);
+  assert.deepEqual(restored, value);
 });
 
 test('inventory fails closed on malformed Claude JSON', async (t) => {
