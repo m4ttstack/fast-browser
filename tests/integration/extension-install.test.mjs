@@ -16,6 +16,7 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import test from 'node:test';
 
+import { buildContentManifestDigest } from '../../lib/extension/content-manifest.mjs';
 import { detectChromeExtension } from '../../lib/extension/detect.mjs';
 import { installExtension } from '../../lib/extension/install.mjs';
 
@@ -166,9 +167,12 @@ test('installs once, derives the exact manifest key ID, and writes a private mar
     fixture.manifest,
   );
   assert.equal((await stat(first.marker)).mode & 0o777, 0o600);
-  assert.deepEqual(JSON.parse(await readFile(first.marker, 'utf8')), {
+  const marker = JSON.parse(await readFile(first.marker, 'utf8'));
+  const expectedDigest = await buildContentManifestDigest(first.unpacked);
+  assert.deepEqual(marker, {
     schemaVersion: 1,
     lock: lockIdentity(lock),
+    contentDigest: expectedDigest,
   });
   assert.deepEqual(
     (await readdir(path.join(paths.extensionDir, lock.extension.version))).sort(),
@@ -286,9 +290,9 @@ test('detects exact IDs only in Default and Profile <N> without returning prefer
     extensionId: id,
     chromeUserDataDir: root,
   }), [
-    { profile: 'Default', installed: true, manifestVersion: '0.2.1' },
-    { profile: 'Profile 2', installed: true, manifestVersion: '0.2.2' },
-    { profile: 'Profile 3', installed: false, manifestVersion: null },
+    { profile: 'Default', installed: true, manifestVersion: '0.2.1', path: defaultManifest },
+    { profile: 'Profile 2', installed: true, manifestVersion: '0.2.2', path: null },
+    { profile: 'Profile 3', installed: false, manifestVersion: null, path: null },
   ]);
 });
 

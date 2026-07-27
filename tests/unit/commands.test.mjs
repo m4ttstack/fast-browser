@@ -40,6 +40,7 @@ import {
   RoutingTransactionError,
 } from '../../lib/hosts/file-transaction.mjs';
 import { PairingError } from '../../lib/keychain/pair.mjs';
+import { buildContentManifestDigest } from '../../lib/extension/content-manifest.mjs';
 
 test('exports dependency-injected lifecycle command functions', () => {
   assert.equal(typeof setup, 'function');
@@ -658,7 +659,9 @@ test('doctor real composition accepts complete injected platform adapters with n
         profile: 'Default',
         installed: true,
         manifestVersion: '1.0.0',
+        path: '/home/test/.fast-browser/extension/1.0.0/unpacked',
       }],
+      verifyExtensionContent: async () => true,
       hasToken: async () => true,
       checkDataPermissions: async () => {},
       openMcpTransport: async () => ({
@@ -678,6 +681,165 @@ test('doctor real composition accepts complete injected platform adapters with n
   );
   assert.equal(report.ok, true);
   assert.deepEqual(report.checks.map(({ status }) => status), Array(17).fill('pass'));
+});
+
+function extensionLock(version) {
+  return {
+    productVersion: '0.1.0-alpha.1',
+    runtime: { node: '>=20' },
+    extension: { id: 'extension-id', version },
+  };
+}
+
+// Builds a real, on-disk "already installed" extension: an unpacked
+// directory plus the installed.json marker install-time content digest, the
+// way extension/install.mjs leaves it after a verified install.
+async function setupManagedExtension(version, files) {
+  const home = await mkdtemp(path.join(tmpdir(), 'fast-browser-ext-content-'));
+  const extensionDir = path.join(home, 'extension');
+  const versionDir = path.join(extensionDir, version);
+  const unpacked = path.join(versionDir, 'unpacked');
+  for (const [relative, contents] of Object.entries(files)) {
+    const target = path.join(unpacked, relative);
+    await mkdir(path.dirname(target), { recursive: true });
+    await writeFile(target, contents);
+  }
+  const lock = extensionLock(version);
+  const contentDigest = await buildContentManifestDigest(unpacked);
+  await writeFile(
+    path.join(versionDir, 'installed.json'),
+    `${JSON.stringify({ schemaVersion: 1, lock: runtimeLockIdentity(lock), contentDigest }, null, 2)}\n`,
+  );
+  return { extensionDir, unpacked, lock };
+}
+
+async function extensionInstalledStatus({ extensionDir, lock, profiles }) {
+  const stubbed = Object.fromEntries(DOCTOR_CHECK_IDS
+    .filter((id) => id !== 'extension-installed')
+    .map((id) => [id, async () => ({ status: 'pass', message: `${id} passed.`, remediation: null })]));
+  const report = await doctor(
+    { profile: 'safe' },
+    {
+      checks: stubbed,
+      paths: {
+        homeDir: '/unused',
+        dataDir: '/unused',
+        configFile: '/unused',
+        runtimeDir: '/unused',
+        extensionDir,
+        pluginRoot: '/unused',
+      },
+      lock,
+      detectChromeExtension: async () => profiles,
+    },
+  );
+  return report.checks.find(({ id }) => id === 'extension-installed');
+}
+
+test('extension-installed passes when the loaded path is the managed directory and content matches', async () => {
+  const { extensionDir, unpacked, lock } = await setupManagedExtension('1.0.0', {
+    'manifest.json': '{"version":"1.0.0"}',
+    'lib/background.mjs': 'export const x = 1;\n',
+  });
+
+  const status = await extensionInstalledStatus({
+    extensionDir,
+    lock,
+    profiles: [{ profile: 'Default', installed: true, manifestVersion: '1.0.0', path: unpacked }],
+  });
+
+  assert.deepEqual(status, {
+    id: 'extension-installed',
+    status: 'pass',
+    message: 'The pinned Chrome extension is installed.',
+    remediation: null,
+  });
+});
+
+test('extension-installed fails when the loaded path matches but one file\'s bytes differ (the exact incident)', async () => {
+  const { extensionDir, unpacked, lock } = await setupManagedExtension('1.0.0', {
+    'manifest.json': '{"version":"1.0.0"}',
+    'lib/background.mjs': 'export const x = 1;\n',
+  });
+  // Simulate drift after install: the same on-disk directory now has
+  // different bytes than what was verified and recorded at install time.
+  await writeFile(path.join(unpacked, 'lib', 'background.mjs'), 'export const x = 2;\n');
+
+  const status = await extensionInstalledStatus({
+    extensionDir,
+    lock,
+    profiles: [{ profile: 'Default', installed: true, manifestVersion: '1.0.0', path: unpacked }],
+  });
+
+  assert.deepEqual(status, {
+    id: 'extension-installed',
+    status: 'fail',
+    message: 'The installed Chrome extension does not match the verified artifact content.',
+    remediation: 'Run `fast-browser setup` to reinstall the pinned extension.',
+  });
+});
+
+test('extension-installed fails when Chrome reports a loaded path outside the managed directory', async () => {
+  const { extensionDir, lock } = await setupManagedExtension('1.0.0', {
+    'manifest.json': '{"version":"1.0.0"}',
+    'lib/background.mjs': 'export const x = 1;\n',
+  });
+  const elsewhere = await mkdtemp(path.join(tmpdir(), 'fast-browser-ext-elsewhere-'));
+  await mkdir(path.join(elsewhere, 'lib'), { recursive: true });
+  await writeFile(path.join(elsewhere, 'manifest.json'), '{"version":"1.0.0"}');
+  await writeFile(path.join(elsewhere, 'lib', 'background.mjs'), 'export const x = 1;\n');
+
+  const status = await extensionInstalledStatus({
+    extensionDir,
+    lock,
+    profiles: [{ profile: 'Default', installed: true, manifestVersion: '1.0.0', path: elsewhere }],
+  });
+
+  assert.deepEqual(status, {
+    id: 'extension-installed',
+    status: 'fail',
+    message: 'The installed Chrome extension does not match the verified artifact content.',
+    remediation: 'Run `fast-browser setup` to reinstall the pinned extension.',
+  });
+});
+
+test('extension-installed fails, unchanged, when the extension is absent entirely', async () => {
+  const { extensionDir, lock } = await setupManagedExtension('1.0.0', {
+    'manifest.json': '{"version":"1.0.0"}',
+  });
+
+  const status = await extensionInstalledStatus({
+    extensionDir,
+    lock,
+    profiles: [{ profile: 'Default', installed: false, manifestVersion: null, path: null }],
+  });
+
+  assert.deepEqual(status, {
+    id: 'extension-installed',
+    status: 'fail',
+    message: 'The pinned Chrome extension is not installed.',
+    remediation: 'Load the unpacked extension artifact in Google Chrome.',
+  });
+});
+
+test('extension-installed fails on content drift even though the version string still matches the lock', async () => {
+  const { extensionDir, unpacked, lock } = await setupManagedExtension('1.0.0', {
+    'manifest.json': '{"version":"1.0.0"}',
+    'lib/background.mjs': 'export const x = 1;\n',
+  });
+  // The manifest version is untouched: a version-string-only check would
+  // still say PASS here. An extra file proves content, not just the
+  // version, is what the check now verifies.
+  await writeFile(path.join(unpacked, 'lib', 'extra.mjs'), 'export const y = 1;\n');
+
+  const profiles = [{ profile: 'Default', installed: true, manifestVersion: '1.0.0', path: unpacked }];
+  const status = await extensionInstalledStatus({ extensionDir, lock, profiles });
+
+  assert.equal(status.status, 'fail');
+  assert.equal(
+    JSON.parse(await readFile(path.join(unpacked, 'manifest.json'), 'utf8')).version,
+    lock.extension.version,
+  );
 });
 
 test('tool contract requires browser tools and unsafe annotations', () => {

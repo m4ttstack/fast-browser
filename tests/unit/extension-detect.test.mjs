@@ -40,7 +40,7 @@ test('detects an unpacked extension listed only in Secure Preferences by reading
     extensionId,
     chromeUserDataDir: root,
   }), [
-    { profile: 'Default', installed: true, manifestVersion: '0.2.1' },
+    { profile: 'Default', installed: true, manifestVersion: '0.2.1', path: unpackedDirectory },
   ]);
 });
 
@@ -60,7 +60,7 @@ test('treats a Secure Preferences entry with state 0 as not installed even with 
     extensionId,
     chromeUserDataDir: root,
   }), [
-    { profile: 'Default', installed: false, manifestVersion: null },
+    { profile: 'Default', installed: false, manifestVersion: null, path: null },
   ]);
 });
 
@@ -73,7 +73,7 @@ test('reports not installed when the extension is absent from both Preferences a
     extensionId,
     chromeUserDataDir: root,
   }), [
-    { profile: 'Default', installed: false, manifestVersion: null },
+    { profile: 'Default', installed: false, manifestVersion: null, path: null },
   ]);
 });
 
@@ -87,7 +87,7 @@ test('resolves an unreadable or malformed Secure Preferences file to not install
   });
 
   assert.deepEqual(result, [
-    { profile: 'Default', installed: false, manifestVersion: null },
+    { profile: 'Default', installed: false, manifestVersion: null, path: null },
   ]);
 });
 
@@ -105,7 +105,7 @@ test('still detects an extension recorded only in Preferences exactly as before'
     extensionId,
     chromeUserDataDir: root,
   }), [
-    { profile: 'Default', installed: true, manifestVersion: '0.2.2' },
+    { profile: 'Default', installed: true, manifestVersion: '0.2.2', path: null },
   ]);
 });
 
@@ -132,7 +132,7 @@ test('prefers a Preferences version over a differing Secure Preferences version 
     extensionId,
     chromeUserDataDir: root,
   }), [
-    { profile: 'Default', installed: true, manifestVersion: '0.2.2' },
+    { profile: 'Default', installed: true, manifestVersion: '0.2.2', path: null },
   ]);
 });
 
@@ -151,6 +151,6 @@ test('resolves a Secure Preferences entry whose path has no readable manifest.js
     extensionId,
     chromeUserDataDir: root,
   }), [
-    { profile: 'Default', installed: false, manifestVersion: null },
+    { profile: 'Default', installed: false, manifestVersion: null, path: null },
   ]);
 });
