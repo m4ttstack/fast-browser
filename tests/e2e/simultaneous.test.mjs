@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile as execFileCallback } from 'node:child_process';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
@@ -9,7 +9,7 @@ import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 
 import { startOrderFixture } from '../fixtures/order-flow/server.mjs';
-import { startIdentityClient } from './helpers/identity-client.mjs';
+import { ensureIdentityDirectories, startIdentityClient } from './helpers/identity-client.mjs';
 
 const execFile = promisify(execFileCallback);
 const pluginRoot = fileURLToPath(new URL('../../', import.meta.url));
@@ -488,6 +488,44 @@ test('serializeLiveEvidence rejects a malformed completedAt timestamp', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Regression coverage for the exact defect a real live run surfaced:
+// startIdentityClient (tests/e2e/helpers/identity-client.mjs) passed
+// outputDir straight to mcp-client.mjs's runtimeCliFor, which writes a real
+// file into it, without ever creating that directory first. This exercises
+// the small extracted helper (ensureIdentityDirectories) directly, so it is
+// a real regression test without connecting to anything live or gated.
+// ---------------------------------------------------------------------------
+
+test('ensureIdentityDirectories creates a missing outputDir and workspaceDir', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'fast-browser-identity-dirs-'));
+  try {
+    // Nested paths that do not exist yet, matching the live test's own
+    // path.join(outputRoot, 'claude-output')-style construction: mkdtemp
+    // only creates `root` itself, never these children.
+    const outputDir = path.join(root, 'nested', 'claude-output');
+    const workspaceDir = path.join(root, 'nested', 'Claude');
+    await ensureIdentityDirectories({ outputDir, workspaceDir });
+    const [outputStat, workspaceStat] = await Promise.all([stat(outputDir), stat(workspaceDir)]);
+    assert.equal(outputStat.isDirectory(), true);
+    assert.equal(workspaceStat.isDirectory(), true);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('ensureIdentityDirectories tolerates directories that already exist', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'fast-browser-identity-dirs-'));
+  try {
+    const outputDir = path.join(root, 'claude-output');
+    const workspaceDir = path.join(root, 'Claude');
+    await Promise.all([mkdir(outputDir), mkdir(workspaceDir)]);
+    await assert.doesNotReject(() => ensureIdentityDirectories({ outputDir, workspaceDir }));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // Live-only helpers below. Used exclusively by the FAST_BROWSER_LIVE_E2E
 // gated test at the bottom of this file, which this task's brief forbids
 // executing. Never called by any test above this line.
@@ -547,8 +585,16 @@ test('two identity-carrying Fast Browser clients drive the paired real Chrome si
   skip: !live,
   timeout: 300_000,
 }, async (t) => {
+  // node:test runs t.after() hooks in REGISTRATION order, not LIFO
+  // (verified empirically: three t.after() calls print in the order they
+  // were added). That makes registration order a real dependency ordering,
+  // not cosmetic: outputRoot must not be rm'd until every client whose
+  // runtime process uses paths under it (--output-dir, cwd) has been
+  // closed, and those clients must not be closed until the fixtures they
+  // were talking to no longer matter. So directory removal is registered
+  // LAST, below, after every client-close hook, even though outputRoot
+  // itself is created first.
   const outputRoot = await mkdtemp(path.join(os.tmpdir(), 'fast-browser-simultaneous-'));
-  t.after(() => rm(outputRoot, { recursive: true, force: true }));
   const workspaceRoot = path.join(outputRoot, 'workspaces');
   await mkdir(workspaceRoot, { recursive: true });
   // These workspace directory basenames are what background.ts turns into
@@ -562,19 +608,39 @@ test('two identity-carrying Fast Browser clients drive the paired real Chrome si
 
   const fixtureA = await startOrderFixture();
   const fixtureB = await startOrderFixture();
-  t.after(() => Promise.all([fixtureA.close(), fixtureB.close()]));
 
+  // Created explicitly here (belt and suspenders on top of
+  // startIdentityClient's own defensive ensureIdentityDirectories call):
+  // a real live run surfaced that these were never created before this
+  // fix, which made runtimeCliFor's writeFile fail with ENOENT, mapped to
+  // the generic "could not be extracted" error.
+  const claudeOutputDir = path.join(outputRoot, 'claude-output');
+  const codexOutputDir = path.join(outputRoot, 'codex-output');
+  await Promise.all([
+    mkdir(claudeOutputDir, { recursive: true }),
+    mkdir(codexOutputDir, { recursive: true }),
+  ]);
+
+  // Cleanup is registered right after each client connects (not batched
+  // afterward): if clientB's connection attempt below throws, clientA must
+  // still be torn down rather than leaking its child process. These two
+  // hooks are registered before the fixture-close and outputRoot-rm hooks
+  // below, so (per the registration-order note above) clients are always
+  // closed first at cleanup time.
   let clientA = await startIdentityClient({
     identity: 'claude',
-    outputDir: path.join(outputRoot, 'claude-output'),
+    outputDir: claudeOutputDir,
     workspaceDir: workspaceA,
   });
+  t.after(() => clientA?.close().catch(() => {}));
   const clientB = await startIdentityClient({
     identity: 'codex',
-    outputDir: path.join(outputRoot, 'codex-output'),
+    outputDir: codexOutputDir,
     workspaceDir: workspaceB,
   });
-  t.after(() => Promise.all([clientA?.close(), clientB.close()].map((p) => p?.catch(() => {}))));
+  t.after(() => clientB.close().catch(() => {}));
+  t.after(() => Promise.all([fixtureA.close(), fixtureB.close()]));
+  t.after(() => rm(outputRoot, { recursive: true, force: true }));
 
   const samples = [];
   // Minor fix: an all-failed (or never-attempted) sampling run must not
@@ -652,9 +718,16 @@ test('two identity-carrying Fast Browser clients drive the paired real Chrome si
   const killClaudeLeftCodexFunctional = Boolean(postKill);
   assert.equal(killClaudeLeftCodexFunctional, true);
 
+  // A third output directory, distinct from claudeOutputDir above (a fresh
+  // client needs its own runtime working directory). Found during the
+  // line-by-line audit: this one had the exact same missing-mkdir defect
+  // as the original two, just not named in the report that first surfaced
+  // the bug.
+  const claudeReconnectOutputDir = path.join(outputRoot, 'claude-output-reconnect');
+  await mkdir(claudeReconnectOutputDir, { recursive: true });
   const freshClientA = await startIdentityClient({
     identity: 'claude',
-    outputDir: path.join(outputRoot, 'claude-output-reconnect'),
+    outputDir: claudeReconnectOutputDir,
     workspaceDir: workspaceA,
   });
   const postReconnectA = await freshClientA.callTool('browser_navigate', { url: fixtureA.origin });

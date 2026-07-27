@@ -28,6 +28,7 @@
 // fabricating a result; this file never swallows that failure.
 
 import path from 'node:path';
+import { mkdir } from 'node:fs/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -43,6 +44,29 @@ const IDENTITY_CLIENT_INFO = {
   claude: { name: 'claude-code', version: '0.0.0-live-e2e' },
   codex: { name: 'codex', version: '0.0.0-live-e2e' },
 };
+
+// A real live run surfaced this exact defect: mcp-client.mjs's
+// runtimeCliFor writes the validated runtime archive into outputDir with a
+// plain `writeFile(..., { flag: 'wx' })`, which requires outputDir to
+// already exist (it does not create parent directories), and
+// StdioClientTransport's `cwd: outputDir` has the same requirement. A
+// caller passing a path that was never created (as this file's own live
+// test did, three times, before this fix) got a generic, misleading "could
+// not be extracted" error with no hint the real problem was ENOENT on a
+// missing directory. workspaceDir does not strictly need to exist on disk
+// (the runtime only ever takes its basename as a string; see
+// packages/extension/src/background.ts and
+// packages/playwright-core/src/tools/utils/mcp/server.ts's firstRootPath in
+// the runtime reference worktree, neither of which stats or reads it), but
+// creating it too is cheap and removes the assumption entirely rather than
+// relying on every call site remembering to create it itself. Exported so
+// this can be regression-tested without connecting to anything live.
+export async function ensureIdentityDirectories({ outputDir, workspaceDir }) {
+  await Promise.all([
+    mkdir(outputDir, { recursive: true }),
+    mkdir(workspaceDir, { recursive: true }),
+  ]);
+}
 
 export async function startIdentityClient({
   identity,
@@ -66,6 +90,10 @@ export async function startIdentityClient({
       + 'queryGroupLabelsViaExtensionDebugger below for how to launch Chrome so that works.',
     );
   }
+  // Defensive: this helper cannot be misused the way its own live test
+  // originally misused it. Idempotent (recursive: true) so callers that
+  // already created these directories themselves are unaffected.
+  await ensureIdentityDirectories({ outputDir, workspaceDir });
 
   const lock = await loadRuntimeLock({ bundledPath: path.join(pluginRoot, 'runtime-lock.json') });
   const cli = await runtimeCliFor({ outputDir, releaseDir });
