@@ -171,16 +171,57 @@ test('Codex browser-driver smoke uses one bounded ephemeral read-only execution'
       '--ephemeral',
       '--sandbox',
       'read-only',
-      '--ask-for-approval',
-      'never',
       '--json',
       '--skip-git-repo-check',
       '-C',
       '/repo',
       'Delegate to browser_driver. Return exactly FAST_BROWSER_DRIVER_OK without using browser tools.',
     ],
-    { timeoutMs: 10_000 },
+    { timeoutMs: 60_000 },
   ]]);
+});
+
+test('Codex browser-driver smoke omits --ask-for-approval, which exec rejects as an unknown flag', async () => {
+  const calls = [];
+  await runCodexBrowserDriverSmoke({
+    cwd: '/repo',
+    run: async (command, args, options) => {
+      calls.push([command, args, options]);
+      return {
+        exitCode: 0,
+        stdout: `${JSON.stringify({
+          type: 'item.completed',
+          item: { type: 'agent_message', text: 'FAST_BROWSER_DRIVER_OK' },
+        })}\n`,
+        stderr: '',
+      };
+    },
+  });
+
+  const [, args] = calls[0];
+  assert.equal(args.includes('--ask-for-approval'), false);
+  assert.equal(args.includes('never'), false);
+});
+
+test('Codex browser-driver smoke allows 60 seconds for a real agent run', async () => {
+  const calls = [];
+  await runCodexBrowserDriverSmoke({
+    cwd: '/repo',
+    run: async (command, args, options) => {
+      calls.push([command, args, options]);
+      return {
+        exitCode: 0,
+        stdout: `${JSON.stringify({
+          type: 'item.completed',
+          item: { type: 'agent_message', text: 'FAST_BROWSER_DRIVER_OK' },
+        })}\n`,
+        stderr: '',
+      };
+    },
+  });
+
+  const [, , options] = calls[0];
+  assert.equal(options.timeoutMs, 60_000);
 });
 
 test('Codex smoke recognizes only structured rejection of the preferred model', async () => {
