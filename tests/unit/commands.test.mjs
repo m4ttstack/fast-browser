@@ -2628,6 +2628,54 @@ test('CLI main renders exact setup human ending and JSON without invoking other 
   assert.deepEqual(JSON.parse(writes.join('')), report);
 });
 
+test('CLI migrate apply human mode adds a count-only warning exactly when unmanaged candidates exist', async () => {
+  const writes = [];
+  const cleanReport = {
+    changed: true,
+    imported: null,
+    backupManifestPath: '/home/test/.fast-browser/backups/migration-1/manifest.json',
+    rollbackManifestPath: '/home/test/.fast-browser/backups/migration-1/rollback.json',
+    rollbackCommand: 'fast-browser migrate --rollback migration-1/rollback.json',
+    unmanagedCandidates: [],
+  };
+  await main(
+    { command: 'migrate', json: false },
+    { commands: { migrate: async () => cleanReport }, write: (text) => writes.push(text) },
+  );
+  assert.equal(writes.join(''), 'Migration complete.\n');
+
+  writes.length = 0;
+  const withCandidates = {
+    ...cleanReport,
+    unmanagedCandidates: [
+      {
+        key: 'playwright-dev',
+        command: 'node',
+        argCount: 1,
+        envKeys: ['PLAYWRIGHT_MCP_OUTPUT_DIR'],
+      },
+      { key: 'other-playwright', command: 'python', argCount: 0, envKeys: [] },
+    ],
+  };
+  await main(
+    { command: 'migrate', json: false },
+    { commands: { migrate: async () => withCandidates }, write: (text) => writes.push(text) },
+  );
+  assert.equal(
+    writes.join(''),
+    'Migration complete.\n'
+      + 'Warning: 2 unmanaged Playwright-looking MCP entries were left untouched;'
+      + ' rerun with --json for details.\n',
+  );
+
+  writes.length = 0;
+  await main(
+    { command: 'migrate', json: true },
+    { commands: { migrate: async () => withCandidates }, write: (text) => writes.push(text) },
+  );
+  assert.deepEqual(JSON.parse(writes.join('')), withCandidates);
+});
+
 test('CLI help and version are side-effect free', async () => {
   const writes = [];
   const commands = new Proxy({}, { get: () => () => assert.fail('command invoked') });

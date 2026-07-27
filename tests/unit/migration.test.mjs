@@ -315,6 +315,33 @@ test('unmanaged candidates are informational only and do not affect apply or rol
   assert.deepEqual(restored, value);
 });
 
+test('apply returns unmanaged candidates in the report with no env value, token, or arg value leak', async (t) => {
+  const homeDir = await fixtureHome(t, 'fast-browser-migration-candidate-report-');
+  const value = await readClaudeJson(homeDir);
+  value.mcpServers['playwright-dev'] = {
+    command: 'node',
+    args: ['/Users/example/dev/playwright/lib/mcp-server.js', '--headless'],
+    env: {
+      PLAYWRIGHT_MCP_EXTENSION_TOKEN: 'super-secret-dev-token',
+      PLAYWRIGHT_MCP_OUTPUT_DIR: '/Users/example/.playwright-mcp/output',
+    },
+  };
+  await writeClaudeJson(homeDir, value);
+
+  const { result } = await applyFixture(homeDir);
+  assert.deepEqual(result.unmanagedCandidates, [{
+    key: 'playwright-dev',
+    command: 'node',
+    argCount: 2,
+    envKeys: [UNMANAGED_TOKEN_KEY_PLACEHOLDER, 'PLAYWRIGHT_MCP_OUTPUT_DIR'],
+  }]);
+  const serialized = JSON.stringify(result);
+  assert.equal(serialized.includes('super-secret-dev-token'), false);
+  assert.equal(serialized.includes(secretFixture), false);
+  assert.equal(serialized.includes('/Users/example/.playwright-mcp/output'), false);
+  assert.equal(serialized.includes('/Users/example/dev/playwright/lib/mcp-server.js'), false);
+});
+
 test('inventory fails closed on malformed Claude JSON', async (t) => {
   const homeDir = await fixtureHome(t);
   await writeFile(path.join(homeDir, '.claude.json'), '{"mcpServers":');
