@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, rm, stat } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -10,6 +10,12 @@ import { installCodex, uninstallCodex } from '../../lib/hosts/codex.mjs';
 
 const pluginRoot = path.resolve(import.meta.dirname, '../..');
 const repositoryRoot = path.resolve(pluginRoot, '../..');
+// Read from the manifest rather than pinned: a literal version here turns
+// every release bump into an unrelated failure and asserts nothing the
+// manifest does not already state.
+const pluginVersion = JSON.parse(
+  await readFile(path.join(pluginRoot, 'package.json'), 'utf8'),
+).version;
 
 function parseJson(result) {
   assert.equal(result.exitCode, 0, `${result.command} exited ${result.exitCode}`);
@@ -77,7 +83,7 @@ test('both host adapters resolve the local catalog from isolated homes', {
     'cache',
     'mattstack',
     'fast-browser',
-    '0.1.0-alpha.1',
+    pluginVersion,
   ))).isDirectory());
 
   assert.equal((await uninstallClaude({ run: isolatedRun })).changed, true);
@@ -100,8 +106,8 @@ test('both host adapters resolve the local catalog from isolated homes', {
   const claudeResolvedPlugin = path.resolve(repositoryRoot, claudePlugin.source);
   const codexResolvedPlugin = codexPlugin.source.path;
 
-  assert.equal(claudePlugin.version, '0.1.0-alpha.1');
-  assert.equal(codexPlugin.version, '0.1.0-alpha.1');
+  assert.equal(claudePlugin.version, pluginVersion);
+  assert.equal(codexPlugin.version, pluginVersion);
   assert.equal(claudeResolvedPlugin, pluginRoot);
   assert.equal(codexResolvedPlugin, pluginRoot);
   assert.equal(claudeResolvedPlugin, codexResolvedPlugin);

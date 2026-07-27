@@ -227,32 +227,36 @@ test('npm package contains only portable deployable Fast Browser assets', async 
 
   const readme = textByPath.get('README.md');
   const normalizedReadme = readme.replace(/\s+/g, ' ');
-  // These named alpha.5 literally, so they kept asserting a bundle that the
-  // lock had long since moved past -- the same rot the notices had.
-  assert.match(normalizedReadme, /installs on its own without a local artifact bundle/i);
-  assert.doesNotMatch(normalizedReadme, /not an installable candidate/i);
+  // Version-specific filenames stay placeholders: these assertions used to
+  // name alpha.5 literally and kept vouching for a bundle the lock had moved
+  // past several releases earlier.
   assert.match(normalizedReadme, /fast-browser-release-<version>\.json/);
   assert.match(normalizedReadme, /fast-browser-mcp-<version>\.tar\.gz/);
   assert.match(normalizedReadme, /fast-browser-extension-<version>\.zip/);
+  assert.doesNotMatch(normalizedReadme, /not an installable candidate/i);
+  // The package IS published, so the README must lead with the real install
+  // command rather than describing npx as unavailable.
+  assert.match(normalizedReadme, /npx @mattstack\/fast-browser setup --host both/);
+  assert.doesNotMatch(normalizedReadme, /npx is not available/i);
   assert.match(
     readme,
-    /setup[\s\S]*--source \/path\/to\/mattstack[\s\S]*--runtime-lock \/absolute\/path\/to\/fast-browser-release-[0-9a-z.-]+\.json[\s\S]*--host both[\s\S]*--profile safe/,
+    /setup[\s\S]*--runtime-lock \/absolute\/path\/to\/fast-browser-release-<version>\.json[\s\S]*--host both[\s\S]*--profile safe/,
   );
-  assert.match(
-    normalizedReadme,
-    /`--runtime-lock` is optional now that the pinned release is public/i,
-  );
-  assert.match(
-    normalizedReadme,
-    /npx[\s\S]*(?:license|licensed)[\s\S]*(?:publisher|publish)[\s\S]*runtime release/i,
-  );
+  // npm renders README images only from absolute URLs, so a relative logo path
+  // silently shows as broken on the package page.
+  const logo = normalizedReadme.match(/<img src="([^"]*logo[^"]*)"/)?.[1];
+  assert.ok(logo, 'the README shows the logo');
+  assert.match(logo, /^https:\/\/raw\.githubusercontent\.com\//, 'logo URL must be absolute');
 
   const rootReadme = await readFile(path.join(repositoryRoot, 'README.md'), 'utf8');
   const normalizedRootReadme = rootReadme.replace(/\s+/g, ' ');
   // The pinned release is published, so the README must no longer tell users
   // a local artifact bundle is the only way in.
-  assert.match(normalizedRootReadme, /installs on its own without a local artifact bundle/i);
+  // The package is published, so the repo landing page must lead with the
+  // real install command instead of describing it as unavailable.
+  assert.match(normalizedRootReadme, /npx @mattstack\/fast-browser setup --host both/);
   assert.doesNotMatch(normalizedRootReadme, /not an installable candidate/i);
+  assert.doesNotMatch(normalizedRootReadme, /not published to npm/i);
   assert.match(
     normalizedRootReadme,
     /--runtime-lock \/absolute\/path\/to\/fast-browser-release-[0-9a-z.-]+\.json/,

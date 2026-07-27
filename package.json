@@ -1,6 +1,6 @@
 {
   "name": "@mattstack/fast-browser",
-  "version": "0.1.0-alpha.1",
+  "version": "0.1.0-alpha.2",
   "description": "Fast Playwright browser automation for Claude Code and Codex",
   "type": "module",
   "private": false,
@@ -16,6 +16,7 @@
     ".codex-plugin/",
     ".mcp.json",
     "adapters/",
+    "assets/",
     "agents/",
     "bin/",
     "builtins/",

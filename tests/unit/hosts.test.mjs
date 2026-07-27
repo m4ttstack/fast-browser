@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { realpath } from 'node:fs/promises';
+import { readFile, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import test from 'node:test';
 
@@ -10,6 +10,9 @@ import { installCodex, uninstallCodex } from '../../lib/hosts/codex.mjs';
 const pluginRoot = path.resolve(import.meta.dirname, '../..');
 const source = path.resolve(pluginRoot, '../..');
 const gitSource = 'mattstack/mattstack';
+const pluginVersion = JSON.parse(
+  await readFile(path.join(pluginRoot, 'package.json'), 'utf8'),
+).version;
 const TRUNCATION_MARKER = '\n[output truncated at 1048576 bytes]\n';
 
 function result(command, args, stdout = '', overrides = {}) {
@@ -42,7 +45,7 @@ const claudeNoMarketplaces = 'No marketplaces configured\n';
 const claudeInstalledCurrent = `Installed plugins:
 
   ❯ fast-browser@mattstack
-    Version: 0.1.0-alpha.1
+    Version: ${pluginVersion}
     Scope: user
     Status: ✔ enabled
 `;
@@ -70,7 +73,7 @@ const codexMarketplace = JSON.stringify({
   }],
 });
 
-function codexPlugins(version = '0.1.0-alpha.1', marketplaceSource = source) {
+function codexPlugins(version = pluginVersion, marketplaceSource = source) {
   return JSON.stringify({
     installed: [{
       pluginId: 'fast-browser@mattstack',
@@ -159,7 +162,7 @@ test('refreshes an exact Claude marketplace and leaves the matching version inst
 
 test('refreshes an exact Codex marketplace and leaves the matching version installed', async () => {
   const { calls, run } = scriptedRunner([
-    { stdout: codexPlugins('0.1.0-alpha.1', gitSource) },
+    { stdout: codexPlugins(pluginVersion, gitSource) },
     {
       stdout: JSON.stringify({
         marketplaces: [{
@@ -187,7 +190,7 @@ test('refreshes an exact Codex marketplace and leaves the matching version insta
 });
 
 test('replaces only fast-browser@mattstack when the Claude version differs', async () => {
-  const oldVersion = claudeInstalledCurrent.replace('0.1.0-alpha.1', '0.0.9');
+  const oldVersion = claudeInstalledCurrent.replace(pluginVersion, '0.0.9');
   const { calls, run } = scriptedRunner([
     { stdout: oldVersion },
     { stdout: claudeGitMarketplace },
@@ -466,7 +469,7 @@ test('requires the exact marketplace source type as well as source text', async 
     },
   ]);
   const codex = scriptedRunner([
-    { stdout: codexPlugins('0.1.0-alpha.1', gitSource) },
+    { stdout: codexPlugins(pluginVersion, gitSource) },
     {
       stdout: JSON.stringify({
         marketplaces: [{
@@ -702,7 +705,7 @@ test('Codex validates upgrade, remove, and add result identities', async () => {
   const cases = [
     {
       responses: [
-        { stdout: codexPlugins('0.1.0-alpha.1', gitSource) },
+        { stdout: codexPlugins(pluginVersion, gitSource) },
         gitMarketplace,
         { stdout: '{"marketplaceName":"other"}' },
       ],
