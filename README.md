@@ -48,17 +48,44 @@ lookups are narrow, so pages come back as the few facts you needed rather than
 a full accessibility dump.
 
 **Two hosts, one setup.** Claude Code and Codex get the same tools, the same
-three skills, and the same macro library. Both can drive the same Chrome at the
-same time without colliding.
+three skills, and the same macro library.
 
-**It stays out of your way.** Fast Browser opens its work in its own tab group
-and does not steal focus, so the agent can work while you keep using the
-browser.
+**It stays out of your way.** Fast Browser does not steal focus, so an agent
+can work while you keep using the browser.
 
-**Pinned and verified, not "latest".** The runtime and extension are locked to
+## Many agents, one browser
+
+Run as many agents as you like against the same Chrome. They do not clobber
+each other.
+
+Each connection gets **its own tab group, labelled with that client's workspace
+folder** — so a Claude session in `~/code/checkout` and a Codex session in
+`~/code/billing` show up as clearly separate, named groups in your tab strip
+and you can see at a glance who is doing what.
+
+Isolation is per connection, not just cosmetic:
+
+- **An agent only controls the tabs it attached.** It cannot see or drive
+  another agent's tabs, or the ones you are using yourself.
+- **A second agent connecting does not disconnect the first.** Single-tenant
+  extensions drop the existing relay when a new client arrives; this one does
+  not.
+- **Killing one agent leaves the others working**, and it can reconnect later
+  without disturbing anyone.
+
+This is covered by the runtime's extension test suite, and verified live: a
+Claude Code session and a Codex session drove the same real Chrome
+concurrently through separate checkout flows, killing one left the other
+functional, and both reconnected cleanly.
+
+## Pinned, not "latest"
+
+The runtime and extension are locked to
 exact versions with SHA-256 checksums. Every install verifies the bytes on
-disk, and the launcher refuses to run anything that does not match. `doctor`
-runs 18 checks over the whole installation.
+disk, and the launcher refuses to run anything that does not match, so a
+tampered or half-written artifact fails closed instead of running. `doctor`
+runs 18 checks across the platform, both hosts, routing, the pinned artifacts,
+what Chrome actually loaded, pairing, permissions, and the live MCP contract.
 
 ## Requirements
 
