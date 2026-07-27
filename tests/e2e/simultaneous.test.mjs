@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile as execFileCallback } from 'node:child_process';
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
@@ -23,6 +23,18 @@ const CHROME_APP_NAME = 'Google Chrome';
 // only these derived booleans.
 // ---------------------------------------------------------------------------
 
+// A real browser tab URL is always fully qualified ("http://host:port/path"),
+// so its origin is exactly what new URL(...).origin reports. Returns null
+// for anything unparsable rather than throwing, since a malformed sample
+// must not crash the reducer.
+function originOf(url) {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return null;
+  }
+}
+
 // `samples` is an in-memory array of { app, tabUrl } snapshots taken during
 // the live run (tabUrl is only ever populated when app === CHROME_APP_NAME).
 // This function is the ONLY place that looks at raw sample contents; its
@@ -34,10 +46,23 @@ export function reduceFocusSamples(samples, { fixtureOrigins } = {}) {
   if (!Array.isArray(fixtureOrigins) || fixtureOrigins.length === 0) {
     throw new TypeError('fixtureOrigins must be a non-empty array of origins');
   }
+  // fixtureOrigins itself may or may not carry a trailing slash; normalize
+  // once so the comparison below is origin-vs-origin, never a raw string
+  // comparison a browser's own URL normalization (added trailing slash,
+  // added path/query) would silently defeat.
+  const normalizedFixtureOrigins = fixtureOrigins.map((origin) => {
+    const normalized = originOf(origin);
+    if (normalized === null) {
+      throw new TypeError(`fixtureOrigins must contain valid origins, got: ${origin}`);
+    }
+    return normalized;
+  });
   const chromeWasFrontmostAtStart = samples.length > 0 && samples[0]?.app === CHROME_APP_NAME;
-  const focusChangedToFixtureTab = samples.some((sample) => (
-    typeof sample?.tabUrl === 'string' && fixtureOrigins.includes(sample.tabUrl)
-  ));
+  const focusChangedToFixtureTab = samples.some((sample) => {
+    if (typeof sample?.tabUrl !== 'string') return false;
+    const sampleOrigin = originOf(sample.tabUrl);
+    return sampleOrigin !== null && normalizedFixtureOrigins.includes(sampleOrigin);
+  });
   // Only meaningful when Chrome did not start frontmost (brief's design
   // section); it is a diagnostic signal, not part of the persisted evidence
   // schema, so it stays undefined rather than false when it does not apply.
@@ -97,6 +122,36 @@ test('reduceFocusSamples reports focusChangedToFixtureTab false when no sampled 
   const result = reduceFocusSamples(samples, {
     fixtureOrigins: ['http://127.0.0.1:11111', 'http://127.0.0.1:22222'],
   });
+  assert.equal(result.focusChangedToFixtureTab, false);
+});
+
+test('reduceFocusSamples detects a fixture-tab focus change when the sampled tab URL has a trailing slash the fixture origin lacks', () => {
+  // A real browser normalizes "http://127.0.0.1:PORT" to
+  // "http://127.0.0.1:PORT/" once it becomes the active tab. fixtureOrigins
+  // never carries a trailing slash (see startOrderFixture's `origin` in
+  // tests/fixtures/order-flow/server.mjs). A strict string comparison here
+  // would silently never match, making this assertion pass vacuously
+  // whether or not focus was actually stolen.
+  const samples = [
+    { app: 'Google Chrome', tabUrl: 'http://127.0.0.1:41111/' },
+  ];
+  const result = reduceFocusSamples(samples, { fixtureOrigins: ['http://127.0.0.1:41111'] });
+  assert.equal(result.focusChangedToFixtureTab, true);
+});
+
+test('reduceFocusSamples detects a fixture-tab focus change when the sampled tab URL carries a path and query', () => {
+  const samples = [
+    { app: 'Google Chrome', tabUrl: 'http://127.0.0.1:41111/checkout?step=2' },
+  ];
+  const result = reduceFocusSamples(samples, { fixtureOrigins: ['http://127.0.0.1:41111'] });
+  assert.equal(result.focusChangedToFixtureTab, true);
+});
+
+test('reduceFocusSamples does not match a tab URL on a different port even after origin normalization', () => {
+  const samples = [
+    { app: 'Google Chrome', tabUrl: 'http://127.0.0.1:41111/' },
+  ];
+  const result = reduceFocusSamples(samples, { fixtureOrigins: ['http://127.0.0.1:22222'] });
   assert.equal(result.focusChangedToFixtureTab, false);
 });
 
@@ -399,6 +454,7 @@ test('two identity-carrying Fast Browser clients drive the paired real Chrome si
   timeout: 300_000,
 }, async (t) => {
   const outputRoot = await mkdtemp(path.join(os.tmpdir(), 'fast-browser-simultaneous-'));
+  t.after(() => rm(outputRoot, { recursive: true, force: true }));
   const workspaceRoot = path.join(outputRoot, 'workspaces');
   await mkdir(workspaceRoot, { recursive: true });
   // These workspace directory basenames are what background.ts turns into
@@ -427,8 +483,18 @@ test('two identity-carrying Fast Browser clients drive the paired real Chrome si
   t.after(() => Promise.all([clientA?.close(), clientB.close()].map((p) => p?.catch(() => {}))));
 
   const samples = [];
+  // Minor fix: an all-failed (or never-attempted) sampling run must not
+  // silently masquerade as "focus was never stolen" via an empty samples
+  // array. Count attempts and failures so that case is asserted against
+  // below instead.
+  let sampleAttempts = 0;
+  let sampleFailures = 0;
   const sampling = setInterval(() => {
-    sampleFocusOnce().then((sample) => samples.push(sample), () => {});
+    sampleAttempts += 1;
+    sampleFocusOnce().then(
+      (sample) => samples.push(sample),
+      () => { sampleFailures += 1; },
+    );
   }, 1_000);
 
   let resultA;
@@ -445,6 +511,12 @@ test('two identity-carrying Fast Browser clients drive the paired real Chrome si
   assert.equal(resultA.orderId, 'CLAUDE-TEAM-5');
   assert.equal(resultB.orderId, 'CODEX-SCALE-12');
 
+  assert.ok(
+    samples.length > 0,
+    `expected at least one successful focus sample but got none `
+    + `(${sampleAttempts} attempt(s), ${sampleFailures} failure(s)); an empty `
+    + 'sample set must never be treated as "focus never changed"',
+  );
   const focus = reduceFocusSamples(samples, { fixtureOrigins: [fixtureA.origin, fixtureB.origin] });
   assert.equal(focus.focusChangedToFixtureTab, false);
 
@@ -457,20 +529,32 @@ test('two identity-carrying Fast Browser clients drive the paired real Chrome si
   assert.ok(labelA, 'expected a Claude-prefixed tab-group label');
   assert.ok(labelB, 'expected a Codex-prefixed tab-group label');
   assertDistinctGroupLabels(labelA, labelB);
+  // Derived directly from the two observed label strings (not a bare
+  // literal): assertDistinctGroupLabels above would already have thrown if
+  // this were false, but the evidence value itself must come from the
+  // actual comparison, never a hardcoded "true" alongside it.
+  const groupLabelsDistinct = labelA !== labelB;
 
-  clientA.kill();
+  // kill() resolves only after the child has actually exited (see
+  // identity-client.mjs), so this ordering cannot race the OS: clientB is
+  // only checked once clientA's process is confirmed gone.
+  await clientA.kill();
   const postKill = await clientB.callTool('browser_navigate', { url: fixtureB.origin });
-  assert.ok(postKill);
-  const killClaudeLeftCodexFunctional = true;
+  const killClaudeLeftCodexFunctional = Boolean(postKill);
+  assert.equal(killClaudeLeftCodexFunctional, true);
 
   const freshClientA = await startIdentityClient({
     identity: 'claude',
     outputDir: path.join(outputRoot, 'claude-output-reconnect'),
     workspaceDir: workspaceA,
   });
-  const postReconnect = await freshClientA.callTool('browser_navigate', { url: fixtureA.origin });
-  assert.ok(postReconnect);
-  const reconnectLeftBothFunctional = true;
+  const postReconnectA = await freshClientA.callTool('browser_navigate', { url: fixtureA.origin });
+  // "Both functional" must be observed for BOTH clients, not assumed for B
+  // because it was already checked once earlier. Re-check clientB now, after
+  // the reconnect, so the claim reflects an actual observation of both.
+  const postReconnectB = await clientB.callTool('browser_navigate', { url: fixtureB.origin });
+  const reconnectLeftBothFunctional = Boolean(postReconnectA) && Boolean(postReconnectB);
+  assert.equal(reconnectLeftBothFunctional, true);
   clientA = freshClientA;
 
   const evidence = serializeLiveEvidence({
@@ -480,7 +564,7 @@ test('two identity-carrying Fast Browser clients drive the paired real Chrome si
       { label: labelA, orderId: resultA.orderId, browserCalls: resultA.browserCalls, elapsedMs: resultA.elapsedMs },
       { label: labelB, orderId: resultB.orderId, browserCalls: resultB.browserCalls, elapsedMs: resultB.elapsedMs },
     ],
-    groupLabelsDistinct: true,
+    groupLabelsDistinct,
     chromeWasFrontmostAtStart: focus.chromeWasFrontmostAtStart,
     focusChangedToFixtureTab: focus.focusChangedToFixtureTab,
     killClaudeLeftCodexFunctional,

@@ -14,6 +14,18 @@
 //     the workspace root (not clientInfo.name) is the mechanism actually
 //     exercised here. clientInfo.name below is documented best-effort
 //     metadata; it is never decisive while a workspace root is supplied.
+//
+// Two environment prerequisites, both required before this helper (or the
+// live test that uses it) can do anything:
+//   1. FAST_BROWSER_LIVE_EXTENSION_TOKEN: a token-bypass token for the
+//      paired real Chrome extension (see startIdentityClient below).
+//   2. FAST_BROWSER_LIVE_CDP_URL: only needed for queryGroupLabels (see
+//      queryGroupLabelsViaExtensionDebugger below) and NOT set up by
+//      production's own launch path (plugins/fast-browser/lib/runtime/launch.mjs
+//      never opens a debug port), so it requires the paired Chrome to have
+//      been started manually with a remote-debugging port.
+// If either is missing or wrong, the affected call throws instead of
+// fabricating a result; this file never swallows that failure.
 
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -49,7 +61,9 @@ export async function startIdentityClient({
     throw new Error(
       'FAST_BROWSER_LIVE_EXTENSION_TOKEN is required (token-bypass connection to the '
       + 'paired real Chrome extension, matching tests/extension/multi-connection.spec.ts '
-      + 'in the runtime reference worktree)',
+      + 'in the runtime reference worktree). If this test also needs group-label '
+      + 'verification, FAST_BROWSER_LIVE_CDP_URL must be set too; see '
+      + 'queryGroupLabelsViaExtensionDebugger below for how to launch Chrome so that works.',
     );
   }
 
@@ -89,9 +103,35 @@ export async function startIdentityClient({
     pid: transport.pid,
     callTool: async (name, args) => textResult(await client.callTool({ name, arguments: args })),
     close: () => client.close(),
-    kill: () => {
-      if (transport.pid) process.kill(transport.pid, 'SIGKILL');
-    },
+    // SIGKILLs the child and resolves only once it has actually exited (the
+    // SDK's StdioClientTransport fires transport.onclose from the child
+    // process's own 'close' event; see node_modules/@modelcontextprotocol/sdk's
+    // client/stdio.js), never immediately after issuing the signal. A caller
+    // that checks another client right after kill() must not race the OS.
+    // Falls back to a bounded timeout so a missed/coalesced close event can
+    // never hang the live test forever; chains any onclose handler the SDK
+    // Client itself already installed rather than clobbering it.
+    kill: () => new Promise((resolve) => {
+      if (!transport.pid) {
+        resolve();
+        return;
+      }
+      const previousOnClose = transport.onclose;
+      let settled = false;
+      const settle = () => {
+        if (settled) return;
+        settled = true;
+        transport.onclose = previousOnClose;
+        resolve();
+      };
+      transport.onclose = () => {
+        previousOnClose?.();
+        settle();
+      };
+      process.kill(transport.pid, 'SIGKILL');
+      const timeout = setTimeout(settle, 5_000);
+      timeout.unref?.();
+    }),
     queryGroupLabels: () => queryGroupLabelsViaExtensionDebugger({ extensionId: lock.extension.id }),
   };
 }
@@ -106,11 +146,22 @@ export async function startIdentityClient({
 // The only way to observe the real label is to evaluate inside the
 // extension's own service worker over CDP, mirroring how the runtime's own
 // tests do it via browserContext.serviceWorkers() in
-// tests/extension/multi-connection.spec.ts. This assumes a CDP HTTP debug
-// endpoint is reachable (FAST_BROWSER_LIVE_CDP_URL, default
-// http://127.0.0.1:9222) and a global WebSocket implementation (Node >= 21;
-// the plugin's own floor is Node >= 20), so this path is best-effort and
-// used only by the never-executed live test.
+// tests/extension/multi-connection.spec.ts.
+//
+// PREREQUISITE (undocumented by production, so stated explicitly here):
+// production's own launch path (plugins/fast-browser/lib/runtime/launch.mjs's
+// runtimeArgs) never opens a CDP debug port on the paired Chrome, so this
+// only works if whoever un-gates this test first launches that Chrome
+// themselves with one, e.g.:
+//   open -a "Google Chrome" --args --remote-debugging-port=9222 \
+//     --user-data-dir=<the paired profile's user-data-dir>
+// then set FAST_BROWSER_LIVE_CDP_URL to that port's HTTP origin (default
+// assumed here: http://127.0.0.1:9222). This also requires a global
+// WebSocket implementation (Node >= 21; the plugin's own floor is Node >= 20).
+// If the endpoint is unreachable, the extension service worker target is
+// missing, or chrome.tabGroups.query throws inside it, THIS FUNCTION THROWS.
+// Callers must let that propagate and fail the test loudly rather than catch
+// it and fabricate groupLabelsDistinct or any other evidence field.
 async function queryGroupLabelsViaExtensionDebugger({
   extensionId,
   cdpHttpUrl = process.env.FAST_BROWSER_LIVE_CDP_URL ?? 'http://127.0.0.1:9222',
