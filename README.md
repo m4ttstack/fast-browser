@@ -87,6 +87,23 @@ package or runtime release, or load the extension into Chrome for you.
 Chrome keeps developer-mode extensions per Chrome profile. Load the extension
 in each profile where Fast Browser should operate.
 
+You only do this once. Setup installs into a fixed directory
+(`~/.fast-browser/extension/current/unpacked`) and swaps its contents in place
+on every upgrade, so Chrome keeps pointing at the same path.
+
+## Upgrading
+
+After a setup that installs a newer pinned version, open `chrome://extensions`
+and click the reload arrow on Fast Browser. Do not remove and re-add the
+extension: removing it discards the extension's stored data, including the
+reconnect token, which forces you to pair again with
+`fast-browser configure --connection auto`.
+
+Until you reload, `fast-browser doctor` reports `extension-loaded` as failing
+while `extension-artifact` and `extension-installed` pass. That combination
+means the pinned bytes are on disk and Chrome is still running the previous
+ones. It is not drift, and rerunning setup will not clear it.
+
 ## Safe and full profiles
 
 The default `safe` profile disables session recording. It installs the Codex

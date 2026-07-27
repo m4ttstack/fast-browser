@@ -13,6 +13,7 @@ import { loadConfig } from '../../lib/core/config.mjs';
 import { saveConfig } from '../../lib/core/files.mjs';
 import { resolvePaths } from '../../lib/core/paths.mjs';
 import { DOCTOR_CHECK_IDS } from '../../lib/doctor/checks.mjs';
+import { extensionInstallLocation } from '../../lib/extension/install.mjs';
 import { buildContentManifestDigest } from '../../lib/core/content-manifest.mjs';
 import { runtimeLockIdentity } from '../../lib/runtime/lock.mjs';
 
@@ -63,7 +64,7 @@ async function writeRuntimeInstall(paths, lock) {
 // directory plus the installed.json marker with its install-time content
 // digest.
 async function writeExtensionInstall(paths, lock) {
-  const directory = path.join(paths.extensionDir, lock.extension.version);
+  const directory = extensionInstallLocation(paths).directory;
   const unpacked = path.join(directory, 'unpacked');
   await mkdir(unpacked, { recursive: true });
   await writeFile(
@@ -192,7 +193,7 @@ test('setup upgrades a self-consistent installation whose marker predates the cu
     },
     installExtension: async ({ lock }) => {
       installCalls.push(['extension', lock.extension.version]);
-      return { unpacked: path.join(paths.extensionDir, lock.extension.version, 'unpacked') };
+      return { unpacked: extensionInstallLocation(paths).unpacked };
     },
     ...untouchedDuringUpgrade(untouchedCalls),
     saveConfig,
@@ -206,7 +207,7 @@ test('setup upgrades a self-consistent installation whose marker predates the cu
   ]);
   assert.equal(report.changed, true);
   assert.equal(report.extensionManual, true);
-  assert.equal(report.extensionPath, path.join(paths.extensionDir, '0.2.2', 'unpacked'));
+  assert.equal(report.extensionPath, extensionInstallLocation(paths).unpacked);
   // extension-installed failing alone must not fail the command (item 5).
   assert.equal(report.doctor.ok, false);
   assert.deepEqual(
@@ -613,7 +614,7 @@ test('an upgrade leaves pairing mode, session settings, routing files, and host 
     loadRuntimeLock: async () => newLock,
     installRuntime: async ({ lock }) => ({ version: lock.productVersion }),
     installExtension: async ({ lock }) => (
-      { unpacked: path.join(paths.extensionDir, lock.extension.version, 'unpacked') }
+      { unpacked: extensionInstallLocation(paths).unpacked }
     ),
     ...untouchedDuringUpgrade(untouchedCalls),
     saveConfig,
@@ -637,7 +638,7 @@ test('an upgrade leaves pairing mode, session settings, routing files, and host 
   assert.equal(persisted.profile, 'full');
 });
 
-test('CLI setup output prints the unpacked extension path and manual reload step for an upgrade', async () => {
+test('CLI setup output asks for a reload, not a reinstall, after an upgrade', async () => {
   const oldLock = lockFor('0.1.0-alpha.1', '0.2.1');
   const newLock = lockFor('0.1.0-alpha.5', '0.2.2');
   const paths = await fixtureHome('fast-browser-upgrade-cli-');
@@ -664,7 +665,7 @@ test('CLI setup output prints the unpacked extension path and manual reload step
       loadRuntimeLock: async () => newLock,
       installRuntime: async ({ lock }) => ({ version: lock.productVersion }),
       installExtension: async ({ lock }) => (
-        { unpacked: path.join(paths.extensionDir, lock.extension.version, 'unpacked') }
+        { unpacked: extensionInstallLocation(paths).unpacked }
       ),
       ...untouchedDuringUpgrade(untouchedCalls),
       saveConfig,
@@ -674,11 +675,92 @@ test('CLI setup output prints the unpacked extension path and manual reload step
 
   assert.equal(exitCode, 0);
   const output = lines.join('');
-  assert.match(output, /Chrome extension: manual installation required at/);
-  assert.ok(output.includes(path.join(paths.extensionDir, '0.2.2', 'unpacked')));
-  assert.match(output, /Next: load the extension, then run `fast-browser doctor`/);
+  // An upgrade must ask for a RELOAD, never another "Load unpacked": the
+  // install directory is stable, so removing and re-adding the extension is
+  // both unnecessary and destructive -- it is exactly what discards the
+  // extension's stored reconnect token and forces the user to re-pair.
+  assert.match(output, /Chrome extension: reload required in chrome:\/\/extensions/);
+  assert.match(
+    output,
+    /Next: click the reload arrow on Fast Browser, then run `fast-browser doctor`/,
+  );
+  assert.doesNotMatch(output, /manual installation required/);
+  assert.doesNotMatch(output, /Load unpacked/);
   // Every prior fixture here already carries a valid contentDigest: this
   // is a genuine version-bump upgrade, not a legacy/unverifiable install,
   // so the unverifiable-artifacts-replaced notice must never appear.
   assert.doesNotMatch(output, /previously unverifiable install/);
+});
+
+// The state every install and upgrade now ends in: the pinned bytes are on
+// disk and verified, and Chrome has not been reloaded yet. Nothing setup can
+// do resolves it -- only a click in chrome://extensions does -- so rerunning
+// setup while it is pending must report "nothing to do" rather than accusing
+// the installation of external drift. Before extension-loaded was split out
+// of extension-installed, a user who ran setup twice in that window got a
+// hard drift failure for a completely healthy install.
+test('a pending extension reload alone is not drift and does not re-run setup', async () => {
+  const lock = lockFor('0.1.0-alpha.5', '0.2.2');
+  const paths = await fixtureHome('fast-browser-pending-reload-');
+  await writeRuntimeInstall(paths, lock);
+  await writeExtensionInstall(paths, lock);
+  await saveConfig(paths, configFor(lock));
+
+  const installCalls = [];
+  const untouchedCalls = [];
+
+  const report = await setup(baseRequest, {
+    paths,
+    checkPlatform: async () => {},
+    detectHosts: async () => ['claude'],
+    loadConfig,
+    loadRuntimeLock: async () => lock,
+    installRuntime: async () => {
+      installCalls.push('runtime');
+      return { version: lock.productVersion };
+    },
+    installExtension: async () => {
+      installCalls.push('extension');
+      return { unpacked: extensionInstallLocation(paths).unpacked };
+    },
+    ...untouchedDuringUpgrade(untouchedCalls),
+    saveConfig,
+    doctor: async () => doctorReportWithFailures(['extension-loaded']),
+  });
+
+  assert.equal(report.changed, false);
+  assert.deepEqual(installCalls, []);
+  assert.deepEqual(untouchedCalls, []);
+  // The failing check still rides along so the CLI can say "reload it".
+  assert.deepEqual(
+    report.doctor.checks.filter((check) => check.status === 'fail').map((check) => check.id),
+    ['extension-loaded'],
+  );
+});
+
+// The exclusion must be narrow: a pending reload alongside a real failure is
+// still drift, or the allowance would become a way to smuggle any failure
+// past the guard.
+test('a pending extension reload does not excuse a genuinely failing check', async () => {
+  const lock = lockFor('0.1.0-alpha.5', '0.2.2');
+  const paths = await fixtureHome('fast-browser-pending-reload-drift-');
+  await writeRuntimeInstall(paths, lock);
+  await writeExtensionInstall(paths, lock);
+  await saveConfig(paths, configFor(lock));
+
+  await assert.rejects(
+    setup(baseRequest, {
+      paths,
+      checkPlatform: async () => {},
+      detectHosts: async () => ['claude'],
+      loadConfig,
+      loadRuntimeLock: async () => lock,
+      installRuntime: async () => ({ version: lock.productVersion }),
+      installExtension: async () => ({ unpacked: extensionInstallLocation(paths).unpacked }),
+      ...untouchedDuringUpgrade([]),
+      saveConfig,
+      doctor: async () => doctorReportWithFailures(['extension-loaded', 'claude-routing']),
+    }),
+    /drift/i,
+  );
 });

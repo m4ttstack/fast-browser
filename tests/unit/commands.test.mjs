@@ -7,6 +7,7 @@ import {
   readFile,
   realpath,
   rm,
+  stat,
   writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -41,6 +42,7 @@ import {
 } from '../../lib/hosts/file-transaction.mjs';
 import { PairingError } from '../../lib/keychain/pair.mjs';
 import { buildContentManifestDigest } from '../../lib/core/content-manifest.mjs';
+import { extensionInstallLocation } from '../../lib/extension/install.mjs';
 
 test('exports dependency-injected lifecycle command functions', () => {
   assert.equal(typeof setup, 'function');
@@ -103,7 +105,7 @@ test('doctor returns every stable check in order and catches individual failures
   assert.doesNotMatch(JSON.stringify(report), /Users|secret/);
 });
 
-test('doctor keeps the 17-check schema healthy for an unselected host', async () => {
+test('doctor keeps the full check schema healthy for an unselected host', async () => {
   const passing = Object.fromEntries(DOCTOR_CHECK_IDS
     .filter((id) => ![
       'claude-cli',
@@ -141,7 +143,10 @@ test('doctor keeps the 17-check schema healthy for an unselected host', async ()
     },
   );
 
-  assert.equal(report.checks.length, 17);
+  // Derived rather than pinned: a literal count only ever fails as a chore
+  // when a check is added, and never catches a check going missing.
+  assert.equal(report.checks.length, DOCTOR_CHECK_IDS.length);
+  assert.deepEqual(report.checks.map(({ id }) => id), [...DOCTOR_CHECK_IDS]);
   assert.equal(report.ok, true);
   for (const id of ['codex-cli', 'codex-plugin', 'codex-routing', 'browser-driver']) {
     assert.equal(report.checks.find((check) => check.id === id).status, 'pass');
@@ -659,9 +664,16 @@ test('doctor real composition accepts complete injected platform adapters with n
         profile: 'Default',
         installed: true,
         manifestVersion: '1.0.0',
-        path: '/home/test/.fast-browser/extension/1.0.0/unpacked',
+        versionSource: 'disk',
+        // The managed directory itself, so extension-loaded actually has a
+        // load to evaluate rather than passing because it found nothing.
+        path: extensionInstallLocation({
+          extensionDir: '/home/test/.fast-browser/extension',
+        }).unpacked,
+        loadedAt: 1_700_000_000_000,
       }],
       verifyExtensionContent: async () => true,
+      verifyExtensionIsLoadedContent: async () => true,
       hasToken: async () => true,
       checkDataPermissions: async () => {},
       openMcpTransport: async () => ({
@@ -680,7 +692,10 @@ test('doctor real composition accepts complete injected platform adapters with n
     },
   );
   assert.equal(report.ok, true);
-  assert.deepEqual(report.checks.map(({ status }) => status), Array(17).fill('pass'));
+  assert.deepEqual(
+    report.checks.map(({ status }) => status),
+    Array(DOCTOR_CHECK_IDS.length).fill('pass'),
+  );
 });
 
 function extensionLock(version) {
@@ -697,8 +712,7 @@ function extensionLock(version) {
 async function setupManagedExtension(version, files) {
   const home = await mkdtemp(path.join(tmpdir(), 'fast-browser-ext-content-'));
   const extensionDir = path.join(home, 'extension');
-  const versionDir = path.join(extensionDir, version);
-  const unpacked = path.join(versionDir, 'unpacked');
+  const { directory: versionDir, unpacked } = extensionInstallLocation({ extensionDir });
   for (const [relative, contents] of Object.entries(files)) {
     const target = path.join(unpacked, relative);
     await mkdir(path.dirname(target), { recursive: true });
@@ -804,7 +818,7 @@ test('extension-installed fails when Chrome reports a loaded path outside the ma
 });
 
 test('extension-installed fails, unchanged, when the extension is absent entirely', async () => {
-  const { extensionDir, lock } = await setupManagedExtension('1.0.0', {
+  const { extensionDir, unpacked, lock } = await setupManagedExtension('1.0.0', {
     'manifest.json': '{"version":"1.0.0"}',
   });
 
@@ -818,7 +832,9 @@ test('extension-installed fails, unchanged, when the extension is absent entirel
     id: 'extension-installed',
     status: 'fail',
     message: 'The pinned Chrome extension is not installed.',
-    remediation: 'Load the unpacked extension artifact in Google Chrome.',
+    // Naming the directory matters more now that it is stable: it is the one
+    // path the user ever has to load, and it never changes again afterward.
+    remediation: `Load the unpacked extension in Google Chrome from ${unpacked}.`,
   });
 });
 
@@ -3070,4 +3086,134 @@ test('CLI production dispatch composes setup entirely from injected adapters', a
   assert.equal(exitCode, 0);
   assert.deepEqual(events, ['platform', 'dirs', 'save']);
   assert.equal(JSON.parse(writes.join('')).command, 'setup');
+});
+
+async function extensionLoadedStatus({ extensionDir, lock, profiles }) {
+  const stubbed = Object.fromEntries(DOCTOR_CHECK_IDS
+    .filter((id) => id !== 'extension-loaded')
+    .map((id) => [id, async () => ({ status: 'pass', message: `${id} passed.`, remediation: null })]));
+  const report = await doctor(
+    { profile: 'safe' },
+    {
+      checks: stubbed,
+      paths: {
+        homeDir: '/unused',
+        dataDir: '/unused',
+        configFile: '/unused',
+        runtimeDir: '/unused',
+        extensionDir,
+        pluginRoot: '/unused',
+      },
+      lock,
+      detectChromeExtension: async () => profiles,
+    },
+  );
+  return report.checks.find(({ id }) => id === 'extension-loaded');
+}
+
+// THE regression this whole stable-directory change has to carry: setup now
+// swaps content underneath a path Chrome already holds open, so every
+// disk-based check goes green the moment setup finishes while Chrome keeps
+// serving the extension it parsed earlier. Under the old version-scoped
+// layout the loaded path itself encoded the identity, so this state could not
+// exist and nothing needed to detect it.
+test('extension-loaded fails when the content was swapped after Chrome loaded it', async () => {
+  const { extensionDir, unpacked, lock } = await setupManagedExtension('1.0.0', {
+    'manifest.json': '{"version":"1.0.0"}',
+    'lib/background.mjs': 'export const x = 2;\n',
+  });
+  const marker = path.join(path.dirname(unpacked), 'installed.json');
+  const installedAt = (await stat(marker)).mtimeMs;
+
+  const status = await extensionLoadedStatus({
+    extensionDir,
+    lock,
+    profiles: [{
+      profile: 'Default',
+      installed: true,
+      manifestVersion: '1.0.0',
+      versionSource: 'disk',
+      path: unpacked,
+      // Chrome loaded this path a minute before the content was written.
+      loadedAt: installedAt - 60_000,
+    }],
+  });
+
+  assert.deepEqual(status, {
+    id: 'extension-loaded',
+    status: 'fail',
+    message: 'Chrome is still running the previously loaded extension content.',
+    remediation: 'Open chrome://extensions and click the reload arrow on Fast Browser.',
+  });
+});
+
+test('extension-loaded passes once Chrome has reloaded the swapped content', async () => {
+  const { extensionDir, unpacked, lock } = await setupManagedExtension('1.0.0', {
+    'manifest.json': '{"version":"1.0.0"}',
+  });
+  const marker = path.join(path.dirname(unpacked), 'installed.json');
+  const installedAt = (await stat(marker)).mtimeMs;
+
+  const status = await extensionLoadedStatus({
+    extensionDir,
+    lock,
+    profiles: [{
+      profile: 'Default',
+      installed: true,
+      manifestVersion: '1.0.0',
+      versionSource: 'disk',
+      path: unpacked,
+      loadedAt: installedAt + 1,
+    }],
+  });
+
+  assert.equal(status.status, 'pass');
+});
+
+// An unknown load time is not evidence of freshness. Chrome always records
+// one for a real load, so a missing value means something unexpected, and
+// guessing "probably fine" is how a stale extension slips through.
+test('extension-loaded fails when Chrome recorded no load time at all', async () => {
+  const { extensionDir, unpacked, lock } = await setupManagedExtension('1.0.0', {
+    'manifest.json': '{"version":"1.0.0"}',
+  });
+
+  const status = await extensionLoadedStatus({
+    extensionDir,
+    lock,
+    profiles: [{
+      profile: 'Default',
+      installed: true,
+      manifestVersion: '1.0.0',
+      versionSource: 'disk',
+      path: unpacked,
+      loadedAt: null,
+    }],
+  });
+
+  assert.equal(status.status, 'fail');
+});
+
+// extension-installed already reports "not installed" in this case; repeating
+// it here would double-count one problem and make a fresh install look twice
+// as broken as it is.
+test('extension-loaded stays silent when no managed extension is loaded', async () => {
+  const { extensionDir, lock } = await setupManagedExtension('1.0.0', {
+    'manifest.json': '{"version":"1.0.0"}',
+  });
+
+  const status = await extensionLoadedStatus({
+    extensionDir,
+    lock,
+    profiles: [{
+      profile: 'Default',
+      installed: true,
+      manifestVersion: '1.0.0',
+      versionSource: 'disk',
+      path: '/somewhere/else/unpacked',
+      loadedAt: null,
+    }],
+  });
+
+  assert.equal(status.status, 'pass');
 });

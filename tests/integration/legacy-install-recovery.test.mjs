@@ -17,6 +17,7 @@ import { setup } from '../../lib/commands/setup.mjs';
 import { loadConfig } from '../../lib/core/config.mjs';
 import { saveConfig } from '../../lib/core/files.mjs';
 import { resolvePaths } from '../../lib/core/paths.mjs';
+import { extensionInstallLocation } from '../../lib/extension/install.mjs';
 import { buildContentManifestDigest } from '../../lib/core/content-manifest.mjs';
 import { DOCTOR_CHECK_IDS } from '../../lib/doctor/checks.mjs';
 import { runtimeLockIdentity } from '../../lib/runtime/lock.mjs';
@@ -112,7 +113,7 @@ async function writeLegacyRuntimeInstall(paths, lock) {
 }
 
 async function writeLegacyExtensionInstall(paths, lock, manifest) {
-  const directory = path.join(paths.extensionDir, lock.extension.version);
+  const directory = extensionInstallLocation(paths).directory;
   const unpacked = path.join(directory, 'unpacked');
   await mkdir(unpacked, { recursive: true });
   await writeFile(path.join(unpacked, 'manifest.json'), JSON.stringify(manifest));
@@ -320,13 +321,13 @@ test('a legacy extension marker likewise triggers a real reinstall and setup suc
 
   assert.equal(report.changed, true);
   const marker = JSON.parse(
-    await readFile(path.join(paths.extensionDir, newLock.extension.version, 'installed.json'), 'utf8'),
+    await readFile(extensionInstallLocation(paths).marker, 'utf8'),
   );
   assert.equal(typeof marker.contentDigest, 'string');
   assert.match(marker.contentDigest, /^[0-9a-f]{64}$/);
   assert.equal(
     marker.contentDigest,
-    await buildContentManifestDigest(path.join(paths.extensionDir, newLock.extension.version, 'unpacked')),
+    await buildContentManifestDigest(extensionInstallLocation(paths).unpacked),
   );
 });
 
@@ -382,12 +383,12 @@ test('setup does not report the unverifiable-artifacts-replaced notice for an al
     path.join(paths.runtimeDir, lock.productVersion, 'installed.json'),
     JSON.stringify({ schemaVersion: 1, lock: runtimeLockIdentity(lock), contentDigest: runtimeDigest }),
   );
-  const unpacked = path.join(paths.extensionDir, lock.extension.version, 'unpacked');
+  const unpacked = extensionInstallLocation(paths).unpacked;
   await mkdir(unpacked, { recursive: true });
   await writeFile(path.join(unpacked, 'manifest.json'), JSON.stringify({ manifest_version: 3, version: '0.2.2' }));
   const extensionDigest = await buildContentManifestDigest(unpacked);
   await writeFile(
-    path.join(paths.extensionDir, lock.extension.version, 'installed.json'),
+    extensionInstallLocation(paths).marker,
     JSON.stringify({ schemaVersion: 1, lock: runtimeLockIdentity(lock), contentDigest: extensionDigest }),
   );
   await saveConfig(paths, configFor(lock));

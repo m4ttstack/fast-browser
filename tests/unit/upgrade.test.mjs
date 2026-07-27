@@ -7,6 +7,7 @@ import test from 'node:test';
 import { resolvePaths } from '../../lib/core/paths.mjs';
 import { buildContentManifestDigest } from '../../lib/core/content-manifest.mjs';
 import { runtimeLockIdentity } from '../../lib/runtime/lock.mjs';
+import { extensionInstallLocation } from '../../lib/extension/install.mjs';
 import { classifyLockUpgrade, isExplainedByLockUpgrade } from '../../lib/commands/upgrade.mjs';
 
 function lockFor(productVersion, extensionVersion) {
@@ -61,8 +62,11 @@ async function writeRuntimeInstall(paths, lock, { contentDigest = true } = {}) {
   return directory;
 }
 
+// The extension installs to one stable directory so Chrome can hold a single
+// load across upgrades, so a fixture cannot express "an older install" by
+// directory name any more -- only by the lock identity its marker records.
 async function writeExtensionInstall(paths, lock, { contentDigest = true } = {}) {
-  const directory = path.join(paths.extensionDir, lock.extension.version);
+  const { directory } = extensionInstallLocation(paths);
   const unpacked = path.join(directory, 'unpacked');
   await mkdir(unpacked, { recursive: true });
   await writeFile(

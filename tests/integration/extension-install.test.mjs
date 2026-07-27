@@ -18,7 +18,11 @@ import test from 'node:test';
 
 import { buildContentManifestDigest } from '../../lib/core/content-manifest.mjs';
 import { detectChromeExtension } from '../../lib/extension/detect.mjs';
-import { installExtension } from '../../lib/extension/install.mjs';
+import {
+  EXTENSION_INSTALL_DIRECTORY,
+  extensionInstallLocation,
+  installExtension,
+} from '../../lib/extension/install.mjs';
 
 const execFile = promisify(execFileCallback);
 
@@ -175,7 +179,7 @@ test('installs once, derives the exact manifest key ID, and writes a private mar
     contentDigest: expectedDigest,
   });
   assert.deepEqual(
-    (await readdir(path.join(paths.extensionDir, lock.extension.version))).sort(),
+    (await readdir(extensionInstallLocation(paths).directory)).sort(),
     ['installed.json', 'unpacked'],
   );
 });
@@ -216,7 +220,7 @@ test('rejects traversal, absolute, backslash, drive, NUL, and symlink zip entrie
       /unsafe zip entry|unsupported zip entry/i,
     );
     assert.deepEqual(
-      await readdir(path.join(paths.extensionDir, lock.extension.version)),
+      await readdir(extensionInstallLocation(paths).directory),
       [],
     );
   }
@@ -290,13 +294,39 @@ test('detects exact IDs only in Default and Profile <N> without returning prefer
     extensionId: id,
     chromeUserDataDir: root,
   }), [
-    { profile: 'Default', installed: true, manifestVersion: '0.2.1', path: defaultManifest },
-    { profile: 'Profile 2', installed: true, manifestVersion: '0.2.2', path: null },
-    { profile: 'Profile 3', installed: false, manifestVersion: null, path: null },
+    {
+      profile: 'Default',
+      installed: true,
+      manifestVersion: '0.2.1',
+      versionSource: 'chrome',
+      path: defaultManifest,
+      loadedAt: null,
+    },
+    {
+      profile: 'Profile 2',
+      installed: true,
+      manifestVersion: '0.2.2',
+      versionSource: 'chrome',
+      path: null,
+      loadedAt: null,
+    },
+    {
+      profile: 'Profile 3',
+      installed: false,
+      manifestVersion: null,
+      versionSource: null,
+      path: null,
+      loadedAt: null,
+    },
   ]);
 });
 
-test('defense-in-depth rejects a raw lock whose extension version escapes its root', async () => {
+// The install directory no longer embeds lock.extension.version, so a lock
+// carrying a traversal version cannot steer writes at all -- the hole this
+// test guarded is now structurally absent rather than merely blocked. Assert
+// that directly: the resolved location must be identical for a hostile
+// version and an honest one, and a hostile lock must still be refused.
+test('an extension version cannot influence the install path at all', async () => {
   const fixture = await extensionFixture();
   const home = await mkdtemp(path.join(os.tmpdir(), 'fast-browser-home-'));
   const paths = pathsFor(home);
@@ -305,9 +335,15 @@ test('defense-in-depth rejects a raw lock whose extension version escapes its ro
     fixture.archive,
     fixture.id,
   );
-  lock.extension.version = '..';
-  let fetchCalls = 0;
+  const honestLocation = extensionInstallLocation(paths);
+  lock.extension.version = '../../../../../../etc';
+  assert.deepEqual(extensionInstallLocation(paths), honestLocation);
+  assert.equal(
+    path.relative(paths.extensionDir, honestLocation.directory),
+    EXTENSION_INSTALL_DIRECTORY,
+  );
 
+  let fetchCalls = 0;
   await assert.rejects(
     installExtension({
       lock,
@@ -317,14 +353,17 @@ test('defense-in-depth rejects a raw lock whose extension version escapes its ro
         return new Response(fixture.archive, { status: 200 });
       },
     }),
-    /confined|outside|descendant/i,
+    // The manifest pins the real version, so a forged lock version can never
+    // agree with the artifact it claims to describe.
+    /manifest.*version/i,
   );
-  assert.equal(fetchCalls, 0);
+  // Nothing was written outside the one managed directory.
+  assert.deepEqual(await readdir(paths.extensionDir), [EXTENSION_INSTALL_DIRECTORY]);
 });
 
 test('refuses pre-existing symlinks that would move extension writes outside dataDir', async () => {
   const fixture = await extensionFixture();
-  for (const symlinkAt of ['data', 'root', 'version']) {
+  for (const symlinkAt of ['data', 'root', 'install']) {
     const home = await mkdtemp(path.join(os.tmpdir(), 'fast-browser-home-'));
     const outside = await mkdtemp(path.join(os.tmpdir(), 'fast-browser-outside-'));
     const paths = pathsFor(home);
@@ -337,7 +376,7 @@ test('refuses pre-existing symlinks that would move extension writes outside dat
         await symlink(outside, paths.extensionDir);
       } else {
         await mkdir(paths.extensionDir);
-        await symlink(outside, path.join(paths.extensionDir, '0.2.1'));
+        await symlink(outside, extensionInstallLocation(paths).directory);
       }
     }
     const before = (await readdir(outside)).sort();
@@ -374,11 +413,11 @@ test('rejects a pre-existing extension .download symlink before fetch or outside
     fixture.archive,
     fixture.id,
   );
-  const versionDirectory = path.join(paths.extensionDir, lock.extension.version);
+  const installDirectory = extensionInstallLocation(paths).directory;
   const outsideFile = path.join(outside, 'sentinel');
-  await mkdir(versionDirectory, { recursive: true });
+  await mkdir(installDirectory, { recursive: true });
   await writeFile(outsideFile, 'unchanged');
-  await symlink(outsideFile, path.join(versionDirectory, '.download'));
+  await symlink(outsideFile, path.join(installDirectory, '.download'));
   const before = (await readdir(outside)).sort();
   let fetchCalls = 0;
 
@@ -407,9 +446,9 @@ test('fails closed on a stale ordinary extension .download file before fetch', a
     fixture.archive,
     fixture.id,
   );
-  const versionDirectory = path.join(paths.extensionDir, lock.extension.version);
-  const downloadPath = path.join(versionDirectory, '.download');
-  await mkdir(versionDirectory, { recursive: true });
+  const installDirectory = extensionInstallLocation(paths).directory;
+  const downloadPath = path.join(installDirectory, '.download');
+  await mkdir(installDirectory, { recursive: true });
   await writeFile(downloadPath, 'stale-download');
   let fetchCalls = 0;
 
