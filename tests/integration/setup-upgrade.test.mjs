@@ -13,7 +13,7 @@ import { loadConfig } from '../../lib/core/config.mjs';
 import { saveConfig } from '../../lib/core/files.mjs';
 import { resolvePaths } from '../../lib/core/paths.mjs';
 import { DOCTOR_CHECK_IDS } from '../../lib/doctor/checks.mjs';
-import { buildContentManifestDigest } from '../../lib/extension/content-manifest.mjs';
+import { buildContentManifestDigest } from '../../lib/core/content-manifest.mjs';
 import { runtimeLockIdentity } from '../../lib/runtime/lock.mjs';
 
 // Reproduces the brief's exact scenario: a pinned install (runtime
@@ -45,12 +45,14 @@ function lockFor(productVersion, extensionVersion) {
 // from.
 async function writeRuntimeInstall(paths, lock) {
   const directory = path.join(paths.runtimeDir, lock.productVersion);
-  await mkdir(path.join(directory, 'fast-browser-mcp'), { recursive: true });
-  await writeFile(path.join(directory, 'fast-browser-mcp', 'cli.cjs'), '// stub runtime cli\n');
+  const cliDirectory = path.join(directory, 'fast-browser-mcp');
+  await mkdir(cliDirectory, { recursive: true });
+  await writeFile(path.join(cliDirectory, 'cli.cjs'), '// stub runtime cli\n');
+  const contentDigest = await buildContentManifestDigest(cliDirectory);
   const markerPath = path.join(directory, 'installed.json');
   await writeFile(
     markerPath,
-    `${JSON.stringify({ schemaVersion: 1, lock: runtimeLockIdentity(lock) }, null, 2)}\n`,
+    `${JSON.stringify({ schemaVersion: 1, lock: runtimeLockIdentity(lock), contentDigest }, null, 2)}\n`,
     { mode: 0o600 },
   );
   await chmod(markerPath, 0o600);
@@ -480,6 +482,86 @@ test('setup refuses to upgrade when an unrelated check fails alongside a legitim
 
   assert.deepEqual(installCalls, []);
   assert.deepEqual(untouchedCalls, []);
+});
+
+// The reviewer's exact reproduction. A CURRENT-version runtime directory
+// exists whose installed.json was rewritten to record the (public) current
+// lock identity, with a contentDigest recomputed to match its own tampered
+// bytes (self-consistent on its own terms). A second, genuinely-old runtime
+// directory also exists, exactly the normal leftover state after any prior
+// upgrade since nothing prunes old directories. Before this fix,
+// explainedByUpgrade asked only "does some runtime directory differ from
+// the current lock", and the genuinely-old directory answered yes, wrongly
+// excusing the tampered CURRENT one: setup would have proceeded to
+// "upgrade" (changed: true) while installRuntime's own existingInstall
+// shortcut (marker.lock equality only, no digest recompute) accepted the
+// tampered directory outright, so the malicious CLI was never downloaded,
+// verified, or even read. It must now refuse instead.
+test('setup refuses to upgrade when the currently-pinned runtime directory is tampered even though a genuinely older one also exists', async () => {
+  const oldLock = lockFor('0.1.0-alpha.1', '0.2.1');
+  const newLock = lockFor('0.1.0-alpha.5', '0.2.2');
+  const paths = await fixtureHome('fast-browser-upgrade-runtime-tamper-');
+  await writeRuntimeInstall(paths, oldLock);
+  await writeExtensionInstall(paths, oldLock);
+
+  const tamperedDirectory = path.join(paths.runtimeDir, newLock.productVersion);
+  const tamperedCliDirectory = path.join(tamperedDirectory, 'fast-browser-mcp');
+  await mkdir(tamperedCliDirectory, { recursive: true });
+  await writeFile(path.join(tamperedCliDirectory, 'cli.cjs'), '// malicious payload\n');
+  const tamperedDigest = await buildContentManifestDigest(tamperedCliDirectory);
+  const tamperedMarkerPath = path.join(tamperedDirectory, 'installed.json');
+  await writeFile(
+    tamperedMarkerPath,
+    `${JSON.stringify({
+      schemaVersion: 1,
+      lock: runtimeLockIdentity(newLock),
+      contentDigest: tamperedDigest,
+    }, null, 2)}\n`,
+    { mode: 0o600 },
+  );
+  await chmod(tamperedMarkerPath, 0o600);
+
+  const current = configFor(oldLock);
+  await saveConfig(paths, current);
+
+  const installCalls = [];
+  const untouchedCalls = [];
+  await assert.rejects(
+    setup(baseRequest, {
+      paths,
+      checkPlatform: async () => {},
+      detectHosts: async () => ['claude'],
+      loadConfig,
+      loadRuntimeLock: async () => newLock,
+      installRuntime: async ({ lock }) => {
+        installCalls.push(['runtime', lock.productVersion]);
+        return { version: lock.productVersion };
+      },
+      installExtension: async ({ lock }) => {
+        installCalls.push(['extension', lock.extension.version]);
+        return { unpacked: '/unused' };
+      },
+      ...untouchedDuringUpgrade(untouchedCalls),
+      saveConfig,
+      doctor: async () => doctorReportWithFailures(['mcp-handshake', 'tool-contract']),
+    }),
+    (error) => {
+      assert.equal(error.stage, 'setup-drift');
+      assert.equal(
+        error.message,
+        'Existing Fast Browser configuration has external drift; repair the reported checks and rerun setup.',
+      );
+      return true;
+    },
+  );
+
+  // Never even attempted an install: the tampered directory was neither
+  // downloaded over, nor silently accepted, nor read for verification --
+  // setup refused before installRuntime/installExtension were ever called.
+  assert.deepEqual(installCalls, []);
+  assert.deepEqual(untouchedCalls, []);
+  const persisted = await loadConfig(paths);
+  assert.deepEqual(persisted.runtime, current.runtime);
 });
 
 test('an upgrade leaves pairing mode, session settings, routing files, and host registrations byte-identical', async () => {

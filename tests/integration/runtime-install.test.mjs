@@ -17,6 +17,7 @@ import { promisify } from 'node:util';
 import zlib from 'node:zlib';
 import test from 'node:test';
 
+import { buildContentManifestDigest } from '../../lib/core/content-manifest.mjs';
 import { installRuntime } from '../../lib/runtime/install.mjs';
 
 const execFile = promisify(execFileCallback);
@@ -157,14 +158,85 @@ test('installs once from loopback, verifies identity, and writes a private marke
     '#!/usr/bin/env node\nprocess.stdout.write("fixture");\n',
   );
   assert.equal((await stat(first.marker)).mode & 0o777, 0o600);
-  assert.deepEqual(JSON.parse(await readFile(first.marker, 'utf8')), {
+  const marker = JSON.parse(await readFile(first.marker, 'utf8'));
+  const expectedDigest = await buildContentManifestDigest(path.dirname(first.cli));
+  assert.deepEqual(marker, {
     schemaVersion: 1,
     lock: lockIdentity(lock),
+    contentDigest: expectedDigest,
   });
   assert.deepEqual(
     (await readdir(path.join(paths.runtimeDir, lock.productVersion))).sort(),
     ['fast-browser-mcp', 'installed.json'],
   );
+});
+
+// Requirement 3: existingInstall must verify installed content, not just
+// marker equality, before skipping a reinstall. This is the realistic shape
+// of the reviewer's finding: the marker still records the exact current
+// lock identity and the digest it verified AT INSTALL TIME (nothing about
+// the marker itself looks wrong), but the CLI bytes were swapped out
+// afterward, independently of that marker. Marker/lock equality alone
+// (the pre-fix check) would have accepted this silently; recomputing the
+// digest over what is actually on disk now must not.
+test('a tampered install whose marker still claims the current lock forces a real, checksum-verified reinstall', async (t) => {
+  const archive = await validTar();
+  const server = await loopbackServer(archive);
+  t.after(server.close);
+  const home = await mkdtemp(path.join(os.tmpdir(), 'fast-browser-home-'));
+  const paths = pathsFor(home);
+  const lock = lockFor(server.url, archive);
+
+  const installed = await installRuntime({ lock, paths, fetch });
+  assert.equal(server.requests(), 1);
+  // Tamper after the fact: the marker (and its recorded digest) is left
+  // exactly as the real install wrote it; only the CLI bytes change.
+  await writeFile(installed.cli, '#!/usr/bin/env node\nprocess.stdout.write("malicious");\n');
+
+  const result = await installRuntime({ lock, paths, fetch });
+
+  assert.equal(server.requests(), 2);
+  assert.equal(
+    await readFile(result.cli, 'utf8'),
+    '#!/usr/bin/env node\nprocess.stdout.write("fixture");\n',
+  );
+  const marker = JSON.parse(await readFile(result.marker, 'utf8'));
+  assert.equal(marker.contentDigest, await buildContentManifestDigest(path.dirname(result.cli)));
+});
+
+// Requirement 5: a marker written before content-digest verification
+// existed carries no contentDigest field at all. Even when it otherwise
+// matches the current lock exactly, that legacy shape must be treated as
+// NOT self-consistent (fail closed) rather than trusted, so a legacy
+// install with tampered bytes is reinstalled for real rather than accepted.
+test('a legacy marker with no content digest is never trusted, even over tampered bytes', async (t) => {
+  const archive = await validTar();
+  const server = await loopbackServer(archive);
+  t.after(server.close);
+  const home = await mkdtemp(path.join(os.tmpdir(), 'fast-browser-home-'));
+  const paths = pathsFor(home);
+  const lock = lockFor(server.url, archive);
+
+  const directory = path.join(paths.runtimeDir, lock.productVersion);
+  const cliDirectory = path.join(directory, 'fast-browser-mcp');
+  await mkdir(cliDirectory, { recursive: true });
+  await writeFile(path.join(cliDirectory, 'cli.cjs'), '#!/usr/bin/env node\nprocess.stdout.write("tampered legacy");\n');
+  await writeFile(
+    path.join(directory, 'installed.json'),
+    `${JSON.stringify({ schemaVersion: 1, lock: lockIdentity(lock) }, null, 2)}\n`,
+    { mode: 0o600 },
+  );
+
+  const result = await installRuntime({ lock, paths, fetch });
+
+  assert.equal(server.requests(), 1);
+  assert.equal(
+    await readFile(result.cli, 'utf8'),
+    '#!/usr/bin/env node\nprocess.stdout.write("fixture");\n',
+  );
+  const marker = JSON.parse(await readFile(result.marker, 'utf8'));
+  assert.equal(typeof marker.contentDigest, 'string');
+  assert.equal(marker.contentDigest, await buildContentManifestDigest(cliDirectory));
 });
 
 test('checksum and interrupted downloads leave no remnants and preserve a prior install', async (t) => {

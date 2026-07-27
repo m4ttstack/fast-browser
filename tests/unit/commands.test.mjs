@@ -40,7 +40,7 @@ import {
   RoutingTransactionError,
 } from '../../lib/hosts/file-transaction.mjs';
 import { PairingError } from '../../lib/keychain/pair.mjs';
-import { buildContentManifestDigest } from '../../lib/extension/content-manifest.mjs';
+import { buildContentManifestDigest } from '../../lib/core/content-manifest.mjs';
 
 test('exports dependency-injected lifecycle command functions', () => {
   assert.equal(typeof setup, 'function');
@@ -1066,10 +1066,6 @@ test('production MCP composition uses one persistent pinned-runtime duplex sessi
   const cliDir = path.join(installDir, 'fast-browser-mcp');
   await mkdir(cliDir, { recursive: true });
   await writeFile(
-    path.join(installDir, 'installed.json'),
-    JSON.stringify({ lock: runtimeLockIdentity(lock) }),
-  );
-  await writeFile(
     path.join(cliDir, 'cli.cjs'),
     [
       "let buffered = '';",
@@ -1091,6 +1087,11 @@ test('production MCP composition uses one persistent pinned-runtime duplex sessi
       "  }",
       '});',
     ].join('\n'),
+  );
+  const contentDigest = await buildContentManifestDigest(cliDir);
+  await writeFile(
+    path.join(installDir, 'installed.json'),
+    JSON.stringify({ schemaVersion: 1, lock: runtimeLockIdentity(lock), contentDigest }),
   );
   const config = validConfig({
     hosts: { claude: false, codex: false },
@@ -1121,6 +1122,139 @@ test('production MCP composition uses one persistent pinned-runtime duplex sessi
   );
   assert.equal(report.checks.find(({ id }) => id === 'mcp-handshake').status, 'pass');
   assert.equal(report.checks.find(({ id }) => id === 'tool-contract').status, 'pass');
+});
+
+// Requirement 4: doctor's runtime-checksum must verify content, symmetric
+// with extension-artifact, so a runtime tampered after install is caught by
+// doctor itself instead of surfacing only as a broken MCP handshake (or not
+// at all, if the tampered CLI still happens to speak enough of the
+// protocol). The marker here is exactly what a real, honest install would
+// have written; only the CLI bytes are changed afterward.
+test('doctor runtime-checksum fails when the installed CLI bytes are tampered after a real install', async (t) => {
+  const homeDir = await mkdtemp(path.join(tmpdir(), 'fast-browser-runtime-tamper-'));
+  t.after(() => rm(homeDir, { recursive: true, force: true }));
+  const dataDir = path.join(homeDir, '.fast-browser');
+  const runtimeDir = path.join(dataDir, 'runtime');
+  const lock = {
+    schemaVersion: 1,
+    productVersion: '0.1.0-alpha.1',
+    sourceCommit: 'abc',
+    protocolVersion: 2,
+    runtime: {
+      file: 'fast-browser-mcp-0.1.0-alpha.1.tar.gz',
+      sha256: 'a'.repeat(64),
+      node: '>=20',
+    },
+    extension: {
+      file: 'fast-browser-extension-0.1.0-alpha.1.zip',
+      sha256: 'b'.repeat(64),
+      id: 'a'.repeat(32),
+      version: '0.2.1',
+    },
+  };
+  const installDir = path.join(runtimeDir, lock.productVersion);
+  const cliDir = path.join(installDir, 'fast-browser-mcp');
+  await mkdir(cliDir, { recursive: true });
+  await writeFile(path.join(cliDir, 'cli.cjs'), '// genuine runtime cli\n');
+  const contentDigest = await buildContentManifestDigest(cliDir);
+  await writeFile(
+    path.join(installDir, 'installed.json'),
+    JSON.stringify({ schemaVersion: 1, lock: runtimeLockIdentity(lock), contentDigest }),
+  );
+  // Tamper after the fact: the marker (and its recorded digest) is
+  // untouched; only the CLI bytes on disk change.
+  await writeFile(path.join(cliDir, 'cli.cjs'), '// malicious replacement\n');
+
+  const checks = Object.fromEntries(DOCTOR_CHECK_IDS
+    .filter((id) => id !== 'runtime-checksum')
+    .map((id) => [id, async () => ({ status: 'pass', message: `${id} passed.`, remediation: null })]));
+  const report = await doctor(
+    { profile: 'safe' },
+    {
+      paths: {
+        homeDir,
+        dataDir,
+        configFile: path.join(dataDir, 'config.json'),
+        runtimeDir,
+        extensionDir: path.join(dataDir, 'extension'),
+        pluginRoot: '/plugin',
+      },
+      lock,
+      checks,
+    },
+  );
+
+  assert.deepEqual(report.checks.find(({ id }) => id === 'runtime-checksum'), {
+    id: 'runtime-checksum',
+    status: 'fail',
+    message: 'The installed runtime does not match its pinned lock.',
+    remediation: 'Run `fast-browser setup` to install the pinned runtime.',
+  });
+});
+
+// Same symmetry check on the extension side: extension-artifact must also
+// recompute content, not just compare the marker and manifest version.
+test('doctor extension-artifact fails when installed extension bytes are tampered after a real install', async (t) => {
+  const homeDir = await mkdtemp(path.join(tmpdir(), 'fast-browser-extension-tamper-'));
+  t.after(() => rm(homeDir, { recursive: true, force: true }));
+  const dataDir = path.join(homeDir, '.fast-browser');
+  const extensionDir = path.join(dataDir, 'extension');
+  const lock = {
+    schemaVersion: 1,
+    productVersion: '0.1.0-alpha.1',
+    sourceCommit: 'abc',
+    protocolVersion: 2,
+    runtime: {
+      file: 'fast-browser-mcp-0.1.0-alpha.1.tar.gz',
+      sha256: 'a'.repeat(64),
+      node: '>=20',
+    },
+    extension: {
+      file: 'fast-browser-extension-0.1.0-alpha.1.zip',
+      sha256: 'b'.repeat(64),
+      id: 'a'.repeat(32),
+      version: '0.2.1',
+    },
+  };
+  const installDir = path.join(extensionDir, lock.extension.version);
+  const unpacked = path.join(installDir, 'unpacked');
+  await mkdir(unpacked, { recursive: true });
+  await writeFile(path.join(unpacked, 'manifest.json'), JSON.stringify({ manifest_version: 3, version: '0.2.1' }));
+  await writeFile(path.join(unpacked, 'worker.js'), 'void 0;\n');
+  const contentDigest = await buildContentManifestDigest(unpacked);
+  await writeFile(
+    path.join(installDir, 'installed.json'),
+    JSON.stringify({ schemaVersion: 1, lock: runtimeLockIdentity(lock), contentDigest }),
+  );
+  // Tamper after the fact: manifest.json (checked for version) is
+  // untouched; a different, unchecked-by-version file changes instead.
+  await writeFile(path.join(unpacked, 'worker.js'), 'void 1; // tampered\n');
+
+  const checks = Object.fromEntries(DOCTOR_CHECK_IDS
+    .filter((id) => id !== 'extension-artifact')
+    .map((id) => [id, async () => ({ status: 'pass', message: `${id} passed.`, remediation: null })]));
+  const report = await doctor(
+    { profile: 'safe' },
+    {
+      paths: {
+        homeDir,
+        dataDir,
+        configFile: path.join(dataDir, 'config.json'),
+        runtimeDir: path.join(dataDir, 'runtime'),
+        extensionDir,
+        pluginRoot: '/plugin',
+      },
+      lock,
+      checks,
+    },
+  );
+
+  assert.deepEqual(report.checks.find(({ id }) => id === 'extension-artifact'), {
+    id: 'extension-artifact',
+    status: 'fail',
+    message: 'The installed extension artifact does not match its pinned lock.',
+    remediation: 'Run `fast-browser setup` to install the pinned extension.',
+  });
 });
 
 test('configure composes full defaults, applies explicit overrides, saves before pruning', async () => {

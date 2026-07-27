@@ -10,7 +10,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import { buildContentManifestDigest } from '../../lib/extension/content-manifest.mjs';
+import { buildContentManifestDigest } from '../../lib/core/content-manifest.mjs';
 
 async function tempDir() {
   return mkdtemp(path.join(os.tmpdir(), 'fast-browser-content-manifest-'));

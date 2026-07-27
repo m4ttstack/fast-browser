@@ -16,7 +16,7 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import test from 'node:test';
 
-import { buildContentManifestDigest } from '../../lib/extension/content-manifest.mjs';
+import { buildContentManifestDigest } from '../../lib/core/content-manifest.mjs';
 import { detectChromeExtension } from '../../lib/extension/detect.mjs';
 import { installExtension } from '../../lib/extension/install.mjs';
 
