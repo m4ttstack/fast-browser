@@ -228,12 +228,12 @@ test('npm package contains only portable deployable Fast Browser assets', async 
   const readme = textByPath.get('README.md');
   const normalizedReadme = readme.replace(/\s+/g, ' ');
   assert.match(normalizedReadme, /source checkout alone is not an installable candidate/i);
-  assert.match(normalizedReadme, /fast-browser-release-0\.1\.0-alpha\.1\.json/);
-  assert.match(normalizedReadme, /fast-browser-mcp-0\.1\.0-alpha\.1\.tar\.gz/);
-  assert.match(normalizedReadme, /fast-browser-extension-0\.1\.0-alpha\.1\.zip/);
+  assert.match(normalizedReadme, /fast-browser-release-0\.1\.0-alpha\.5\.json/);
+  assert.match(normalizedReadme, /fast-browser-mcp-0\.1\.0-alpha\.5\.tar\.gz/);
+  assert.match(normalizedReadme, /fast-browser-extension-0\.1\.0-alpha\.5\.zip/);
   assert.match(
     readme,
-    /setup[\s\S]*--source \/path\/to\/mattstack[\s\S]*--runtime-lock \/absolute\/path\/to\/fast-browser-release-0\.1\.0-alpha\.1\.json[\s\S]*--host both[\s\S]*--profile safe/,
+    /setup[\s\S]*--source \/path\/to\/mattstack[\s\S]*--runtime-lock \/absolute\/path\/to\/fast-browser-release-0\.1\.0-alpha\.5\.json[\s\S]*--host both[\s\S]*--profile safe/,
   );
   assert.match(
     normalizedReadme,
@@ -249,12 +249,12 @@ test('npm package contains only portable deployable Fast Browser assets', async 
   assert.match(normalizedRootReadme, /source checkout alone is not an installable candidate/i);
   assert.match(
     normalizedRootReadme,
-    /--runtime-lock \/absolute\/path\/to\/fast-browser-release-0\.1\.0-alpha\.1\.json/,
+    /--runtime-lock \/absolute\/path\/to\/fast-browser-release-0\.1\.0-alpha\.5\.json/,
   );
 
   const notices = textByPath.get('THIRD_PARTY_NOTICES.md');
   assert.match(notices, /not public/i);
-  assert.match(notices, /23c61fcce87a8d2fcaf9f636751f062641a1bf1e/);
-  assert.match(notices, /fast-browser-mcp-0\.1\.0-alpha\.1\.tar\.gz/);
-  assert.match(notices, /fast-browser-extension-0\.1\.0-alpha\.1\.zip/);
+  assert.match(notices, /eac35fdd5df3df6afc51fd2ae33bc305c2bc8cb2/);
+  assert.match(notices, /fast-browser-mcp-0\.1\.0-alpha\.5\.tar\.gz/);
+  assert.match(notices, /fast-browser-extension-0\.1\.0-alpha\.5\.zip/);
 });

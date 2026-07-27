@@ -8,7 +8,7 @@ import test from 'node:test';
 import { startMcpClient } from '../e2e/helpers/mcp-client.mjs';
 
 const ARCHIVE_FILE = 'fast-browser-mcp-0.1.0-alpha.1.tar.gz';
-const ACCEPTED_SHA256 = '356981ca2e4b76c06272e529becdf0296052b45d533e4ee14eb8dfcc35439950';
+const ACCEPTED_SHA256 = 'ce9bd45a24b87ed39546bf1e54b721b31794f8d417e0b08de5788ee8c886716d';
 const INTEGRITY_ERROR = 'the local fast-browser runtime artifact failed integrity validation';
 
 function releaseManifest(sha256) {
@@ -31,7 +31,7 @@ async function tamperedRelease(t, manifestSha256) {
   await Promise.all([
     writeFile(path.join(releaseDir, ARCHIVE_FILE), archive),
     writeFile(
-      path.join(releaseDir, 'fast-browser-release-0.1.0-alpha.1.json'),
+      path.join(releaseDir, 'fast-browser-release-0.1.0-alpha.5.json'),
       JSON.stringify(releaseManifest(manifestSha256(archive))),
     ),
   ]);

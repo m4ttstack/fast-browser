@@ -34,9 +34,9 @@ npx @mattstack/fast-browser setup --host both
 
 The current verified flow requires these three files in one local directory:
 
-- `fast-browser-release-0.1.0-alpha.1.json`
-- `fast-browser-mcp-0.1.0-alpha.1.tar.gz`
-- `fast-browser-extension-0.1.0-alpha.1.zip`
+- `fast-browser-release-0.1.0-alpha.5.json`
+- `fast-browser-mcp-0.1.0-alpha.5.tar.gz`
+- `fast-browser-extension-0.1.0-alpha.5.zip`
 
 The release JSON is the URL-free local candidate manifest. The runtime and
 extension filenames above must be adjacent to it and must match its locked
@@ -50,7 +50,7 @@ checkout with absolute paths:
 cd /path/to/mattstack
 node plugins/fast-browser/bin/fast-browser.mjs setup \
   --source /path/to/mattstack \
-  --runtime-lock /absolute/path/to/fast-browser-release-0.1.0-alpha.1.json \
+  --runtime-lock /absolute/path/to/fast-browser-release-0.1.0-alpha.5.json \
   --host both \
   --profile safe
 ```

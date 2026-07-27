@@ -67,7 +67,7 @@ async function setup(t) {
 async function copyAcceptedRelease(root) {
   const releaseDir = path.join(root, 'release');
   await mkdir(releaseDir);
-  const manifestName = 'fast-browser-release-0.1.0-alpha.1.json';
+  const manifestName = 'fast-browser-release-0.1.0-alpha.5.json';
   const manifestText = await readFile(path.join(acceptedReleaseDir, manifestName), 'utf8');
   const manifest = JSON.parse(manifestText);
   await Promise.all([

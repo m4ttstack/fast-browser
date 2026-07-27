@@ -35,7 +35,7 @@ function integrityError() {
 // can launch the same integrity-checked runtime in --extension mode without
 // duplicating the checksum/extraction logic.
 export async function runtimeCliFor({ outputDir, releaseDir = process.env.FAST_BROWSER_RELEASE_DIR ?? defaultReleaseDir }) {
-  const manifest = JSON.parse(await readFile(path.join(releaseDir, 'fast-browser-release-0.1.0-alpha.1.json')));
+  const manifest = JSON.parse(await readFile(path.join(releaseDir, 'fast-browser-release-0.1.0-alpha.5.json')));
   if (manifest.schemaVersion !== 1 || manifest.protocolVersion !== 2 || !manifest.runtime?.file) {
     throw new Error('the local fast-browser release manifest is not compatible with this fixture');
   }
