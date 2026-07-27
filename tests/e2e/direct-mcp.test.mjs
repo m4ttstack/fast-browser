@@ -67,7 +67,14 @@ async function setup(t) {
 async function copyAcceptedRelease(root) {
   const releaseDir = path.join(root, 'release');
   await mkdir(releaseDir);
-  const manifestName = 'fast-browser-release-0.1.0-alpha.5.json';
+  // Derived from the bundled lock for the same reason as mcp-client.mjs: a
+  // pinned filename here validates the previous release against the current
+  // lock after every re-pin.
+  const pinnedLock = JSON.parse(await readFile(
+    new URL('../../runtime-lock.json', import.meta.url),
+    'utf8',
+  ));
+  const manifestName = `fast-browser-release-${pinnedLock.productVersion}.json`;
   const manifestText = await readFile(path.join(acceptedReleaseDir, manifestName), 'utf8');
   const manifest = JSON.parse(manifestText);
   await Promise.all([

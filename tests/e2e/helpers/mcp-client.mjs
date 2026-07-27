@@ -35,7 +35,14 @@ function integrityError() {
 // can launch the same integrity-checked runtime in --extension mode without
 // duplicating the checksum/extraction logic.
 export async function runtimeCliFor({ outputDir, releaseDir = process.env.FAST_BROWSER_RELEASE_DIR ?? defaultReleaseDir }) {
-  const manifest = JSON.parse(await readFile(path.join(releaseDir, 'fast-browser-release-0.1.0-alpha.5.json')));
+  // Derived from the bundled lock rather than hardcoded: a pinned filename
+  // here silently validates the previous release against the current lock's
+  // checksum after every re-pin, which reads as an integrity failure.
+  const pinnedLock = JSON.parse(await readFile(
+    new URL('../../../runtime-lock.json', import.meta.url),
+  ));
+  const manifestName = `fast-browser-release-${pinnedLock.productVersion}.json`;
+  const manifest = JSON.parse(await readFile(path.join(releaseDir, manifestName)));
   if (manifest.schemaVersion !== 1 || manifest.protocolVersion !== 2 || !manifest.runtime?.file) {
     throw new Error('the local fast-browser release manifest is not compatible with this fixture');
   }

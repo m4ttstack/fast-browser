@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -7,6 +8,12 @@ import test from 'node:test';
 
 import { startMcpClient } from '../e2e/helpers/mcp-client.mjs';
 
+// The helper resolves the manifest name from the bundled lock, so this fixture
+// must follow the same pin instead of hardcoding a release that re-pinning ages out.
+const PINNED_VERSION = JSON.parse(readFileSync(
+  new URL('../../runtime-lock.json', import.meta.url),
+  'utf8',
+)).productVersion;
 const ARCHIVE_FILE = 'fast-browser-mcp-0.1.0-alpha.1.tar.gz';
 const ACCEPTED_SHA256 = 'ce9bd45a24b87ed39546bf1e54b721b31794f8d417e0b08de5788ee8c886716d';
 const INTEGRITY_ERROR = 'the local fast-browser runtime artifact failed integrity validation';
@@ -31,7 +38,7 @@ async function tamperedRelease(t, manifestSha256) {
   await Promise.all([
     writeFile(path.join(releaseDir, ARCHIVE_FILE), archive),
     writeFile(
-      path.join(releaseDir, 'fast-browser-release-0.1.0-alpha.5.json'),
+      path.join(releaseDir, `fast-browser-release-${PINNED_VERSION}.json`),
       JSON.stringify(releaseManifest(manifestSha256(archive))),
     ),
   ]);
