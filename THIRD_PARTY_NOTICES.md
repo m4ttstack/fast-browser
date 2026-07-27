@@ -14,10 +14,11 @@ project and its contributors.
 
 ## Locked artifacts
 
-The URLs in `runtime-lock.json` are immutable release coordinates, not a claim
-that the links currently resolve. At candidate preparation time that commit,
-the `fast-browser-v0.1.0-alpha.7` tag, and its release assets are not public in the
-fork.
+The URLs in `runtime-lock.json` are immutable release coordinates: a specific
+tag, never `latest`, so the bytes behind them cannot change without the lock
+changing. That commit, the `fast-browser-v0.1.0-alpha.7` tag, and its release
+assets are published in the fork, and the installer verifies both checksums
+after download regardless.
 
 - Runtime: `fast-browser-mcp-0.1.0-alpha.7.tar.gz`
   SHA-256 `fa9fe1fda148d9e2604591fa8d31482e25252ab19f30e945b6b5fa2679c2eea7`
@@ -32,10 +33,10 @@ can be checked against the installer contract. A release-gate test asserts they
 still agree; hand-editing either one alone fails that gate rather than silently
 publishing stale provenance.
 
-The verified local candidate flow instead uses a URL-free
-`fast-browser-release-0.1.0-alpha.7.json` beside those exact two files. That local
-manifest and the locked hashes provide the candidate's provenance while the
-public commit and release gates remain unresolved.
+An unpublished local build can still be installed with a URL-free
+`fast-browser-release-0.1.0-alpha.7.json` beside those exact two files, passed
+via `--runtime-lock`. That local manifest and the locked hashes provide the
+same provenance without reaching the network.
 
 The Playwright project, its upstream artifacts, names, and trademarks belong
 to their respective owners. This notice does not claim Microsoft or Playwright

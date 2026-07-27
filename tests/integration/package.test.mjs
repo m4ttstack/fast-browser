@@ -227,17 +227,20 @@ test('npm package contains only portable deployable Fast Browser assets', async 
 
   const readme = textByPath.get('README.md');
   const normalizedReadme = readme.replace(/\s+/g, ' ');
-  assert.match(normalizedReadme, /source checkout alone is not an installable candidate/i);
-  assert.match(normalizedReadme, /fast-browser-release-0\.1\.0-alpha\.5\.json/);
-  assert.match(normalizedReadme, /fast-browser-mcp-0\.1\.0-alpha\.5\.tar\.gz/);
-  assert.match(normalizedReadme, /fast-browser-extension-0\.1\.0-alpha\.5\.zip/);
+  // These named alpha.5 literally, so they kept asserting a bundle that the
+  // lock had long since moved past -- the same rot the notices had.
+  assert.match(normalizedReadme, /installs on its own without a local artifact bundle/i);
+  assert.doesNotMatch(normalizedReadme, /not an installable candidate/i);
+  assert.match(normalizedReadme, /fast-browser-release-<version>\.json/);
+  assert.match(normalizedReadme, /fast-browser-mcp-<version>\.tar\.gz/);
+  assert.match(normalizedReadme, /fast-browser-extension-<version>\.zip/);
   assert.match(
     readme,
-    /setup[\s\S]*--source \/path\/to\/mattstack[\s\S]*--runtime-lock \/absolute\/path\/to\/fast-browser-release-0\.1\.0-alpha\.5\.json[\s\S]*--host both[\s\S]*--profile safe/,
+    /setup[\s\S]*--source \/path\/to\/mattstack[\s\S]*--runtime-lock \/absolute\/path\/to\/fast-browser-release-[0-9a-z.-]+\.json[\s\S]*--host both[\s\S]*--profile safe/,
   );
   assert.match(
     normalizedReadme,
-    /URL-backed bundled lock will fail until the runtime commit, tag, and release assets are public/i,
+    /`--runtime-lock` is optional now that the pinned release is public/i,
   );
   assert.match(
     normalizedReadme,
@@ -246,7 +249,10 @@ test('npm package contains only portable deployable Fast Browser assets', async 
 
   const rootReadme = await readFile(path.join(repositoryRoot, 'README.md'), 'utf8');
   const normalizedRootReadme = rootReadme.replace(/\s+/g, ' ');
-  assert.match(normalizedRootReadme, /source checkout alone is not an installable candidate/i);
+  // The pinned release is published, so the README must no longer tell users
+  // a local artifact bundle is the only way in.
+  assert.match(normalizedRootReadme, /installs on its own without a local artifact bundle/i);
+  assert.doesNotMatch(normalizedRootReadme, /not an installable candidate/i);
   assert.match(
     normalizedRootReadme,
     /--runtime-lock \/absolute\/path\/to\/fast-browser-release-[0-9a-z.-]+\.json/,
@@ -261,7 +267,7 @@ test('npm package contains only portable deployable Fast Browser assets', async 
     await readFile(new URL('../../runtime-lock.json', import.meta.url), 'utf8'),
   );
   const notices = textByPath.get('THIRD_PARTY_NOTICES.md');
-  assert.match(notices, /not public/i);
+  assert.match(notices, /Apache License 2\.0/);
   for (const value of [lock.sourceCommit, lock.runtime.file, lock.extension.file]) {
     assert.ok(notices.includes(value), `notices must record ${value}`);
   }

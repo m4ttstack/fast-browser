@@ -6,10 +6,9 @@ same three browser skills for both hosts, plus host-specific routing and a
 delegated browser driver.
 
 This package is MIT licensed (see LICENSE); the Playwright-derived runtime and
-extension artifacts it installs remain Apache-2.0. The source checkout
-alone is not an installable candidate: its bundled lock points to a runtime
-commit, tag, and release assets that are not public. The only current candidate
-flow requires a separately produced local release bundle.
+extension artifacts it installs remain Apache-2.0. The bundled lock points at a
+published release, so a source checkout installs on its own without a local
+artifact bundle.
 
 ## Requirements and limits
 
@@ -23,35 +22,37 @@ and unattended extension loading are not supported by this candidate.
 
 ## Install
 
-`npx` is not available. It remains gated on choosing a license, an authorized
-npm publisher publishing the package, and the locked runtime release becoming
-public. After all three gates are resolved, the intended setup form is:
+`npx` is not available yet: the package has not been published to npm. The
+license is MIT and the locked runtime release is public, so publication is the
+only remaining gate. Once published, the intended setup form is:
 
 ```bash
 npx @mattstack/fast-browser setup --host both
 ```
 
-### Local candidate bundle
+### Local build bundle (optional)
 
-The current verified flow requires these three files in one local directory:
+Setup installs from the published release by default. To install an
+unpublished local build instead, put these three files in one directory, using
+the version you built:
 
-- `fast-browser-release-0.1.0-alpha.5.json`
-- `fast-browser-mcp-0.1.0-alpha.5.tar.gz`
-- `fast-browser-extension-0.1.0-alpha.5.zip`
+- `fast-browser-release-<version>.json`
+- `fast-browser-mcp-<version>.tar.gz`
+- `fast-browser-extension-<version>.zip`
 
-The release JSON is the URL-free local candidate manifest. The runtime and
-extension filenames above must be adjacent to it and must match its locked
-SHA-256 values. These files are produced separately; they are not included in
-the source checkout or npm tarball.
+The release JSON is the URL-free local manifest. The runtime and extension
+files must be adjacent to it and must match its locked SHA-256 values. They are
+produced separately and are not included in the source checkout or npm
+tarball.
 
-If you possess that local candidate bundle, run the bundled CLI from a source
-checkout with absolute paths:
+To use that local bundle, run the bundled CLI from a source checkout with
+absolute paths:
 
 ```bash
 cd /path/to/mattstack
 node plugins/fast-browser/bin/fast-browser.mjs setup \
   --source /path/to/mattstack \
-  --runtime-lock /absolute/path/to/fast-browser-release-0.1.0-alpha.5.json \
+  --runtime-lock /absolute/path/to/fast-browser-release-0.1.0-alpha.7.json \
   --host both \
   --profile safe
 ```
@@ -60,10 +61,11 @@ The remaining examples use the installed command name `fast-browser`. For an
 unpublished source checkout, replace it with
 `node /path/to/mattstack/plugins/fast-browser/bin/fast-browser.mjs`.
 
-Do not omit `--runtime-lock` on the initial local candidate setup. The
-URL-backed bundled lock will fail until the runtime commit, tag, and release
-assets are public. The override is accepted only when it contains no URLs; the
-CLI resolves the two exact adjacent artifacts locally and verifies both hashes.
+`--runtime-lock` is optional now that the pinned release is public; the bundled
+lock resolves and verifies both artifacts on its own. Use the override only to
+install an unpublished local build. It is accepted only when it contains no
+URLs; the CLI resolves the two exact adjacent artifacts locally and verifies
+both hashes either way.
 
 Use `--host claude`, `--host codex`, or `--host both`. Interactive setup with
 no `--host` uses the installed hosts it detects. Non-interactive setup always
