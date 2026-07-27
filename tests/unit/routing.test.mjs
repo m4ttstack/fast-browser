@@ -363,6 +363,59 @@ test('TOML string escaping helper escapes backslashes and double quotes', () => 
   );
 });
 
+test('TOML string escaping helper escapes control characters using standard short escapes', () => {
+  assert.equal(escapeTomlString('has\na newline'), 'has\\na newline');
+  assert.equal(escapeTomlString('has\ta tab'), 'has\\ta tab');
+  assert.equal(escapeTomlString('has\ra carriage return'), 'has\\ra carriage return');
+  assert.equal(escapeTomlString('has\ba backspace'), 'has\\ba backspace');
+  assert.equal(escapeTomlString('has\fa form feed'), 'has\\fa form feed');
+});
+
+test('TOML string escaping helper escapes remaining control characters as \\uXXXX', () => {
+  assert.equal(
+    escapeTomlString(`has${String.fromCodePoint(0x01)}control`),
+    'has\\u0001control',
+  );
+  assert.equal(
+    escapeTomlString(`has${String.fromCodePoint(0x1f)}control`),
+    'has\\u001fcontrol',
+  );
+  assert.equal(
+    escapeTomlString(`has${String.fromCodePoint(0x00)}null`),
+    'has\\u0000null',
+  );
+  assert.equal(
+    escapeTomlString(`has${String.fromCodePoint(0x7f)}del`),
+    'has\\u007fdel',
+  );
+});
+
+test('TOML string escaping helper does not re-escape the backslash introduced by a control escape', () => {
+  assert.equal(escapeTomlString('a\\\nb'), 'a\\\\\\nb');
+});
+
+test('an escaped path containing a raw newline keeps the managed TOML block end marker intact', () => {
+  const mcpServerPath = '/plugin\nroot/bin/fast-browser-mcp.mjs';
+  const argsLine = `args = ["${escapeTomlString(mcpServerPath)}"]`;
+  const body = [
+    '[mcp_servers.fast_browser]',
+    'command = "node"',
+    argsLine,
+  ].join('\n');
+  const rendered = [
+    '# fast-browser:start mcp-policy-v1',
+    body,
+    '# fast-browser:end mcp-policy-v1',
+  ].join('\n');
+
+  // A raw newline embedded in the path must not become a real line break:
+  // exactly three lines (table header, command, args), and the end marker
+  // must remain the final line rather than being swallowed inside an
+  // unterminated TOML string.
+  assert.equal(body.split('\n').length, 3);
+  assert.equal(rendered.split('\n').at(-1), '# fast-browser:end mcp-policy-v1');
+});
+
 test('full to safe transition removes only routing no longer owned by the safe profile', async (t) => {
   const paths = await temporaryPaths(t);
   const full = await installRouting({
