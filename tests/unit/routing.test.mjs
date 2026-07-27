@@ -18,6 +18,7 @@ import test from 'node:test';
 import { resolvePaths } from '../../lib/core/paths.mjs';
 import {
   beginOwnedCodexAgentFallback,
+  escapeTomlString,
   installRouting,
   prepareRoutingTransition,
   preflightRoutingRemoval,
@@ -38,9 +39,25 @@ const safePolicy = [
   'approval_mode = "prompt"',
   '# fast-browser:end mcp-policy-v1',
 ].join('\n');
-const fullPolicy = safePolicy
-  .replace('"writes"', '"approve"')
-  .replace('"prompt"', '"approve"');
+// FULL profile policy content depends on the resolved plugin root, so it is
+// derived per-call rather than a fixed constant like safePolicy above.
+function fullPolicy(root) {
+  const mcpServerPath = path.join(root, 'bin', 'fast-browser-mcp.mjs');
+  return [
+    '# fast-browser:start mcp-policy-v1',
+    '[plugins."fast-browser@mattstack".mcp_servers.fast_browser]',
+    'enabled = true',
+    'default_tools_approval_mode = "approve"',
+    '',
+    '[plugins."fast-browser@mattstack".mcp_servers.fast_browser.tools.browser_run_code_unsafe]',
+    'approval_mode = "approve"',
+    '',
+    '[mcp_servers.fast_browser]',
+    'command = "node"',
+    `args = ["${mcpServerPath}"]`,
+    '# fast-browser:end mcp-policy-v1',
+  ].join('\n');
+}
 
 async function temporaryPaths(t) {
   const homeDir = await mkdtemp(path.join(os.tmpdir(), 'fast-browser-routing-'));
@@ -114,6 +131,12 @@ test('safe installs only the Codex agent and exact prompt-oriented MCP policy', 
     config,
     `user_setting = true\r\n\r\n${safePolicy.replaceAll('\n', '\r\n')}`,
   );
+  // SAFE profile stays byte-identical: no external [mcp_servers] table. The
+  // plugin-scoped `writes` / `prompt` approval gates only apply to the
+  // plugin-scoped table, not to external [mcp_servers] entries, so adding
+  // this table under SAFE would silently bypass the safe profile's approval
+  // posture.
+  assert.doesNotMatch(config, /\[mcp_servers\.fast_browser\]/);
   assert.equal(await exists(path.join(paths.homeDir, '.claude', 'rules')), false);
   assert.equal(await exists(path.join(codexDir, 'AGENTS.md')), false);
   assert.deepEqual(state.files.map(({ path: target }) => target), [agentFile]);
@@ -269,7 +292,7 @@ test('full installs dedicated Claude rules and routes through AGENTS.override.md
   );
   assert.equal(
     await readFile(configFile, 'utf8'),
-    `${originalConfig}\r\n${fullPolicy.replaceAll('\n', '\r\n')}`,
+    `${originalConfig}\r\n${fullPolicy(pluginRoot).replaceAll('\n', '\r\n')}`,
   );
   assert.deepEqual(
     state.files.map(({ path: target }) => target).sort(),
@@ -289,6 +312,55 @@ test('full installs dedicated Claude rules and routes through AGENTS.override.md
   assert.equal(await readFile(overrideFile, 'utf8'), originalOverride);
   assert.equal(await readFile(configFile, 'utf8'), originalConfig);
   assert.equal(await readFile(agentsFile, 'utf8'), originalAgents);
+});
+
+test('FULL profile Codex policy also registers Fast Browser as an external mcp_servers entry', async (t) => {
+  const paths = await temporaryPaths(t);
+  const configFile = path.join(paths.homeDir, '.codex', 'config.toml');
+
+  const state = await installRouting({
+    profile: 'full',
+    hosts: ['codex'],
+    paths,
+    codexVersion: 'codex-cli 0.145.0',
+  });
+
+  const config = await readFile(configFile, 'utf8');
+  assert.equal(config, fullPolicy(pluginRoot));
+  const match = config.match(
+    /\[mcp_servers\.fast_browser\]\ncommand = "node"\nargs = \["([^"]+)"\]/,
+  );
+  assert.ok(match, 'expected an external [mcp_servers.fast_browser] table');
+  const [, mcpServerPath] = match;
+  assert.equal(path.isAbsolute(mcpServerPath), true);
+  assert.equal(mcpServerPath.endsWith('/bin/fast-browser-mcp.mjs'), true);
+  assert.equal(mcpServerPath, path.join(pluginRoot, 'bin', 'fast-browser-mcp.mjs'));
+  await access(mcpServerPath);
+
+  // Idempotency under FULL: a second install carrying the recorded
+  // managedState makes no further change, matching the safe-profile pattern.
+  const second = await installRouting({
+    profile: 'full',
+    hosts: ['codex'],
+    paths,
+    codexVersion: 'codex-cli 0.145.0',
+    managedState: state,
+  });
+  assert.deepEqual(second, state);
+  assert.equal(await readFile(configFile, 'utf8'), config);
+});
+
+test('TOML string escaping helper escapes backslashes and double quotes', () => {
+  assert.equal(escapeTomlString('/plain/path/bin/fast-browser-mcp.mjs'), '/plain/path/bin/fast-browser-mcp.mjs');
+  assert.equal(
+    escapeTomlString('/Users/te"st/bin/fast-browser-mcp.mjs'),
+    '/Users/te\\"st/bin/fast-browser-mcp.mjs',
+  );
+  assert.equal(escapeTomlString('back\\slash'), 'back\\\\slash');
+  assert.equal(
+    escapeTomlString('back\\slash"and"quote'),
+    'back\\\\slash\\"and\\"quote',
+  );
 });
 
 test('full to safe transition removes only routing no longer owned by the safe profile', async (t) => {
