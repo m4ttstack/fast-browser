@@ -764,3 +764,32 @@ test('a pending extension reload does not excuse a genuinely failing check', asy
     /drift/i,
   );
 });
+
+// A successful rollback returned undefined, so the CLI threw while rendering
+// its report -- after every file had already been restored. The user saw a
+// crash for a rollback that had fully succeeded, which invites them to
+// "repair" a state that was already correct. Exercise the real CLI rendering
+// path, not just the migration function, because the crash lived there.
+test('CLI migrate --rollback reports success rather than crashing on the report', async () => {
+  const lines = [];
+  const exitCode = await main(
+    {
+      command: 'migrate',
+      rollback: '/home/test/.fast-browser/backups/migration-1/rollback.json',
+      hosts: [],
+    },
+    {
+      write: (text) => lines.push(text),
+      paths: resolvePaths({ homeDir: '/home/test' }),
+      checkPlatform: async () => {},
+      rollbackMigration: async () => ({
+        rollback: true,
+        manifestPath: '/home/test/.fast-browser/backups/migration-1/rollback.json',
+        restoredPaths: ['/home/test/.claude/agents/browser-driver.md'],
+      }),
+    },
+  );
+
+  assert.equal(exitCode, 0);
+  assert.match(lines.join(''), /Migration rolled back; 1 legacy path restored\./);
+});

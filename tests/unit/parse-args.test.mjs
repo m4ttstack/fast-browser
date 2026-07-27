@@ -104,3 +104,19 @@ test('usage errors never echo unknown or invalid secret-like values', () => {
     );
   }
 });
+
+// migrate reinstalls the host adapters through the same code path as setup,
+// so it needs the same --source. Rejecting the flag left migrate passing an
+// undefined source, which Claude refuses as "configured from a different
+// source" against the marketplace setup already registered. Every machine
+// that had run setup therefore could not migrate.
+test('migrate accepts --source, like setup', () => {
+  assert.equal(
+    parseArgs(['migrate', '--host', 'both', '--source', '/repo/mattstack']).source,
+    '/repo/mattstack',
+  );
+});
+
+test('doctor still rejects --source', () => {
+  assert.throws(() => parseArgs(['doctor', '--source', '/repo/mattstack']), /--source/);
+});
