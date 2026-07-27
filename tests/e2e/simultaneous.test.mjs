@@ -930,7 +930,10 @@ test('two identity-carrying Fast Browser clients drive the paired real Chrome si
     killClaudeLeftCodexFunctional,
     reconnectLeftBothFunctional,
   });
-  const evidenceDir = path.join(pluginRoot, '.local-dev', 'fast-browser');
+  // Repo root, not pluginRoot: the plan's evidence path is .local-dev at the
+  // top of the checkout, and pluginRoot buries a second .local-dev tree
+  // inside the packaged plugin.
+  const evidenceDir = path.join(pluginRoot, '..', '..', '.local-dev', 'fast-browser');
   await mkdir(evidenceDir, { recursive: true });
   await writeFile(path.join(evidenceDir, 'live-e2e-results.json'), evidence);
 });
