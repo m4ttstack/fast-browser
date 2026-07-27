@@ -8,6 +8,7 @@ import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import test from 'node:test';
 
+import { buildContentManifestDigest } from '../../lib/core/content-manifest.mjs';
 import {
   loadRuntimeLock,
   parseRuntimeLock,
@@ -293,9 +294,10 @@ async function installedLauncher() {
   );
   await mkdir(path.dirname(cli), { recursive: true });
   await writeFile(cli, '#!/usr/bin/env node\n');
+  const contentDigest = await buildContentManifestDigest(path.dirname(cli));
   await writeFile(
     path.join(paths.runtimeDir, lock.productVersion, 'installed.json'),
-    JSON.stringify({ schemaVersion: 1, lock: fixtureIdentity(lock) }),
+    JSON.stringify({ schemaVersion: 1, lock: fixtureIdentity(lock), contentDigest }),
   );
   return { paths, lock, cli };
 }
@@ -433,6 +435,76 @@ test('missing runtime, spawn ENOENT, and nonzero exits are one-line doctor error
         && !error.message.includes('\n'),
     );
   });
+});
+
+// bin/fast-browser-mcp.mjs -> launchRuntime is the literal entrypoint every
+// host config (.mcp.json, adapters/codex/mcp.json, .codex-plugin/plugin.json)
+// spawns on every session start, entirely independent of setup and doctor.
+// A CLI tampered in place after a clean install -- the marker left exactly
+// as the real install wrote it -- must never be executed.
+test('refuses to launch a tampered CLI even though its marker is otherwise honest', async () => {
+  const { paths, lock, cli } = await installedLauncher();
+  await writeFile(cli, '#!/usr/bin/env node\nprocess.stdout.write("malicious");\n');
+  let spawnCalls = 0;
+  await assert.rejects(
+    launchRuntime({
+      config: launcherConfig(),
+      paths,
+      lock,
+      readToken: async () => null,
+      spawn: () => {
+        spawnCalls += 1;
+      },
+    }),
+    (error) => error.message.includes('fast-browser setup')
+      && !error.message.includes('fast-browser doctor')
+      && !error.message.includes('\n'),
+  );
+  assert.equal(spawnCalls, 0);
+});
+
+// Requirement 5 (backward compatibility), applied to the launch path too: a
+// marker written before content-digest verification existed carries no
+// digest at all. Even when the CLI bytes it describes are untouched, that
+// legacy shape must be treated as unverified (fail closed), never trusted.
+test('refuses to launch over a legacy marker with no content digest, even with untouched bytes', async () => {
+  const { paths, lock } = await installedLauncher();
+  const markerPath = path.join(paths.runtimeDir, lock.productVersion, 'installed.json');
+  const legacyMarker = JSON.parse(await readFile(markerPath, 'utf8'));
+  delete legacyMarker.contentDigest;
+  await writeFile(markerPath, JSON.stringify(legacyMarker));
+  let spawnCalls = 0;
+  await assert.rejects(
+    launchRuntime({
+      config: launcherConfig(),
+      paths,
+      lock,
+      readToken: async () => null,
+      spawn: () => {
+        spawnCalls += 1;
+      },
+    }),
+    (error) => error.message.includes('fast-browser setup') && !error.message.includes('\n'),
+  );
+  assert.equal(spawnCalls, 0);
+});
+
+// An untampered install, with a real digest exactly as installRuntime
+// writes it, must still launch normally: the new verification must not
+// introduce any false positive against a genuine install.
+test('launches normally when the installed CLI content matches its marker exactly', async () => {
+  const { paths, lock, cli } = await installedLauncher();
+  const captured = [];
+  const result = await launchRuntime({
+    config: launcherConfig(),
+    paths,
+    lock,
+    readToken: async () => null,
+    spawn: exitingSpawn(0, captured),
+  });
+  assert.equal(result, 0);
+  assert.equal(captured.length, 1);
+  assert.equal(captured[0].args[0], cli);
 });
 
 test('wrapper help smoke never downloads when the runtime is missing', async () => {
