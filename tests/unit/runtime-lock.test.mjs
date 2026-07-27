@@ -228,23 +228,23 @@ test('bundled lock pins the intended candidate identity and immutable artifact U
 
   assert.deepEqual(lock, {
     schemaVersion: 1,
-    productVersion: '0.1.0-alpha.6',
-    sourceCommit: '1dc09a6329e0fbe4f2cf2145ec1194c714584606',
+    productVersion: '0.1.0-alpha.7',
+    sourceCommit: '7af0ff16ddb30f46adccc1f837eba6a738e40c2a',
     protocolVersion: 2,
     runtime: {
       url: 'https://github.com/m4ttheweric/playwright/releases/download/'
-        + 'fast-browser-v0.1.0-alpha.6/fast-browser-mcp-0.1.0-alpha.6.tar.gz',
-      file: 'fast-browser-mcp-0.1.0-alpha.6.tar.gz',
-      sha256: 'd6f2ef7c2e3971dc77223b898d40f0f719518b46b8e82c5291e1baa6fd7a0e45',
+        + 'fast-browser-v0.1.0-alpha.7/fast-browser-mcp-0.1.0-alpha.7.tar.gz',
+      file: 'fast-browser-mcp-0.1.0-alpha.7.tar.gz',
+      sha256: 'fa9fe1fda148d9e2604591fa8d31482e25252ab19f30e945b6b5fa2679c2eea7',
       node: '>=20',
     },
     extension: {
       url: 'https://github.com/m4ttheweric/playwright/releases/download/'
-        + 'fast-browser-v0.1.0-alpha.6/fast-browser-extension-0.1.0-alpha.6.zip',
-      file: 'fast-browser-extension-0.1.0-alpha.6.zip',
-      sha256: '34266a9e9422980ba1b82ddb4f39641021159768bdbda22c55544e583d570070',
+        + 'fast-browser-v0.1.0-alpha.7/fast-browser-extension-0.1.0-alpha.7.zip',
+      file: 'fast-browser-extension-0.1.0-alpha.7.zip',
+      sha256: '764beb8d2adca7b50a34a648a98005bfbc845d253fb43d6ef90ad54e52b23ad5',
       id: 'bjlfojdaaanoliidngocnbcalhpfmlie',
-      version: '0.2.3',
+      version: '0.2.4',
     },
   });
 });
