@@ -160,3 +160,24 @@ test('the published tree exposes both host plugin manifests', async () => {
     access(path.join(pluginRoot, '.codex-plugin/plugin.json')),
   ]);
 });
+
+// Attribution was inconsistent before publication: both plugin manifests and
+// the marketplace named a different person than the git identity that
+// authored the commits, and the LICENSE copyright line is a legal claim that
+// has to name the actual holder. Cross-check them rather than trusting any
+// one file, since these drifted apart silently.
+test('attribution is consistent across manifests, marketplace, and LICENSE', async () => {
+  const [claude, codex, marketplace, license] = await Promise.all([
+    json('.claude-plugin/plugin.json'),
+    json('.codex-plugin/plugin.json'),
+    json('.claude-plugin/marketplace.json', repoRoot),
+    readFile(path.join(pluginRoot, 'LICENSE'), 'utf8'),
+  ]);
+  const holder = license.match(/Copyright \(c\) \d{4} (.+)/)?.[1]?.trim();
+
+  assert.ok(holder, 'LICENSE names a copyright holder');
+  assert.equal(claude.author.name, holder);
+  assert.equal(codex.author.name, holder);
+  assert.equal(codex.interface.developerName, holder);
+  assert.equal(marketplace.owner.name, holder);
+});

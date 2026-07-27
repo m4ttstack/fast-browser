@@ -3,7 +3,7 @@
   "version": "0.1.0-alpha.1",
   "description": "Fast Playwright browser automation for Claude Code and Codex",
   "author": {
-    "name": "Matt Erickson"
+    "name": "Matthew Goodwin"
   },
   "license": "MIT",
   "skills": "./skills/"

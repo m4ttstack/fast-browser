@@ -3,7 +3,7 @@
   "version": "0.1.0-alpha.1",
   "description": "Fast Playwright browser automation for Claude Code and Codex",
   "author": {
-    "name": "Matt Erickson"
+    "name": "Matthew Goodwin"
   },
   "license": "MIT",
   "skills": "./skills/",
@@ -11,7 +11,7 @@
     "displayName": "Fast Browser",
     "shortDescription": "Fast Playwright browser automation.",
     "longDescription": "Fast Browser provides Playwright browser automation for Claude Code and Codex.",
-    "developerName": "Matt Erickson",
+    "developerName": "Matthew Goodwin",
     "category": "Productivity",
     "capabilities": ["Browser automation"],
     "defaultPrompt": "Help me automate a browser task with Fast Browser."
