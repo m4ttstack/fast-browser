@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 import test from 'node:test';
+import { setTimeout as delay } from 'node:timers/promises';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 
@@ -294,6 +295,7 @@ const EVIDENCE_KEYS = new Set([
   'groupLabelsDistinct',
   'chromeWasFrontmostAtStart',
   'focusChangedToFixtureTab',
+  'focusSampleAttempts',
   'killClaudeLeftCodexFunctional',
   'reconnectLeftBothFunctional',
 ]);
@@ -329,6 +331,12 @@ function requireBoolean(value, label) {
 function requireNull(value, label) {
   if (value !== null) {
     throw new TypeError(`${label} must be null`);
+  }
+}
+
+function requireNonNegativeInteger(value, label) {
+  if (!Number.isInteger(value) || value < 0) {
+    throw new TypeError(`${label} must be a non-negative integer`);
   }
 }
 
@@ -374,6 +382,10 @@ export function serializeLiveEvidence(evidence) {
   }
   requireBoolean(evidence.chromeWasFrontmostAtStart, 'evidence.chromeWasFrontmostAtStart');
   requireBoolean(evidence.focusChangedToFixtureTab, 'evidence.focusChangedToFixtureTab');
+  // The real observed attempt count, not just the derived booleans: makes
+  // the strength of the no-focus-stealing evidence visible (a handful of
+  // attempts over a couple of seconds) rather than implied.
+  requireNonNegativeInteger(evidence.focusSampleAttempts, 'evidence.focusSampleAttempts');
   requireBoolean(evidence.killClaudeLeftCodexFunctional, 'evidence.killClaudeLeftCodexFunctional');
   requireBoolean(evidence.reconnectLeftBothFunctional, 'evidence.reconnectLeftBothFunctional');
   return `${JSON.stringify(evidence, null, 2)}\n`;
@@ -393,6 +405,7 @@ function validVerifiedEvidence() {
     groupLabelsDistinct: true,
     chromeWasFrontmostAtStart: false,
     focusChangedToFixtureTab: false,
+    focusSampleAttempts: 6,
     killClaudeLeftCodexFunctional: true,
     reconnectLeftBothFunctional: true,
   };
@@ -482,6 +495,24 @@ test('serializeLiveEvidence rejects a non-boolean flag', () => {
   assert.throws(() => serializeLiveEvidence(evidence), TypeError);
 });
 
+test('serializeLiveEvidence rejects a non-integer focusSampleAttempts', () => {
+  // The real attempt count (not just the derived booleans) must surface so
+  // the strength of the focus-stealing evidence is visible, not implied.
+  const evidence = { ...validVerifiedEvidence(), focusSampleAttempts: 1.5 };
+  assert.throws(() => serializeLiveEvidence(evidence), TypeError);
+});
+
+test('serializeLiveEvidence rejects a negative focusSampleAttempts', () => {
+  const evidence = { ...validVerifiedEvidence(), focusSampleAttempts: -1 };
+  assert.throws(() => serializeLiveEvidence(evidence), TypeError);
+});
+
+test('serializeLiveEvidence rejects a missing focusSampleAttempts', () => {
+  const evidence = validVerifiedEvidence();
+  delete evidence.focusSampleAttempts;
+  assert.throws(() => serializeLiveEvidence(evidence), TypeError);
+});
+
 test('serializeLiveEvidence rejects a malformed completedAt timestamp', () => {
   const evidence = { ...validVerifiedEvidence(), completedAt: 'not-a-timestamp' };
   assert.throws(() => serializeLiveEvidence(evidence), TypeError);
@@ -523,6 +554,152 @@ test('ensureIdentityDirectories tolerates directories that already exist', async
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+// ---------------------------------------------------------------------------
+// Testable piece: a focus sampler with guaranteed coverage. Not a pure
+// function (it does real I/O and real timing via the injected sampleFn and
+// delayFn), but fully testable without connecting to anything live by
+// injecting fakes for both, per the requirement. Extracted after a real
+// live run showed the concurrent order flows now complete in about a
+// second: faster than the sampler's own 1s interval, so the interval never
+// ticked even once and the "zero attempts" guard correctly refused to
+// treat that as proof of anything. This guarantees coverage regardless of
+// how fast `work` resolves, and extends coverage a little past
+// completion (a short bounded tail window, not an arbitrary long sleep)
+// since a run that completes in ~1s is otherwise a very short window to
+// call "evidence" of no focus stealing.
+// ---------------------------------------------------------------------------
+
+export async function collectFocusSamples({
+  sampleFn,
+  work,
+  intervalMs = 1_000,
+  tailWindowMs = 2_500,
+  tailIntervalMs = 500,
+  delayFn = delay,
+} = {}) {
+  if (typeof sampleFn !== 'function') {
+    throw new TypeError('sampleFn must be a function');
+  }
+  if (!work || typeof work.then !== 'function') {
+    throw new TypeError('work must be a promise');
+  }
+
+  const samples = [];
+  let attempts = 0;
+  let failures = 0;
+  const takeSample = async () => {
+    attempts += 1;
+    try {
+      samples.push(await sampleFn());
+    } catch {
+      failures += 1;
+    }
+  };
+
+  // Guarantees coverage regardless of how fast `work` resolves: this is
+  // the fix for the exact defect a live run surfaced (zero attempts when
+  // the flows finished faster than one interval tick).
+  await takeSample();
+
+  let settled = false;
+  work.then(() => { settled = true; }, () => { settled = true; });
+  const settledSignal = work.then(() => {}, () => {});
+
+  // Interval sampling for the remainder of the run (unchanged behavior for
+  // longer-running work), but each wait races against `work` itself
+  // settling so a fast run is never held up an extra `intervalMs` past
+  // completion just to notice it finished.
+  while (!settled) {
+    await Promise.race([delayFn(intervalMs), settledSignal]);
+    if (settled) break;
+    await takeSample();
+  }
+  const result = await work;
+
+  // Boundary sample right when the flows settle.
+  await takeSample();
+
+  // Short bounded tail window: extends real observation a little past
+  // completion (the period when Chrome could plausibly still raise or
+  // focus a tab) without an arbitrary long sleep.
+  const tailDeadline = Date.now() + tailWindowMs;
+  while (Date.now() < tailDeadline) {
+    await delayFn(tailIntervalMs);
+    await takeSample();
+  }
+
+  return { samples, attempts, failures, result };
+}
+
+test('collectFocusSamples takes at least one sample even when work resolves immediately', async () => {
+  const { samples, attempts } = await collectFocusSamples({
+    sampleFn: async () => ({ app: 'Google Chrome', tabUrl: null }),
+    work: Promise.resolve('done'),
+    intervalMs: 1_000,
+    tailWindowMs: 0,
+  });
+  assert.ok(samples.length >= 1, `expected at least one sample, got ${samples.length}`);
+  assert.ok(attempts >= 1, `expected at least one attempt, got ${attempts}`);
+});
+
+test('collectFocusSamples keeps sampling on the interval while work is still pending', async () => {
+  const work = delay(35).then(() => 'done');
+  const { attempts } = await collectFocusSamples({
+    sampleFn: async () => ({ app: 'Google Chrome', tabUrl: null }),
+    work,
+    intervalMs: 10,
+    tailWindowMs: 0,
+  });
+  assert.ok(attempts >= 3, `expected multiple interval samples for slower work, got ${attempts}`);
+});
+
+test('collectFocusSamples samples again during the bounded tail window after work settles', async () => {
+  const { attempts } = await collectFocusSamples({
+    sampleFn: async () => ({ app: 'Google Chrome', tabUrl: null }),
+    work: Promise.resolve('done'),
+    intervalMs: 1_000,
+    tailWindowMs: 30,
+    tailIntervalMs: 10,
+  });
+  // immediate (1) + boundary (1) + at least 2 tail-window samples.
+  assert.ok(attempts >= 4, `expected tail-window sampling, got ${attempts}`);
+});
+
+test('collectFocusSamples counts sampler failures without pushing them as samples', async () => {
+  const { samples, attempts, failures } = await collectFocusSamples({
+    sampleFn: async () => { throw new Error('synthetic osascript failure'); },
+    work: Promise.resolve('done'),
+    intervalMs: 1_000,
+    tailWindowMs: 0,
+  });
+  assert.equal(samples.length, 0);
+  assert.ok(attempts >= 1);
+  assert.equal(failures, attempts);
+});
+
+test('collectFocusSamples returns the resolved value of work', async () => {
+  const { result } = await collectFocusSamples({
+    sampleFn: async () => ({ app: 'Google Chrome', tabUrl: null }),
+    work: Promise.resolve(['resultA', 'resultB']),
+    tailWindowMs: 0,
+  });
+  assert.deepEqual(result, ['resultA', 'resultB']);
+});
+
+test('collectFocusSamples rejects a non-function sampleFn', async () => {
+  await assert.rejects(
+    () => collectFocusSamples({ sampleFn: null, work: Promise.resolve() }),
+    TypeError,
+  );
+});
+
+test('collectFocusSamples rejects a non-promise work argument', async () => {
+  await assert.rejects(
+    () => collectFocusSamples({ sampleFn: async () => {}, work: 'not-a-promise' }),
+    TypeError,
+  );
 });
 
 // ---------------------------------------------------------------------------
@@ -642,35 +819,34 @@ test('two identity-carrying Fast Browser clients drive the paired real Chrome si
   t.after(() => Promise.all([fixtureA.close(), fixtureB.close()]));
   t.after(() => rm(outputRoot, { recursive: true, force: true }));
 
-  const samples = [];
-  // Minor fix: an all-failed (or never-attempted) sampling run must not
-  // silently masquerade as "focus was never stolen" via an empty samples
-  // array. Count attempts and failures so that case is asserted against
-  // below instead.
-  let sampleAttempts = 0;
-  let sampleFailures = 0;
-  const sampling = setInterval(() => {
-    sampleAttempts += 1;
-    sampleFocusOnce().then(
-      (sample) => samples.push(sample),
-      () => { sampleFailures += 1; },
-    );
-  }, 1_000);
-
-  let resultA;
-  let resultB;
-  try {
-    [resultA, resultB] = await Promise.all([
+  // collectFocusSamples guarantees at least one sample (taken immediately,
+  // before the flows are even awaited) regardless of how fast the flows
+  // resolve: a real live run showed they now complete in about a second,
+  // faster than a plain 1s-interval-only sampler could ever tick. It also
+  // extends real observation a few seconds past completion (the tail
+  // window below) since a ~1s run would otherwise be weak evidence of "no
+  // focus stealing" on its own.
+  const {
+    samples,
+    attempts: sampleAttempts,
+    failures: sampleFailures,
+    result: flowResults,
+  } = await collectFocusSamples({
+    sampleFn: sampleFocusOnce,
+    work: Promise.all([
       runOrderFlow(clientA, fixtureA.origin, { customer: 'CLAUDE', plan: 'team', seats: 5 }),
       runOrderFlow(clientB, fixtureB.origin, { customer: 'CODEX', plan: 'scale', seats: 12 }),
-    ]);
-  } finally {
-    clearInterval(sampling);
-  }
+    ]),
+  });
+  const [resultA, resultB] = flowResults;
 
   assert.equal(resultA.orderId, 'CLAUDE-TEAM-5');
   assert.equal(resultB.orderId, 'CODEX-SCALE-12');
 
+  // Backstop kept per the requirement even though collectFocusSamples now
+  // makes zero attempts structurally impossible (it always takes an
+  // immediate sample before awaiting `work`): this still fails loudly
+  // rather than silently if every attempt somehow failed.
   assert.ok(
     samples.length > 0,
     `expected at least one successful focus sample but got none `
@@ -750,6 +926,7 @@ test('two identity-carrying Fast Browser clients drive the paired real Chrome si
     groupLabelsDistinct,
     chromeWasFrontmostAtStart: focus.chromeWasFrontmostAtStart,
     focusChangedToFixtureTab: focus.focusChangedToFixtureTab,
+    focusSampleAttempts: sampleAttempts,
     killClaudeLeftCodexFunctional,
     reconnectLeftBothFunctional,
   });
