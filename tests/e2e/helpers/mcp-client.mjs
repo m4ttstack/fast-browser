@@ -31,7 +31,10 @@ function integrityError() {
   return new Error(INTEGRITY_ERROR);
 }
 
-async function runtimeCliFor({ outputDir, releaseDir = process.env.FAST_BROWSER_RELEASE_DIR ?? defaultReleaseDir }) {
+// Exported (in addition to startMcpClient below) so tests/e2e/helpers/identity-client.mjs
+// can launch the same integrity-checked runtime in --extension mode without
+// duplicating the checksum/extraction logic.
+export async function runtimeCliFor({ outputDir, releaseDir = process.env.FAST_BROWSER_RELEASE_DIR ?? defaultReleaseDir }) {
   const manifest = JSON.parse(await readFile(path.join(releaseDir, 'fast-browser-release-0.1.0-alpha.1.json')));
   if (manifest.schemaVersion !== 1 || manifest.protocolVersion !== 2 || !manifest.runtime?.file) {
     throw new Error('the local fast-browser release manifest is not compatible with this fixture');
@@ -82,7 +85,9 @@ async function runtimeCliFor({ outputDir, releaseDir = process.env.FAST_BROWSER_
   return cli;
 }
 
-function textResult(response) {
+// Exported alongside runtimeCliFor for the same reason: the identity-client
+// helper reuses this envelope parsing rather than re-implementing it.
+export function textResult(response) {
   if (response.isError) {
     throw new Error(response.content.find((item) => item.type === 'text')?.text ?? 'MCP tool failed');
   }
