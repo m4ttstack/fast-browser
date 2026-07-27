@@ -3143,7 +3143,9 @@ test('extension-loaded fails when the content was swapped after Chrome loaded it
     id: 'extension-loaded',
     status: 'fail',
     message: 'Chrome is still running the previously loaded extension content.',
-    remediation: 'Open chrome://extensions and click the reload arrow on Fast Browser.',
+    remediation: 'Open chrome://extensions and click the reload arrow on Fast Browser. '
+      + 'If you just did, rerun doctor in a moment: Chrome records the reload '
+      + 'on a short delay.',
   });
 });
 

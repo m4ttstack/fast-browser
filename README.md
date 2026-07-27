@@ -104,6 +104,10 @@ while `extension-artifact` and `extension-installed` pass. That combination
 means the pinned bytes are on disk and Chrome is still running the previous
 ones. It is not drift, and rerunning setup will not clear it.
 
+Chrome records the reload on a short delay, so `extension-loaded` can still
+report stale for a moment after you have already reloaded. Rerun doctor rather
+than reloading again.
+
 ## Safe and full profiles
 
 The default `safe` profile disables session recording. It installs the Codex
