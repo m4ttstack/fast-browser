@@ -7,7 +7,7 @@ import test from 'node:test';
 import { resolvePaths } from '../../lib/core/paths.mjs';
 import { buildContentManifestDigest } from '../../lib/core/content-manifest.mjs';
 import { runtimeLockIdentity } from '../../lib/runtime/lock.mjs';
-import { isExplainedByLockUpgrade } from '../../lib/commands/upgrade.mjs';
+import { classifyLockUpgrade, isExplainedByLockUpgrade } from '../../lib/commands/upgrade.mjs';
 
 function lockFor(productVersion, extensionVersion) {
   return {
@@ -61,7 +61,7 @@ async function writeRuntimeInstall(paths, lock, { contentDigest = true } = {}) {
   return directory;
 }
 
-async function writeExtensionInstall(paths, lock) {
+async function writeExtensionInstall(paths, lock, { contentDigest = true } = {}) {
   const directory = path.join(paths.extensionDir, lock.extension.version);
   const unpacked = path.join(directory, 'unpacked');
   await mkdir(unpacked, { recursive: true });
@@ -69,13 +69,10 @@ async function writeExtensionInstall(paths, lock) {
     path.join(unpacked, 'manifest.json'),
     JSON.stringify({ manifest_version: 3, name: 'Fast Browser', version: lock.extension.version }),
   );
-  const contentDigest = await buildContentManifestDigest(unpacked);
+  const marker = { schemaVersion: 1, lock: runtimeLockIdentity(lock) };
+  if (contentDigest) marker.contentDigest = await buildContentManifestDigest(unpacked);
   const markerPath = path.join(directory, 'installed.json');
-  await writeFile(
-    markerPath,
-    `${JSON.stringify({ schemaVersion: 1, lock: runtimeLockIdentity(lock), contentDigest }, null, 2)}\n`,
-    { mode: 0o600 },
-  );
+  await writeFile(markerPath, `${JSON.stringify(marker, null, 2)}\n`, { mode: 0o600 });
   await chmod(markerPath, 0o600);
   return { directory, unpacked };
 }
@@ -236,21 +233,120 @@ test('isExplainedByLockUpgrade is false when a tampered current-version runtime 
   );
 });
 
-// Requirement 5 (backward compatibility): a marker written before this
-// change carries no contentDigest at all. Even when the bytes it describes
-// have been tampered with, a missing digest must be treated as NOT
-// self-consistent (fail closed), never as "nothing to check here".
-test('isExplainedByLockUpgrade is false when a legacy runtime marker (no content digest) describes tampered bytes', async () => {
-  const paths = await tempPaths('fast-browser-upgrade-unit-legacy-tamper-');
+// CORRECTED specification (see the runtime-tamper escalation-B report):
+// legacy markers written before content-digest verification existed are
+// UNVERIFIABLE, not TAMPERED. Refusing to replace unverifiable bytes would
+// leave a real user's install permanently stuck: it can neither be trusted
+// (no digest to check) nor upgraded (the classifier used to fail closed on
+// it forever). The correct response is to treat it as reinstall evidence:
+// explained stays true, and `unverifiable: true` tells the caller to
+// actually replace the artifact and say so, never to silently trust it.
+// This is true regardless of whether the bytes described happen to be
+// tampered or perfectly fine -- unverifiable means "we cannot tell", and
+// the safe response is the same either way: reinstall for real.
+test('isExplainedByLockUpgrade is true, and flags unverifiable, for a legacy runtime marker with no content digest', async () => {
+  const paths = await tempPaths('fast-browser-upgrade-unit-legacy-');
   const oldLock = lockFor('0.1.0-alpha.1', '0.2.1');
   const newLock = lockFor('0.1.0-alpha.5', '0.2.2');
   const directory = await writeRuntimeInstall(paths, oldLock, { contentDigest: false });
   await writeFile(path.join(directory, 'fast-browser-mcp', 'cli.cjs'), '// tampered after install\n');
 
   const report = doctorReport(['runtime-checksum', 'mcp-handshake', 'tool-contract']);
+  assert.deepEqual(
+    await classifyLockUpgrade({ paths, lock: newLock, doctorReport: report }),
+    { explained: true, unverifiable: true },
+  );
+});
+
+// Same distinction, extension side: a legacy extension marker (no digest)
+// must also trigger a reinstall rather than a permanent refusal.
+test('isExplainedByLockUpgrade is true, and flags unverifiable, for a legacy extension marker with no content digest', async () => {
+  const paths = await tempPaths('fast-browser-upgrade-unit-legacy-ext-');
+  const oldLock = lockFor('0.1.0-alpha.1', '0.2.1');
+  const newLock = lockFor('0.1.0-alpha.5', '0.2.2');
+  await writeRuntimeInstall(paths, oldLock);
+  await writeExtensionInstall(paths, oldLock, { contentDigest: false });
+
+  const report = doctorReport(['extension-artifact', 'extension-installed']);
+  assert.deepEqual(
+    await classifyLockUpgrade({ paths, lock: newLock, doctorReport: report }),
+    { explained: true, unverifiable: true },
+  );
+});
+
+// A legacy marker sitting exactly at the version the current lock already
+// pins (a user who has never had a version bump since installing, just
+// this security patch landing) must ALSO trigger a reinstall rather than
+// being permanently stuck: it does not need an unrelated older directory's
+// help to explain itself, and (per the sibling test below) an unrelated
+// directory must never be allowed to explain a DIFFERENT, tampered
+// current-named directory away either.
+test('isExplainedByLockUpgrade is true, and flags unverifiable, when the legacy marker is exactly at the current lock name', async () => {
+  const paths = await tempPaths('fast-browser-upgrade-unit-legacy-current-');
+  const lock = lockFor('0.1.0-alpha.5', '0.2.2');
+  await writeRuntimeInstall(paths, lock, { contentDigest: false });
+
+  const report = doctorReport(['runtime-checksum', 'mcp-handshake', 'tool-contract']);
+  assert.deepEqual(
+    await classifyLockUpgrade({ paths, lock, doctorReport: report }),
+    { explained: true, unverifiable: true },
+  );
+});
+
+// Tampering must keep refusing exactly as before, unchanged by the
+// unverifiable/tampered distinction: a runtime marker that DOES record a
+// digest, but bytes no longer match it (drift after a real, honest
+// install), is TAMPERED, not unverifiable, and must still block.
+test('isExplainedByLockUpgrade is false when runtime bytes no longer match their own recorded digest', async () => {
+  const paths = await tempPaths('fast-browser-upgrade-unit-runtime-tamper-stale-');
+  const oldLock = lockFor('0.1.0-alpha.1', '0.2.1');
+  const newLock = lockFor('0.1.0-alpha.5', '0.2.2');
+  const directory = await writeRuntimeInstall(paths, oldLock);
+  // Tamper after the fact: the marker (and its honestly recorded digest)
+  // is left untouched; only the CLI bytes change.
+  await writeFile(path.join(directory, 'fast-browser-mcp', 'cli.cjs'), '// tampered after install\n');
+
+  const report = doctorReport(['runtime-checksum', 'mcp-handshake', 'tool-contract']);
   assert.equal(
     await isExplainedByLockUpgrade({ paths, lock: newLock, doctorReport: report }),
     false,
+  );
+});
+
+// The original tampering-guard reproduction still blocks unchanged: a
+// tampered CURRENT-version directory with a SELF-CONSISTENT forged digest
+// (matching its own tampered bytes) must not be excused by a genuinely
+// older, unrelated directory. This is `verified: true` from the attacker's
+// own forged marker's point of view, which per explainedByUpgrade's
+// current-named branch means "nothing to explain", i.e. blocked -- not
+// `unverifiable`, which only ever applies to a marker with NO digest.
+test('isExplainedByLockUpgrade is still false for a tampered current-version runtime with a self-consistent forged digest', async () => {
+  const paths = await tempPaths('fast-browser-upgrade-unit-tamper-current-forged-');
+  const oldLock = lockFor('0.1.0-alpha.1', '0.2.1');
+  const newLock = lockFor('0.1.0-alpha.5', '0.2.2');
+  await writeRuntimeInstall(paths, oldLock);
+
+  const tamperedDirectory = path.join(paths.runtimeDir, newLock.productVersion);
+  const tamperedCliDirectory = path.join(tamperedDirectory, 'fast-browser-mcp');
+  await mkdir(tamperedCliDirectory, { recursive: true });
+  await writeFile(path.join(tamperedCliDirectory, 'cli.cjs'), '// malicious payload\n');
+  const tamperedDigest = await buildContentManifestDigest(tamperedCliDirectory);
+  const tamperedMarkerPath = path.join(tamperedDirectory, 'installed.json');
+  await writeFile(
+    tamperedMarkerPath,
+    `${JSON.stringify({
+      schemaVersion: 1,
+      lock: runtimeLockIdentity(newLock),
+      contentDigest: tamperedDigest,
+    }, null, 2)}\n`,
+    { mode: 0o600 },
+  );
+  await chmod(tamperedMarkerPath, 0o600);
+
+  const report = doctorReport(['runtime-checksum', 'mcp-handshake', 'tool-contract']);
+  assert.deepEqual(
+    await classifyLockUpgrade({ paths, lock: newLock, doctorReport: report }),
+    { explained: false, unverifiable: false },
   );
 });
 

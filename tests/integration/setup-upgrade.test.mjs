@@ -677,4 +677,8 @@ test('CLI setup output prints the unpacked extension path and manual reload step
   assert.match(output, /Chrome extension: manual installation required at/);
   assert.ok(output.includes(path.join(paths.extensionDir, '0.2.2', 'unpacked')));
   assert.match(output, /Next: load the extension, then run `fast-browser doctor`/);
+  // Every prior fixture here already carries a valid contentDigest: this
+  // is a genuine version-bump upgrade, not a legacy/unverifiable install,
+  // so the unverifiable-artifacts-replaced notice must never appear.
+  assert.doesNotMatch(output, /previously unverifiable install/);
 });
