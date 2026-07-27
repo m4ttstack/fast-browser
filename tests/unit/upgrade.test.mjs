@@ -373,3 +373,93 @@ test('isExplainedByLockUpgrade is true when two genuinely old, self-consistent r
     true,
   );
 });
+
+async function writeLegacyExtensionInstall(paths, lock, { contentDigest = true } = {}) {
+  const directory = path.join(paths.extensionDir, lock.extension.version);
+  const unpacked = path.join(directory, 'unpacked');
+  await mkdir(unpacked, { recursive: true });
+  await writeFile(
+    path.join(unpacked, 'manifest.json'),
+    JSON.stringify({ manifest_version: 3, name: 'Fast Browser', version: lock.extension.version }),
+  );
+  const marker = { schemaVersion: 1, lock: runtimeLockIdentity(lock) };
+  if (contentDigest) marker.contentDigest = await buildContentManifestDigest(unpacked);
+  const markerPath = path.join(directory, 'installed.json');
+  await writeFile(markerPath, `${JSON.stringify(marker, null, 2)}\n`, { mode: 0o600 });
+  await chmod(markerPath, 0o600);
+  return { directory, unpacked };
+}
+
+// The one-time layout migration every existing installation goes through.
+// The pinned version has not moved at all -- the install is at the current
+// lock -- but it sits in the old version-named directory, so the artifact
+// checks fail and there is nothing at the stable location to explain them.
+// Without this, the very first setup after the layout change reports
+// "external drift" to every user who already had Fast Browser working.
+test('classifyLockUpgrade explains a pre-stable-layout install at the current lock', async () => {
+  const paths = await tempPaths('fast-browser-upgrade-unit-legacy-layout-');
+  const lock = lockFor('0.1.0-alpha.7', '0.2.4');
+  await writeRuntimeInstall(paths, lock);
+  await writeLegacyExtensionInstall(paths, lock);
+
+  assert.deepEqual(
+    await classifyLockUpgrade({
+      paths,
+      lock,
+      doctorReport: doctorReport(['extension-artifact', 'extension-installed']),
+    }),
+    { explained: true, unverifiable: false },
+  );
+});
+
+test('a pre-stable-layout install with a legacy digest-less marker is flagged unverifiable', async () => {
+  const paths = await tempPaths('fast-browser-upgrade-unit-legacy-layout-nodigest-');
+  const lock = lockFor('0.1.0-alpha.7', '0.2.4');
+  await writeRuntimeInstall(paths, lock);
+  await writeLegacyExtensionInstall(paths, lock, { contentDigest: false });
+
+  assert.deepEqual(
+    await classifyLockUpgrade({
+      paths,
+      lock,
+      doctorReport: doctorReport(['extension-artifact', 'extension-installed']),
+    }),
+    { explained: true, unverifiable: true },
+  );
+});
+
+// The migration allowance must not become a way to launder tampering: a
+// legacy directory whose bytes no longer match its own recorded digest is
+// still drift, not a free reinstall.
+test('a tampered pre-stable-layout install is still refused', async () => {
+  const paths = await tempPaths('fast-browser-upgrade-unit-legacy-layout-tampered-');
+  const lock = lockFor('0.1.0-alpha.7', '0.2.4');
+  await writeRuntimeInstall(paths, lock);
+  const { unpacked } = await writeLegacyExtensionInstall(paths, lock);
+  await writeFile(path.join(unpacked, 'background.js'), 'stowaway\n');
+
+  assert.deepEqual(
+    await classifyLockUpgrade({
+      paths,
+      lock,
+      doctorReport: doctorReport(['extension-artifact', 'extension-installed']),
+    }),
+    { explained: false, unverifiable: false },
+  );
+});
+
+// Nothing installed anywhere is a first install, not an upgrade.
+test('classifyLockUpgrade explains nothing when no extension is installed at all', async () => {
+  const paths = await tempPaths('fast-browser-upgrade-unit-no-extension-');
+  const lock = lockFor('0.1.0-alpha.7', '0.2.4');
+  await writeRuntimeInstall(paths, lock);
+
+  assert.deepEqual(
+    await classifyLockUpgrade({
+      paths,
+      lock,
+      doctorReport: doctorReport(['extension-artifact', 'extension-installed']),
+    }),
+    { explained: false, unverifiable: false },
+  );
+});
