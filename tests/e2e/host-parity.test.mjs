@@ -45,6 +45,17 @@ function claudeFinalResult(value) {
   });
 }
 
+// `trailingAfterFence` lets tests probe stray whitespace/newlines a model
+// may emit after the closing fence (real hosts do this inconsistently).
+function claudeFinalResultFenced(value, trailingAfterFence = '') {
+  return JSON.stringify({
+    type: 'result',
+    subtype: 'success',
+    is_error: false,
+    result: `\`\`\`json\n${JSON.stringify(value)}\n\`\`\`${trailingAfterFence}`,
+  });
+}
+
 function claudeEventsWithFinalResult(resultValue, { toolCount = 1 } = {}) {
   const toolEvents = Array.from({ length: toolCount }, (_, index) => claudeToolUse(
     'mcp__plugin_fast-browser_fast-browser__browser_navigate',
@@ -190,6 +201,50 @@ test('Codex parser returns the model result with observed Fast Browser metrics',
       'browser_snapshot',
       'browser_run_code_unsafe',
     ],
+  });
+});
+
+test('Claude parser strips a trailing newline after the closing result fence', () => {
+  const events = [
+    claudeToolUse(
+      'mcp__plugin_fast-browser_fast-browser__browser_navigate',
+      { url: 'http://127.0.0.1:43111' },
+    ),
+    claudeFinalResultFenced(
+      { host: 'claude', ok: true, orderId: 'CLAUDE-TRAILING-NL' },
+      '\n',
+    ),
+  ].join('\n');
+
+  assert.deepEqual(parseClaudeEvents(events, { elapsedMs: 3 }), {
+    host: 'claude',
+    ok: true,
+    orderId: 'CLAUDE-TRAILING-NL',
+    browserCalls: 1,
+    elapsedMs: 3,
+    tools: ['browser_navigate'],
+  });
+});
+
+test('Claude parser strips a whitespace-only line after the closing result fence', () => {
+  const events = [
+    claudeToolUse(
+      'mcp__plugin_fast-browser_fast-browser__browser_navigate',
+      { url: 'http://127.0.0.1:43111' },
+    ),
+    claudeFinalResultFenced(
+      { host: 'claude', ok: true, orderId: 'CLAUDE-TRAILING-WS' },
+      '\n   \n',
+    ),
+  ].join('\n');
+
+  assert.deepEqual(parseClaudeEvents(events, { elapsedMs: 3 }), {
+    host: 'claude',
+    ok: true,
+    orderId: 'CLAUDE-TRAILING-WS',
+    browserCalls: 1,
+    elapsedMs: 3,
+    tools: ['browser_navigate'],
   });
 });
 

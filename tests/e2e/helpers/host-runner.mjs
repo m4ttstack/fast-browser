@@ -97,6 +97,12 @@ function stripResultFence(value) {
   const lines = value.split(/\r?\n/);
   let start = 0;
   let end = lines.length;
+  // Trailing blank/whitespace-only lines (e.g. a stray newline after the
+  // closing fence) must not hide the closing fence line from the check
+  // below.
+  while (end > start && lines[end - 1].trim() === '') {
+    end -= 1;
+  }
   if (start < end && /^```(json)?$/.test(lines[start].trim())) {
     start += 1;
   }
