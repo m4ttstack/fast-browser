@@ -87,14 +87,17 @@ test('old skill locations are repository-relative transition links to real packa
   }
 });
 
-test('macro index exposes only the portable built-in page reconnaissance macro', async () => {
+test('macro index exposes only the portable built-in macros', async () => {
   const text = await readFile(path.join(pluginRoot, 'skills/browser-macros/MACROS.md'), 'utf8');
 
-  assert.equal((text.match(/^## /gm) || []).length, 1);
+  assert.equal((text.match(/^## /gm) || []).length, 2);
   assert.match(text, /^## page-recon$/m);
   assert.match(text, /maxLinks\?: number \(default 10\)/);
   assert.match(text, /~\/\.fast-browser\/macros\/page-recon\.js/);
-  assert.match(text, /Status: built-in/);
+  assert.match(text, /^## capture-annotated$/m);
+  assert.match(text, /targets: Record<string, string>, out\?: string \(default "capture"\)/);
+  assert.match(text, /~\/\.fast-browser\/macros\/capture-annotated\.js/);
+  assert.equal((text.match(/Status: built-in/g) || []).length, 2);
 });
 
 test('skills and delegated browser guidance use authoritative live ledgers', async () => {
