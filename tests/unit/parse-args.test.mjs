@@ -152,3 +152,21 @@ test('annotate rejects a missing, duplicated, or flag-like positional', () => {
 test('other commands still reject positional arguments', () => {
   assert.throws(() => parseArgs(['doctor', 'extra']), UsageError);
 });
+
+test('a duplicated config path never echoes the path', () => {
+  assert.throws(
+    () => parseArgs(['annotate', '/Users/secret/x.json', '/Users/secret/x.json']),
+    (error) => error instanceof UsageError
+      && !error.message.includes('/Users/secret')
+      && /exactly one config path/.test(error.message),
+  );
+});
+
+test('annotate parses the same request regardless of flag/positional order', () => {
+  const beforeJson = parseArgs(['annotate', 'shot.json', '--json']);
+  const afterJson = parseArgs(['annotate', '--json', 'shot.json']);
+  assert.equal(beforeJson.config, 'shot.json');
+  assert.equal(beforeJson.json, true);
+  assert.equal(afterJson.config, 'shot.json');
+  assert.equal(afterJson.json, true);
+});
