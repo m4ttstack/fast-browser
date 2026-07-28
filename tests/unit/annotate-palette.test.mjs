@@ -40,4 +40,5 @@ test('an unknown palette name is refused rather than silently defaulted', () => 
 
 test('the registry cannot be mutated by a caller', () => {
   assert.throws(() => { RADIX_SCALES.violet = null; });
+  assert.throws(() => { RADIX_SCALES.violet.accent = '#000000'; });
 });
