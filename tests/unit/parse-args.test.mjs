@@ -19,6 +19,7 @@ test('parses a two-host full setup', () => {
       retentionDays: null,
       runtimeLock: null,
       palette: null,
+      config: null,
     },
   );
 });
@@ -38,6 +39,7 @@ test('defaults setup to detected hosts and safe profile', () => {
     retentionDays: null,
     runtimeLock: null,
     palette: null,
+    config: null,
   });
 });
 
@@ -127,4 +129,26 @@ test('--palette is accepted for configure and validated', () => {
   assert.equal(parseArgs(['configure', '--palette', 'teal']).palette, 'teal');
   assert.throws(() => parseArgs(['configure', '--palette', 'burgundy']), UsageError);
   assert.throws(() => parseArgs(['setup', '--palette', 'teal']), UsageError);
+});
+
+test('annotate takes exactly one positional config path', () => {
+  const request = parseArgs(['annotate', 'shot.json']);
+  assert.equal(request.command, 'annotate');
+  assert.equal(request.config, 'shot.json');
+});
+
+test('annotate accepts --json alongside the positional', () => {
+  const request = parseArgs(['annotate', 'shot.json', '--json']);
+  assert.equal(request.config, 'shot.json');
+  assert.equal(request.json, true);
+});
+
+test('annotate rejects a missing, duplicated, or flag-like positional', () => {
+  assert.throws(() => parseArgs(['annotate']), UsageError);
+  assert.throws(() => parseArgs(['annotate', 'a.json', 'b.json']), UsageError);
+  assert.throws(() => parseArgs(['annotate', '--nope']), UsageError);
+});
+
+test('other commands still reject positional arguments', () => {
+  assert.throws(() => parseArgs(['doctor', 'extra']), UsageError);
 });
