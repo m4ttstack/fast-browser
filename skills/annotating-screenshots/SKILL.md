@@ -11,11 +11,16 @@ the image, and nothing is typed by hand.
 
 ## The pipeline
 
-1. **Capture and measure in one call.** `browser_run_code_unsafe` with
-   `filename: 'capture-annotated.js'` and
+1. **Capture and measure in one call.** `browser_run_code_unsafe` with the
+   macro's installed path as `filename`, never a bare name: a relative
+   `filename` is resolved against the browser server's own working directory
+   and then checked for containment, so a bare name fails before the macro
+   runs. Pass the `Script:` path from `~/.fast-browser/macros/MACROS.md`,
+   `~/.fast-browser/macros/capture-annotated.js`, with `~` written out as your
+   own absolute home directory path. Then
    `args: { targets: { <key>: '<selector>' }, out: '<name>', home: '<your $HOME>' }`.
-   The macro has no Node globals and cannot read `$HOME` itself, so pass your
-   own absolute home directory path. Put every label anchor in `targets` too,
+   The macro cannot read `$HOME` itself, so pass your own absolute home
+   directory path there too. Put every label anchor in `targets` too,
    not just the values you are marking: a chip, a counter and an arrow tail
    each need a measured box exactly as much as a highlight does, and you
    cannot add a key after the call. Under the default `safe` profile this
@@ -96,9 +101,18 @@ measured number. Do not also nudge by feel.
 Geometry that is not guessable:
 
 - **`chip.xy`, `counter.xy` and `arrow.tail` come from a resolved anchor box,
-  never from looking at the image.** Inside an anchor `[x, y, w, h]`, centre a
-  label with `xy = [x + (w - width) / 2, y + (h - height) / 2]`. This is why
-  the anchor goes in `targets` with everything else.
+  never from looking at the image.** This is why the anchor goes in `targets`
+  with everything else. The three are not anchored alike, so each has its own
+  derivation from an anchor `[x, y, w, h]`:
+  - A `chip` is anchored by its top left, so centring it has to subtract its
+    own size: `xy = [x + (w - width) / 2, y + (h - height) / 2]`, using the
+    chip width and height given below.
+  - A `counter` is anchored by its centre, so its centre is the anchor's
+    centre: `xy = [x + w / 2, y + h / 2]`. Using the chip formula puts every
+    counter up and left of where you meant by its radius, about 16 px at the
+    default size.
+  - An `arrow.tail` is a bare point, so it centres the same way:
+    `[x + w / 2, y + h / 2]`.
 - `chip.xy` is its **top left** corner. Its height is `size * 2` and its width
   is `characters * size * 0.58 + size * 1.4`, so at the default `size: 22` a
   chip is 44 px tall and roughly `13 * characters + 31` px wide. Set `w` to fix
@@ -175,6 +189,7 @@ keeping rather than leaving it there.
 
 | Symptom | Cause and fix |
 |---|---|
-| The return has `failedStep` and no `resolved` | Nothing was captured or measured, so there is no partition to read. Fix the named argument, usually `home`, and call again |
+| `browser_run_code_unsafe` reports `ENOENT` for the macro, or refuses it as outside the allowed roots | `filename` was a bare or relative name, so it resolved against the browser server's working directory. Pass `~/.fast-browser/macros/capture-annotated.js` with your home directory written out in full. If the file is genuinely absent, run `fast-browser setup` |
+| The macro ran and returned `failedStep` with no `resolved` | Nothing was captured or measured, so there is no partition to read. Fix the named argument, usually `home`, and call again |
 | `annotate` reports a missing renderer | `brew install librsvg`, then `fast-browser doctor` to confirm |
 | `annotate` refuses a box as outside the image | You clamped to the larger viewport width. Use `min(inner, client)` |

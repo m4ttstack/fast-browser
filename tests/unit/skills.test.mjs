@@ -98,6 +98,11 @@ test('macro index exposes only the portable built-in macros', async () => {
   assert.match(text, /~\/\.fast-browser\/macros\/page-recon\.js/);
   assert.match(text, /^## capture-annotated$/m);
   assert.match(text, /targets: Record<string, string>, out\?: string \(default "capture"\)/);
+  // `home` is required, not optional: the macro cannot read the caller's home
+  // directory itself, so an index entry that omits it documents a call that
+  // fails on its first argument check. Pinned separately from the `targets`
+  // substring above, which a docs edit dropping `home` would still satisfy.
+  assert.match(text, /home: string \(your absolute home directory path\)/);
   assert.match(text, /~\/\.fast-browser\/macros\/capture-annotated\.js/);
   assert.equal((text.match(/Status: built-in/g) || []).length, 2);
 });
@@ -117,6 +122,16 @@ test('the annotation skill states the rules the baseline runs violated', async (
 
   // Atomicity: one macro call is the source of both the PNG and the boxes.
   assert.match(text, /capture-annotated\.js/);
+  // Step 1 does not run at all with a bare `filename`. Live evidence: the
+  // runtime resolves a relative filename against the Playwright server
+  // process's own working directory, not the macros directory, and then
+  // enforces containment against its allowed roots, so a bare name yields
+  // `ENOENT` or an "outside allowed roots" refusal. The installed path has to
+  // be written out in full, and the failure table has to name that refusal,
+  // or the first instruction in the pipeline is one an agent cannot execute.
+  assert.doesNotMatch(text, /filename: 'capture-annotated\.js'/);
+  assert.match(text, /~\/\.fast-browser\/macros\/capture-annotated\.js/);
+  assert.match(text, /outside the allowed roots/);
   assert.match(text, /same return value of the same call/);
   assert.match(text, /Annotate a PNG captured by an earlier call/);
   assert.match(text, /Measure with your own `boundingBox\(\)`/);
@@ -147,9 +162,23 @@ test('the annotation skill states the rules the baseline runs violated', async (
   );
   assert.match(text, /Nothing was read off the image/);
 
-  // Padding and blur strength were improvised in every baseline sample.
+  // The three anchored primitives are not anchored alike, so one shared
+  // centring formula cannot serve them. `chip.xy` is a top left, but
+  // `counter.xy` is the circle's centre (lib/annotate/svg.mjs), so the chip
+  // formula offsets every counter up and left by its radius, about 16 px at
+  // the default size. A skill that turns perfect measurements into
+  // systematically wrong placement defeats the premise of the whole feature,
+  // so the counter's own derivation is pinned.
+  assert.match(text, /`xy = \[x \+ w \/ 2, y \+ h \/ 2\]`/);
+
+  // Padding and blur strength were improvised in every baseline sample. The
+  // rounding and the clamp are part of the instruction: "half the box height"
+  // alone still leaves the strength to taste.
   assert.match(text, /Pad every measured box by 6 px/);
-  assert.match(text, /`blur\.amount` is half the box height/);
+  assert.match(
+    text,
+    /`blur\.amount` is half the box height rounded up,\s+clamped to 8 through 40/,
+  );
   // The clamp bound is ambiguous unless sourced: the two reported widths
   // differ whenever the page has a classic scrollbar, and clamping to the
   // larger one yields boxes `annotate` rejects as outside the image.
