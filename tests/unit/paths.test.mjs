@@ -20,3 +20,8 @@ test('resolves every mutable path below the supplied home', () => {
   assert.equal(paths.rejectedMacrosFile, '/tmp/fb-home/.fast-browser/rejected-macros.md');
   assert.equal(paths.pluginRoot, '/plugin');
 });
+
+test('screenshotsDir is an exact data-directory child', () => {
+  const paths = resolvePaths({ homeDir: '/tmp/fb-home', pluginRoot: '/plugin' });
+  assert.equal(paths.screenshotsDir, '/tmp/fb-home/.fast-browser/screenshots');
+});
