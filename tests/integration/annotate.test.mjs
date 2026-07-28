@@ -77,6 +77,40 @@ test('annotate refuses a box that extends past the image', async () => {
   );
 });
 
+test('annotate refuses a zero-area blur box instead of reporting a redaction that covers nothing', async () => {
+  // Both corners of a zero-area box are identical and trivially in bounds,
+  // so the plain corner-based bounds check accepts it. buildSvg's clipPath
+  // then encloses zero pixels, so a `blur` -- the PII redaction primitive --
+  // would silently redact nothing while the command still reports success.
+  const { paths, configPath, config } = await fixture({
+    ...BODY,
+    annotations: [{ type: 'blur', box: [320, 128, 0, 0] }],
+  });
+  const rasteriseCalls = [];
+  await assert.rejects(
+    () => annotate({ command: 'annotate', config: configPath }, {
+      paths,
+      loadConfig: async () => config,
+      rasterise: async (call) => { rasteriseCalls.push(call); },
+    }),
+    /zero-area|not greater than zero/,
+  );
+  assert.equal(rasteriseCalls.length, 0, 'must fail before ever handing a zero-area box to rasterise');
+});
+
+test('annotate refuses a zero-width (but non-zero-height) box', async () => {
+  const { paths, configPath, config } = await fixture({
+    ...BODY,
+    annotations: [{ type: 'highlight', box: [320, 128, 0, 17] }],
+  });
+  await assert.rejects(
+    () => annotate({ command: 'annotate', config: configPath }, {
+      paths, loadConfig: async () => config, rasterise: async () => {},
+    }),
+    /zero-area|not greater than zero/,
+  );
+});
+
 test('annotate refuses an arrow whose head lands outside the image', async () => {
   const { paths, configPath, config } = await fixture({
     ...BODY,
@@ -188,8 +222,35 @@ test('annotate refuses a base or out that escapes the screenshots directory', as
       () => annotate({ command: 'annotate', config: configPath }, {
         paths, loadConfig: async () => config, rasterise: async () => {},
       }),
+      // The confinement failure is a validation failure like every other
+      // guard in this command, not an unlabelled crash: it must surface as
+      // a LifecycleError with exit code 2 (not fall through to main.mjs's
+      // safeFailure() and collapse to a diagnostics-free exit 1), and it
+      // must never echo the raw, user-supplied escape string back out.
+      (error) => error.name === 'LifecycleError'
+        && error.exitCode === 2
+        && !error.message.includes(escape),
     );
   }
+});
+
+test('annotate reports a diagnosable, exit-2 error when the named base capture is missing', async () => {
+  const { paths, configPath, config } = await fixture({ ...BODY, base: 'does-not-exist.png' });
+  await assert.rejects(
+    () => annotate({ command: 'annotate', config: configPath }, {
+      paths, loadConfig: async () => config, rasterise: async () => {},
+    }),
+    // A missing base is one of the two most likely real-world failures (the
+    // capture landed under a slightly different name). It must not collapse
+    // to main.mjs's generic "failed without exposing external diagnostics"
+    // exit-1 message: the agent needs enough signal to self-correct, without
+    // the raw filename (user-supplied config data) being echoed back.
+    (error) => error.name === 'LifecycleError'
+      && error.exitCode === 2
+      && /base/.test(error.message)
+      && /screenshots directory/.test(error.message)
+      && !error.message.includes('does-not-exist.png'),
+  );
 });
 
 test('a failed rasterise never leaves a report claiming success', async () => {
