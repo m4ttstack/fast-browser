@@ -29,7 +29,9 @@ import {
   performMcpHandshake,
 } from '../../lib/doctor/checks.mjs';
 import { main } from '../../lib/cli/main.mjs';
+import { parseArgs } from '../../lib/cli/parse-args.mjs';
 import { openNdjsonProcess } from '../../lib/core/process.mjs';
+import { defaultConfig } from '../../lib/core/config.mjs';
 import { runtimeLockIdentity } from '../../lib/runtime/lock.mjs';
 import { resolvePaths } from '../../lib/core/paths.mjs';
 import {
@@ -1348,6 +1350,91 @@ test('configure auto connection invokes secure pairing and full recording defaul
   assert.deepEqual(events, ['pair', 'save:auto', 'prune']);
   assert.equal(report.config.sessions.enabled, true);
   assert.equal(report.config.connection.mode, 'auto');
+});
+
+// Object-spreading a parseArgs() result drops its non-enumerable
+// `explicitOptions` set (the same mechanism that hides `help`/`version` from
+// deepEqual assertions elsewhere in this file), which would silently defeat
+// configure's --palette-only routing shortcut under test. Mutate `.json` on
+// the live request instead of copying it into a new object.
+function forceJsonOutput(request) {
+  request.json = true;
+  return request;
+}
+
+// Dependency names must match lib/commands/configure.mjs `dependencies()`:
+// loadConfig, saveConfig, prepareRoutingTransition, getCodexVersion.
+test('configure --palette preserves session settings and profile', async () => {
+  const stored = {
+    ...defaultConfig(),
+    profile: 'full',
+    sessions: { enabled: false, retentionDays: 90 },
+  };
+  let written = null;
+  await configure(
+    forceJsonOutput(parseArgs(['configure', '--palette', 'teal'])),
+    {
+      paths: { dataDir: '/tmp/fb', configFile: '/tmp/fb/config.json' },
+      loadConfig: async () => stored,
+      saveConfig: async (_paths, value) => { written = value; },
+      prepareRoutingTransition: async () => assert.fail(
+        'routing must not run for --palette alone',
+      ),
+      pruneSessions: async () => ({ removedPaths: [], removedBytes: 0 }),
+    },
+  );
+  assert.equal(written.annotation.palette, 'teal');
+  assert.equal(written.sessions.enabled, false, 'recording must not be re-enabled');
+  assert.equal(written.sessions.retentionDays, 90, 'retention must not be reset');
+  assert.equal(written.profile, 'full');
+});
+
+test('configure --palette does not require Codex detection', async () => {
+  await configure(
+    forceJsonOutput(parseArgs(['configure', '--palette', 'iris'])),
+    {
+      paths: { dataDir: '/tmp/fb', configFile: '/tmp/fb/config.json' },
+      loadConfig: async () => ({ ...defaultConfig(), hosts: { claude: false, codex: true } }),
+      saveConfig: async () => {},
+      prepareRoutingTransition: async () => assert.fail('routing must not run'),
+      getCodexVersion: async () => assert.fail('Codex detection must not run for --palette'),
+      pruneSessions: async () => ({ removedPaths: [], removedBytes: 0 }),
+    },
+  );
+});
+
+// `--json` selects output format, not configuration, so it must not defeat
+// the palette-only shortcut above. Without excluding it, an agent running
+// `configure --palette teal --json` (a routine combination) would take the
+// full routing path and hit the same Codex-detection failure this shortcut
+// exists to avoid.
+test('configure --palette --json still skips routing and Codex detection', async () => {
+  const stored = {
+    ...defaultConfig(),
+    profile: 'full',
+    hosts: { claude: false, codex: true },
+    sessions: { enabled: false, retentionDays: 90 },
+  };
+  let written = null;
+  await configure(
+    parseArgs(['configure', '--palette', 'teal', '--json']),
+    {
+      paths: { dataDir: '/tmp/fb', configFile: '/tmp/fb/config.json' },
+      loadConfig: async () => stored,
+      saveConfig: async (_paths, value) => { written = value; },
+      prepareRoutingTransition: async () => assert.fail(
+        'routing must not run for --palette plus --json',
+      ),
+      getCodexVersion: async () => assert.fail(
+        'Codex detection must not run for --palette plus --json',
+      ),
+      pruneSessions: async () => ({ removedPaths: [], removedBytes: 0 }),
+    },
+  );
+  assert.equal(written.annotation.palette, 'teal');
+  assert.equal(written.sessions.enabled, false, 'recording must not be re-enabled');
+  assert.equal(written.sessions.retentionDays, 90, 'retention must not be reset');
+  assert.equal(written.profile, 'full');
 });
 
 test('configure validates retention and never records in safe profile', async () => {

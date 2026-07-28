@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { parseArgs } from '../../lib/cli/parse-args.mjs';
+import { parseArgs, UsageError } from '../../lib/cli/parse-args.mjs';
 
 test('parses a two-host full setup', () => {
   assert.deepEqual(
@@ -18,6 +18,7 @@ test('parses a two-host full setup', () => {
       recordSessions: null,
       retentionDays: null,
       runtimeLock: null,
+      palette: null,
     },
   );
 });
@@ -36,6 +37,7 @@ test('defaults setup to detected hosts and safe profile', () => {
     recordSessions: null,
     retentionDays: null,
     runtimeLock: null,
+    palette: null,
   });
 });
 
@@ -119,4 +121,10 @@ test('migrate accepts --source, like setup', () => {
 
 test('doctor still rejects --source', () => {
   assert.throws(() => parseArgs(['doctor', '--source', '/repo/mattstack']), /--source/);
+});
+
+test('--palette is accepted for configure and validated', () => {
+  assert.equal(parseArgs(['configure', '--palette', 'teal']).palette, 'teal');
+  assert.throws(() => parseArgs(['configure', '--palette', 'burgundy']), UsageError);
+  assert.throws(() => parseArgs(['setup', '--palette', 'teal']), UsageError);
 });
