@@ -258,6 +258,95 @@ test('setup removes a prior Codex host without probing its unavailable version',
   assert.equal(routingInput.codexVersion, '');
 });
 
+// The same defect class `configure` was fixed for: a command that does not
+// ask about a setting must not reset it. The reinstall branch rebuilds config
+// from defaultConfig(), so before this it dropped a chosen palette on any
+// rerun that changed the profile or the host set, and the next `annotate`
+// refused with "no annotation palette is configured". performLockUpgrade
+// spreads `...current` and does preserve it, so which repair branch a rerun
+// happened to take decided whether the user kept their choice.
+test('a reinstalling setup preserves the configured annotation palette', async () => {
+  const current = {
+    ...migrationConfig(),
+    hosts: { claude: true, codex: false },
+    annotation: { palette: 'violet' },
+  };
+  let savedConfig;
+  const report = await setup(request({ hosts: ['claude'], profile: 'full' }), {
+    checkPlatform: async () => {},
+    detectHosts: async () => ['claude'],
+    ensureDataDirs: async () => {},
+    loadRuntimeLock: async () => ({
+      productVersion: '0.1.0-alpha.1',
+      sourceCommit: 'abc',
+      runtime: { sha256: 'a'.repeat(64) },
+      extension: { id: 'extension-id', version: '1.0.0' },
+    }),
+    installRuntime: async () => ({ version: '0.1.0-alpha.1' }),
+    installExtension: async () => ({ unpacked: '/tmp/extension' }),
+    installClaude: async () => ({ changed: false, changes: [] }),
+    installBuiltinMacros: async () => {},
+    prepareRoutingTransition: async () => ({
+      nextState: { profile: 'full', files: [], blocks: [] },
+      apply: async () => ({ rollback: async () => {} }),
+    }),
+    saveConfig: async (_paths, config) => {
+      savedConfig = config;
+    },
+    pruneSessions: async () => ({ removedPaths: [], removedBytes: 0 }),
+    doctor: async () => ({ schemaVersion: 1, ok: true, checks: [] }),
+    loadConfig: async () => current,
+    paths: {
+      homeDir: '/home/test',
+      dataDir: '/home/test/.fast-browser',
+      configFile: '/home/test/.fast-browser/config.json',
+    },
+    interactive: true,
+  });
+
+  assert.equal(report.changed, true, 'the profile changed, so this is the reinstall branch');
+  assert.equal(savedConfig.annotation.palette, 'violet');
+  assert.equal(report.config.annotation.palette, 'violet');
+});
+
+test('a first-ever setup leaves the annotation palette unchosen', async () => {
+  let savedConfig;
+  await setup(request({ hosts: ['claude'], profile: 'safe' }), {
+    checkPlatform: async () => {},
+    detectHosts: async () => ['claude'],
+    ensureDataDirs: async () => {},
+    loadRuntimeLock: async () => ({
+      productVersion: '0.1.0-alpha.1',
+      sourceCommit: 'abc',
+      runtime: { sha256: 'a'.repeat(64) },
+      extension: { id: 'extension-id', version: '1.0.0' },
+    }),
+    installRuntime: async () => ({ version: '0.1.0-alpha.1' }),
+    installExtension: async () => ({ unpacked: '/tmp/extension' }),
+    installClaude: async () => ({ changed: false, changes: [] }),
+    installBuiltinMacros: async () => {},
+    prepareRoutingTransition: async () => ({
+      nextState: { profile: 'safe', files: [], blocks: [] },
+      apply: async () => ({ rollback: async () => {} }),
+    }),
+    saveConfig: async (_paths, config) => {
+      savedConfig = config;
+    },
+    doctor: async () => ({ schemaVersion: 1, ok: true, checks: [] }),
+    loadConfig: async () => null,
+    paths: {
+      homeDir: '/home/test',
+      dataDir: '/home/test/.fast-browser',
+      configFile: '/home/test/.fast-browser/config.json',
+    },
+    interactive: true,
+  });
+
+  // Preserving a prior choice must not become inventing one: with no config
+  // to carry forward, the palette stays null so `annotate` still asks.
+  assert.equal(savedConfig.annotation.palette, null);
+});
+
 test('second matching setup is a true mutation no-op', async () => {
   const events = [];
   const current = {
