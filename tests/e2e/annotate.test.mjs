@@ -70,11 +70,20 @@ const PAGE = `data:text/html,${encodeURIComponent(`
 <div class="row"><span>Estimate</span><span class="v" id="est">$4,182.60</span></div>`)}`;
 
 async function harness(t) {
+  // Each rm is registered right after its own mkdtemp, not batched at the end
+  // of this function: startMcpClient below reads a manifest, validates a
+  // checksum, and extracts a tarball into outputDir/.runtime before it
+  // returns, and any of those throwing must still leave neither temp
+  // directory orphaned. Each hook also catches its own rejection, so one
+  // teardown failing never cancels the others (see
+  // tests/e2e/simultaneous.test.mjs for the same convention).
   const outputDir = await mkdtemp(path.join(os.tmpdir(), 'fb-annot-e2e-out-'));
+  t.after(() => rm(outputDir, { recursive: true, force: true }).catch(() => {}));
   // A separate temp directory stands in for the real $HOME: it is where the
   // macro writes its capture and where the CLI (run with HOME overridden to
   // match) looks for it. Never the developer's actual home.
   const tempHome = await mkdtemp(path.join(os.tmpdir(), 'fb-annot-e2e-home-'));
+  t.after(() => rm(tempHome, { recursive: true, force: true }).catch(() => {}));
 
   // Copied into outputDir, not referenced from builtins/macros/ directly: see
   // the file-level comment above for why an absolute path outside outputDir
@@ -92,11 +101,10 @@ async function harness(t) {
   await saveConfig(paths, { ...defaultConfig(), annotation: { palette: 'violet' } });
 
   const client = await startMcpClient({ outputDir });
-  t.after(async () => {
-    await client.close?.();
-    await rm(outputDir, { recursive: true, force: true });
-    await rm(tempHome, { recursive: true, force: true });
-  });
+  // startMcpClient always returns a close function (see
+  // tests/e2e/direct-mcp.test.mjs, which calls it plainly), so no optional
+  // chaining is needed here.
+  t.after(() => client.close().catch(() => {}));
   return {
     client, outputDir, tempHome, macroPath,
   };
@@ -105,16 +113,20 @@ async function harness(t) {
 // startMcpClient's callTool already JSON-parses a text result that is
 // entirely JSON (see textResult() in helpers/mcp-client.mjs), so the macro's
 // payload comes back as a plain object, not text requiring its own
-// extraction.
+// extraction. Asserting schemaVersion here (rather than just `typeof result
+// === 'object'`) matters because the macro's own structured failure payload
+// -- `{ failedStep, error }`, e.g. the prior `home`-argument ReferenceError
+// -- is also an object and would otherwise slip past a bare typeof check and
+// fail confusingly later with no reference to the macro's own error string.
 async function measure(client, macroPath, tempHome, args) {
   const result = await client.callTool('browser_run_code_unsafe', {
     filename: macroPath,
     args: { ...args, home: tempHome },
   });
   assert.equal(
-    typeof result,
-    'object',
-    `macro returned no JSON payload: ${JSON.stringify(result)}`,
+    result?.schemaVersion,
+    1,
+    `macro did not return a schemaVersion-1 payload: ${JSON.stringify(result)}`,
   );
   return result;
 }
@@ -135,7 +147,6 @@ test('capture-annotated resolves, reports misses, and annotate rasterises', asyn
     },
   });
 
-  assert.equal(measured.schemaVersion, 1);
   assert.ok(measured.resolved.estimate, 'the unambiguous target resolves');
   assert.ok(measured.resolved.name, 'the redaction target resolves');
   assert.equal(measured.resolved.ambiguous, undefined, 'a multi-match never resolves');
@@ -176,10 +187,43 @@ test('capture-annotated resolves, reports misses, and annotate rasterises', asyn
     'the annotated output must land under the temp home, never the real one',
   );
 
-  const base = readPngSize(await readFile(measured.png));
-  const out = readPngSize(await readFile(report.out));
+  const baseBytes = await readFile(measured.png);
+  const base = readPngSize(baseBytes);
+  const outBytes = await readFile(report.out);
+  const out = readPngSize(outBytes);
   assert.equal(out.width, base.width * 2);
   assert.equal(out.height, base.height * 2);
+
+  // Pixel-level proof that the CLI actually drew the annotations, not merely
+  // produced a correctly sized image: rasterise the same base bytes at the
+  // same scale and the same palette the CLI just ran with (read back from its
+  // own report rather than assumed, in case a config could ever choose a
+  // different one), but with no annotations. rsvg-convert is deterministic,
+  // so if the CLI's real output were byte-identical to this unannotated
+  // control, that would mean `annotate` silently dropped every annotation
+  // while still reporting success and the right dimensions -- the same shape
+  // of failure this task exists to catch, one layer up from the macro. This
+  // is additive to, not a replacement for, the direct buildSvg/rasterise
+  // comparison in the next test.
+  const scale = out.width / base.width;
+  const unannotatedPath = path.join(outputDir, 'e2e-annotate-unannotated.png');
+  await rasterise({
+    svg: buildSvg({
+      base: baseBytes,
+      width: base.width,
+      height: base.height,
+      annotations: [],
+      palette: report.palette,
+      scale,
+    }),
+    outPath: unannotatedPath,
+  });
+  const unannotatedBytes = await readFile(unannotatedPath);
+  assert.ok(
+    !outBytes.equals(unannotatedBytes),
+    'the CLI output must differ from an unannotated raster of the same base; '
+    + 'equal bytes means annotate silently dropped every annotation',
+  );
 });
 
 test('a measured blur actually changes the raster over its target', async (t) => {
