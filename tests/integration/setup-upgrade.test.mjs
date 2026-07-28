@@ -765,6 +765,90 @@ test('a pending extension reload does not excuse a genuinely failing check', asy
   );
 });
 
+// Task 10 fix-round regression for the reviewer's CRITICAL finding: adding
+// `annotate-renderer` to DOCTOR_CHECK_IDS broke this exact rerun path for
+// anyone without librsvg installed, because MANUAL_STEP_CHECK_IDS did not
+// know about it. Every other prior test in this file that exercises the
+// "profile and hosts unchanged" branch injects `deps.doctor` with a
+// synthetic doctorReportWithFailures(...), so none of them ever ran the
+// real, composed doctor() and its real annotate-renderer check -- which is
+// exactly why the bug shipped unnoticed. This test never overrides
+// `deps.doctor`, letting setup() fall through to the real doctor() from
+// lib/commands/doctor.mjs, with every underlying adapter it needs supplied
+// so every check genuinely runs and genuinely passes except
+// annotate-renderer, which genuinely fails because `rendererVersion` (the
+// one adapter this test deliberately makes report absent) mirrors a real
+// machine that has never run `brew install librsvg`. Annotation is
+// optional and not installed by setup, so this must never look like drift.
+test('setup treats a real, fully composed doctor report as unchanged when only the optional annotation renderer is missing', async () => {
+  const lock = lockFor('0.1.0-alpha.5', '0.2.2');
+  const paths = await fixtureHome('fast-browser-annotate-renderer-optional-');
+  await writeRuntimeInstall(paths, lock);
+  const { unpacked } = await writeExtensionInstall(paths, lock);
+  const current = configFor(lock, {
+    profile: 'safe',
+    hosts: { claude: true, codex: false },
+    connection: { mode: 'manual' },
+    runtime: {
+      version: lock.productVersion,
+      sha256: lock.runtime.sha256,
+      sourceCommit: lock.sourceCommit,
+    },
+  });
+  await saveConfig(paths, current);
+
+  const requiredTools = [
+    { name: 'browser_navigate' },
+    { name: 'browser_snapshot' },
+    { name: 'browser_click' },
+    {
+      name: 'browser_run_code_unsafe',
+      annotations: { destructiveHint: true, openWorldHint: true },
+    },
+  ];
+
+  const report = await setup(
+    { hosts: ['claude'], profile: 'safe', source: '/repo/mattstack', runtimeLock: null },
+    {
+      paths,
+      checkPlatform: async () => {},
+      detectHosts: async () => ['claude'],
+      loadConfig,
+      loadRuntimeLock: async () => lock,
+      platform: 'darwin',
+      nodeVersion: '22.0.0',
+      checkChrome: async () => {},
+      preflightClaude: async () => ({ installed: true }),
+      preflightRouting: async () => ({ files: [], blocks: [] }),
+      detectChromeExtension: async () => [{
+        profile: 'Default',
+        installed: true,
+        manifestVersion: lock.extension.version,
+        versionSource: 'disk',
+        path: unpacked,
+        loadedAt: 1_700_000_000_000,
+      }],
+      verifyExtensionIsLoadedContent: async () => true,
+      // The one adapter this test deliberately fails: no librsvg installed.
+      rendererVersion: async () => null,
+      openMcpTransport: async () => ({
+        request: async (message) => (
+          message.method === 'initialize'
+            ? { jsonrpc: '2.0', id: message.id, result: { protocolVersion: '2025-03-26' } }
+            : { jsonrpc: '2.0', id: message.id, result: { tools: requiredTools } }
+        ),
+        notify: async () => {},
+        close: async () => {},
+      }),
+    },
+  );
+
+  assert.equal(report.changed, false);
+  const failing = report.doctor.checks.filter((check) => check.status === 'fail');
+  assert.deepEqual(failing.map((check) => check.id), ['annotate-renderer']);
+  assert.match(failing[0].remediation, /brew install librsvg/);
+});
+
 // A successful rollback returned undefined, so the CLI threw while rendering
 // its report -- after every file had already been restored. The user saw a
 // crash for a rollback that had fully succeeded, which invites them to

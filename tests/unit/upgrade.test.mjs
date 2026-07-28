@@ -123,6 +123,29 @@ test('isExplainedByLockUpgrade is true for a self-consistent, older runtime and 
   );
 });
 
+// Task 10 fix-round regression: a genuine lock-version bump must still be
+// explained even when annotate-renderer is ALSO failing alongside it (an
+// unrelated, permanently-optional check for anyone without librsvg
+// installed). Before this fix, annotate-renderer was not in
+// MANUAL_STEP_CHECK_IDS, so classifyLockUpgrade's "any failing check outside
+// the lock-explainable set" guard (line 256) treated it exactly like a real,
+// unrelated failure and refused to explain an otherwise legitimate upgrade.
+test('isExplainedByLockUpgrade is true for a genuine upgrade even when the optional annotation renderer also fails', async () => {
+  const paths = await tempPaths('fast-browser-upgrade-unit-annotate-renderer-');
+  const oldLock = lockFor('0.1.0-alpha.1', '0.2.1');
+  const newLock = lockFor('0.1.0-alpha.5', '0.2.2');
+  await writeRuntimeInstall(paths, oldLock);
+  await writeExtensionInstall(paths, oldLock);
+  const report = doctorReport([
+    'runtime-checksum', 'extension-artifact', 'mcp-handshake', 'tool-contract', 'extension-installed',
+    'annotate-renderer',
+  ]);
+  assert.equal(
+    await isExplainedByLockUpgrade({ paths, lock: newLock, doctorReport: report }),
+    true,
+  );
+});
+
 test('isExplainedByLockUpgrade is false when the extension bytes no longer match their own marker', async () => {
   const paths = await tempPaths('fast-browser-upgrade-unit-tamper-');
   const oldLock = lockFor('0.1.0-alpha.1', '0.2.1');
