@@ -1,5 +1,5 @@
 async (page, args) => {
-  const { targets = {}, out = 'capture' } = args || {};
+  const { targets = {}, out = 'capture', home } = args || {};
   const names = Object.keys(targets);
   if (names.length === 0) {
     return { failedStep: 'args', error: 'targets is required' };
@@ -7,8 +7,31 @@ async (page, args) => {
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(out)) {
     return { failedStep: 'args', error: 'out must be a simple file name' };
   }
+  // This macro runs with no Node globals at all: no `process`, no `require`,
+  // nothing that could read the caller's home directory. Only `page` and
+  // this `args` object are in scope (confirmed by a live run: `typeof
+  // process` inside the real sandbox is `undefined`). The caller -- the
+  // agent driving `browser_run_code_unsafe`, which runs in a real Node
+  // process and can read its own environment -- must supply `home` instead.
+  // This check is also the macro's only defence, alongside the `out` regex
+  // above, against writing outside the screenshots directory: the runtime
+  // applies no path confinement of its own to code executed this way, so an
+  // absolute path outside `~/.fast-browser` would write just as freely as
+  // one inside it.
+  if (
+    typeof home !== 'string'
+    || home.length === 0
+    || home.length > 4096
+    || home[0] !== '/'
+    || home.includes('\0')
+    || home.split('/').includes('..')
+  ) {
+    return {
+      failedStep: 'args',
+      error: "home must be the caller's absolute home directory path, with no .. segments",
+    };
+  }
 
-  const home = process.env.HOME;
   // `name` is what goes into the annotate config's `base` field, which takes a
   // NAME inside the screenshots directory, not a path. Returning both avoids
   // the agent having to derive one from the other and getting it wrong.

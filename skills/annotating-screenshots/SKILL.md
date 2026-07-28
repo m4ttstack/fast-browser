@@ -13,9 +13,10 @@ the image, and nothing is typed by hand.
 
 1. **Capture and measure in one call.** `browser_run_code_unsafe` with
    `filename: 'capture-annotated.js'` and
-   `args: { targets: { <key>: '<selector>' }, out: '<name>' }`. Under the
-   default `safe` profile this prompts for approval every time. Expect the
-   prompt; it is not a failure.
+   `args: { targets: { <key>: '<selector>' }, out: '<name>', home: '<your $HOME>' }`.
+   The macro has no Node globals and cannot read `$HOME` itself, so pass your
+   own absolute home directory path. Under the default `safe` profile this
+   prompts for approval every time. Expect the prompt; it is not a failure.
 2. **Write the config** from that call's return value.
 3. **Draw:** `fast-browser annotate <config-path>`.
 4. **Read the output PNG yourself** before reporting: nothing clipped at an

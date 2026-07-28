@@ -16,6 +16,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
+import vm from 'node:vm';
 
 const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const execFile = promisify(execFileCallback);
@@ -77,6 +78,34 @@ async function loadCaptureAnnotatedMacro() {
     'utf8',
   );
   return Function(`"use strict"; return (${source});`)();
+}
+
+// `Function(...)` (used by loadCaptureAnnotatedMacro above, and by every
+// other test that only checks the macro's own logic) still runs inside this
+// Node process, so a stray `process` reference inside the macro would
+// resolve to this test's own `process` global and silently pass -- that is
+// exactly how the ReferenceError shipped undetected the first time. The real
+// `browser_run_code_unsafe` sandbox has no Node globals whatsoever (checked
+// live: `process`, `require`, `module`, and `Buffer` are all undefined; the
+// only sandbox-provided names are `page`, the harness's own `args`/`__fn__`/
+// `__args__`/`__end__`, and the standard ECMAScript intrinsics). vm.createContext
+// with an empty sandbox object reproduces that: it is a fresh realm with
+// Object/Array/Math/JSON/Promise/RegExp/etc. but none of Node's
+// host-specific globals, since those are only ever added to a vm context
+// explicitly. A function defined inside that context keeps that context as
+// its lexical global scope even when later invoked from this process, so
+// calling the loaded macro here still throws ReferenceError for any bare
+// `process`/`require`/`module`/`Buffer` reference exactly as the live tool
+// would.
+async function loadCaptureAnnotatedMacroWithoutNodeGlobals() {
+  const source = await readFile(
+    path.join(pluginRoot, 'builtins/macros/capture-annotated.js'),
+    'utf8',
+  );
+  const sandbox = {};
+  vm.createContext(sandbox);
+  const script = new vm.Script(`(${source})`);
+  return script.runInContext(sandbox);
 }
 
 test('page-recon returns only bounded headings and links', async () => {
@@ -364,6 +393,43 @@ for (const out of ['../escape', '/etc/passwd', 'a'.repeat(65), '']) {
   });
 }
 
+test('capture-annotated requires home, since the sandbox has no way to read it itself', async () => {
+  const macro = await loadCaptureAnnotatedMacro();
+  const page = fakeCapturePage();
+  const result = await macro(page, { targets: { a: '.a' } });
+  assert.equal(result.failedStep, 'args');
+  assert.match(result.error, /home/);
+  assert.equal(page.screenshots.length, 0, 'must not screenshot before validating args');
+});
+
+for (const [label, home] of [
+  ['missing', undefined],
+  ['null', null],
+  ['a number', 42],
+  ['empty string', ''],
+  ['relative path', 'Users/test'],
+  ['bare traversal', '../etc'],
+  ['traversal in the middle', '/Users/../etc'],
+  ['trailing traversal', '/Users/test/..'],
+  ['over the length cap', `/${'a'.repeat(4096)}`],
+]) {
+  test(`capture-annotated rejects an unsafe home: ${label}`, async () => {
+    const macro = await loadCaptureAnnotatedMacro();
+    const page = fakeCapturePage();
+    const result = await macro(page, { targets: { a: '.a' }, home });
+    assert.equal(result.failedStep, 'args');
+    assert.match(result.error, /home/);
+    assert.equal(page.screenshots.length, 0, 'must not screenshot before validating args');
+  });
+}
+
+test('capture-annotated accepts a plain absolute home with no .. segments', async () => {
+  const macro = await loadCaptureAnnotatedMacro();
+  const page = fakeCapturePage({ locators: { '.a': { count: 1, box: { x: 0, y: 0, width: 1, height: 1 } } } });
+  const result = await macro(page, { targets: { a: '.a' }, home: '/Users/test' });
+  assert.equal(result.png, '/Users/test/.fast-browser/screenshots/capture.png');
+});
+
 test('capture-annotated resolves visible targets and reports every miss reason', async () => {
   const macro = await loadCaptureAnnotatedMacro();
   const page = fakeCapturePage({
@@ -384,6 +450,7 @@ test('capture-annotated resolves visible targets and reports every miss reason',
       offscreen: '.offscreen',
     },
     out: 'my-capture',
+    home: '/Users/test',
   });
 
   assert.equal(page.screenshots.length, 1, 'must screenshot exactly once');
@@ -410,6 +477,7 @@ test('capture-annotated never reports a resolved box with a zero-or-negative dim
   });
   const result = await macro(page, {
     targets: { zeroWidth: '.zero-width', zeroHeight: '.zero-height' },
+    home: '/Users/test',
   });
   assert.deepEqual(result.resolved, {});
   assert.equal(result.missed.length, 2);
@@ -429,7 +497,7 @@ test('capture-annotated catches a screenshot failure without measuring', async (
     evaluated = true;
     return originalEvaluate(...arguments_);
   };
-  const result = await macro(page, { targets: { a: '.a' } });
+  const result = await macro(page, { targets: { a: '.a' }, home: '/Users/test' });
   assert.deepEqual(result, {
     failedStep: 'capture',
     error: 'boom',
@@ -441,7 +509,7 @@ test('capture-annotated catches a screenshot failure without measuring', async (
 test('capture-annotated defaults out to "capture" when omitted', async () => {
   const macro = await loadCaptureAnnotatedMacro();
   const page = fakeCapturePage({ locators: { '.a': { count: 1, box: { x: 0, y: 0, width: 1, height: 1 } } } });
-  const result = await macro(page, { targets: { a: '.a' } });
+  const result = await macro(page, { targets: { a: '.a' }, home: '/Users/test' });
   assert.equal(result.name, 'capture.png');
 });
 
@@ -466,6 +534,24 @@ test('capture-annotated screenshots before it measures, with nothing between', a
     return originalEvaluate(...arguments_);
   };
   const macro = await loadCaptureAnnotatedMacro();
-  await macro(page, { targets: { a: 'a' } });
+  await macro(page, { targets: { a: 'a' }, home: '/Users/test' });
   assert.deepEqual(calls, ['screenshot', 'evaluate']);
+});
+
+test('capture-annotated runs to completion with no Node globals in scope, matching the real sandbox', async () => {
+  const macro = await loadCaptureAnnotatedMacroWithoutNodeGlobals();
+  const page = fakeCapturePage({
+    locators: { '.a': { count: 1, box: { x: 1, y: 2, width: 3, height: 4 } } },
+  });
+  const result = await macro(page, { targets: { a: '.a' }, out: 'iso', home: '/Users/test' });
+  // The macro's returned object was built inside a different vm realm, so it
+  // does not share this process's Object.prototype; round-trip it through
+  // JSON (own enumerable data only, no prototype) before asserting on shape,
+  // rather than risking a spurious cross-realm mismatch from deepEqual.
+  const plain = JSON.parse(JSON.stringify(result));
+  assert.equal(plain.schemaVersion, 1);
+  assert.equal(plain.name, 'iso.png');
+  assert.equal(plain.png, '/Users/test/.fast-browser/screenshots/iso.png');
+  assert.deepEqual(plain.resolved, { a: [1, 2, 3, 4] });
+  assert.deepEqual(plain.missed, []);
 });
