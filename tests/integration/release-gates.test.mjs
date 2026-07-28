@@ -181,3 +181,18 @@ test('attribution is consistent across manifests, marketplace, and LICENSE', asy
   assert.equal(codex.interface.developerName, holder);
   assert.equal(marketplace.owner.name, holder);
 });
+
+test('the annotation skill ships for both hosts', async () => {
+  const files = await packedFiles();
+
+  assert.ok(files.includes('skills/annotating-screenshots/SKILL.md'));
+  assert.ok(files.includes('skills/annotating-screenshots/agents/openai.yaml'));
+  assert.ok(files.includes('builtins/macros/capture-annotated.js'));
+});
+
+test('the vendored Radix palette carries its licence notice', async () => {
+  const notices = await readFile(path.join(pluginRoot, 'THIRD_PARTY_NOTICES.md'), 'utf8');
+
+  assert.match(notices, /Radix Colors/);
+  assert.match(notices, /MIT License/);
+});

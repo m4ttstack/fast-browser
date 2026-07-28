@@ -1,0 +1,4 @@
+interface:
+  display_name: "Annotating Screenshots"
+  short_description: "Mark up captures from measured boxes, not estimates."
+  default_prompt: "Use $annotating-screenshots to annotate this capture."

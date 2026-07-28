@@ -4,9 +4,11 @@ import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
+import { OFFERED_PALETTES } from '../../lib/annotate/palette.mjs';
+
 const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const repositoryRoot = path.resolve(pluginRoot, '../..');
-const skillNames = ['fast-browsing', 'browser-macros', 'mine-macros'];
+const skillNames = ['fast-browsing', 'browser-macros', 'mine-macros', 'annotating-screenshots'];
 
 const deployTextExtensions = new Set([
   '.json',
@@ -98,6 +100,53 @@ test('macro index exposes only the portable built-in macros', async () => {
   assert.match(text, /targets: Record<string, string>, out\?: string \(default "capture"\)/);
   assert.match(text, /~\/\.fast-browser\/macros\/capture-annotated\.js/);
   assert.equal((text.match(/Status: built-in/g) || []).length, 2);
+});
+
+// Each assertion here pins one instruction that a baseline run without the
+// skill got wrong. Agents already measure rather than eyeball the PNG, so the
+// failures worth guarding are provenance ones: a PNG and a measurement taken
+// from different page loads, a hand-authored `measured` block that satisfies
+// the base-image check by lying to it, and geometry the agent could only find
+// by reading lib/annotate/svg.mjs. Losing any of these lines is a silent
+// regression to boxes that look right and are not.
+test('the annotation skill states the rules the baseline runs violated', async () => {
+  const text = await readFile(
+    path.join(pluginRoot, 'skills/annotating-screenshots/SKILL.md'),
+    'utf8',
+  );
+
+  // Atomicity: one macro call is the source of both the PNG and the boxes.
+  assert.match(text, /capture-annotated\.js/);
+  assert.match(text, /same return value of the same call/);
+  assert.match(text, /Annotate a PNG captured by an earlier call/);
+  assert.match(text, /Measure with your own `boundingBox\(\)`/);
+  // The macro was absent in one baseline environment and went uninstalled.
+  assert.match(text, /fast-browser setup/);
+
+  // Corroboration must be copied, never authored.
+  assert.match(text, /Copy `schemaVersion` and\n\s*`viewport` verbatim/);
+
+  // A missed key never becomes an annotation, and never resolves by first hit.
+  assert.match(text, /Never take the first of N matches/);
+  assert.match(text, /has not been redacted/);
+
+  // Chip geometry, and the fact that `annotate` cannot catch a clipped label.
+  assert.match(text, /`chip\.xy` is its \*\*top left\*\* corner/);
+  assert.match(text, /bounds-checks only the anchor point/);
+
+  // Padding and blur strength were improvised in every baseline sample.
+  assert.match(text, /Pad every measured box by 6 px/);
+  assert.match(text, /`blur\.amount` is half the box height/);
+
+  // Spec requirements: composition, palette, approval prompt, purge.
+  assert.match(text, /Never blur the value the screenshot exists to prove/);
+  assert.match(text, /never over card content/);
+  for (const palette of OFFERED_PALETTES) {
+    assert.match(text, new RegExp(`\`${palette}\``), palette);
+  }
+  assert.match(text, /configure --palette/);
+  assert.match(text, /it is not a failure/);
+  assert.match(text, /uninstall --purge-data/);
 });
 
 test('skills and delegated browser guidance use authoritative live ledgers', async () => {

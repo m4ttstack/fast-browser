@@ -39,6 +39,7 @@ const requiredEntries = [
   'package/lib/runtime/install.mjs',
   'package/lib/runtime/launch.mjs',
   'package/lib/runtime/lock.mjs',
+  'package/skills/annotating-screenshots/agents/openai.yaml',
   'package/skills/browser-macros/agents/openai.yaml',
   'package/skills/fast-browsing/agents/openai.yaml',
   'package/skills/mine-macros/agents/openai.yaml',
@@ -46,6 +47,7 @@ const requiredEntries = [
   'package/templates/routing/claude/fast-browser-routing.md',
   'package/templates/routing/claude/fast-browser-verification-consent.md',
   'package/templates/routing/codex/fast-browser.md',
+  'package/skills/annotating-screenshots/SKILL.md',
   'package/skills/browser-macros/SKILL.md',
   'package/skills/fast-browsing/SKILL.md',
   'package/skills/mine-macros/SKILL.md',
@@ -145,8 +147,8 @@ test('npm package contains only portable deployable Fast Browser assets', async 
   }
   assert.equal(
     entries.filter((entry) => /\/skills\/[^/]+\/SKILL\.md$/.test(entry)).length,
-    3,
-    'package must contain exactly three real skills',
+    4,
+    'package must contain exactly four real skills',
   );
 
   for (const entry of entries) {
