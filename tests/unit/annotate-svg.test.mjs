@@ -47,7 +47,7 @@ test('counter n is validated as an integer rather than interpolated raw', () => 
   assert.match(svg([{ type: 'counter', xy: [5, 5], n: 3 }]), />3</);
 });
 
-test('blur and spotlight share one id counter so ids never collide', () => {
+test('every generated element id is unique within one document', () => {
   const out = svg([
     { type: 'blur', box: [0, 0, 10, 10] },
     { type: 'spotlight', box: [0, 0, 10, 10] },
@@ -55,6 +55,20 @@ test('blur and spotlight share one id counter so ids never collide', () => {
   ]);
   const ids = [...out.matchAll(/id="(clip|blur|spot)(\d+)"/g)].map((m) => `${m[1]}${m[2]}`);
   assert.equal(new Set(ids).size, ids.length, 'every generated id is unique');
+});
+
+test('blur and spotlight advance one shared id counter', () => {
+  const out = svg([
+    { type: 'blur', box: [0, 0, 10, 10] },
+    { type: 'spotlight', box: [0, 0, 10, 10] },
+  ]);
+  // A shared counter gives the spotlight index 2. Per-type counters would
+  // restart it at 1, which is invisible to a uniqueness check because the
+  // 'spot' prefix keeps the strings distinct either way.
+  assert.match(out, /id="clip1"/);
+  assert.match(out, /id="blur1"/);
+  assert.match(out, /id="spot2"/);
+  assert.doesNotMatch(out, /id="spot1"/);
 });
 
 test('an unknown annotation type is refused', () => {
