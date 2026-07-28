@@ -679,6 +679,7 @@ test('doctor real composition accepts complete injected platform adapters with n
       verifyExtensionIsLoadedContent: async () => true,
       hasToken: async () => true,
       checkDataPermissions: async () => {},
+      rendererVersion: async () => 'rsvg-convert version 2.62.1',
       openMcpTransport: async () => ({
         request: async (message) => (
           message.method === 'initialize'
@@ -699,6 +700,56 @@ test('doctor real composition accepts complete injected platform adapters with n
     report.checks.map(({ status }) => status),
     Array(DOCTOR_CHECK_IDS.length).fill('pass'),
   );
+});
+
+// Builds the stubbed-checks argument used throughout this file to exercise
+// exactly one real check implementation: every other id gets a canned pass so
+// only the check under test runs through doctor's real composition.
+function passingChecksExcept(id) {
+  return Object.fromEntries(DOCTOR_CHECK_IDS
+    .filter((checkId) => checkId !== id)
+    .map((checkId) => [checkId, async () => ({
+      status: 'pass',
+      message: `${checkId} passed.`,
+      remediation: null,
+    })]));
+}
+
+const unusedPaths = {
+  homeDir: '/unused',
+  dataDir: '/unused',
+  configFile: '/unused',
+  runtimeDir: '/unused',
+  extensionDir: '/unused',
+  pluginRoot: '/unused',
+};
+
+test('doctor passes when rsvg-convert is present and names its version', async () => {
+  const report = await doctor(
+    { profile: 'safe' },
+    {
+      checks: passingChecksExcept('annotate-renderer'),
+      rendererVersion: async () => 'rsvg-convert version 2.62.1',
+      paths: unusedPaths,
+    },
+  );
+  const check = report.checks.find(({ id }) => id === 'annotate-renderer');
+  assert.equal(check.status, 'pass');
+  assert.match(check.message, /2\.62\.1/);
+});
+
+test('doctor fails with the brew remediation when rsvg-convert is absent', async () => {
+  const report = await doctor(
+    { profile: 'safe' },
+    {
+      checks: passingChecksExcept('annotate-renderer'),
+      rendererVersion: async () => null,
+      paths: unusedPaths,
+    },
+  );
+  const check = report.checks.find(({ id }) => id === 'annotate-renderer');
+  assert.equal(check.status, 'fail');
+  assert.match(check.remediation, /brew install librsvg/);
 });
 
 function extensionLock(version) {
