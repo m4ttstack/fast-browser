@@ -15,7 +15,10 @@ the image, and nothing is typed by hand.
    `filename: 'capture-annotated.js'` and
    `args: { targets: { <key>: '<selector>' }, out: '<name>', home: '<your $HOME>' }`.
    The macro has no Node globals and cannot read `$HOME` itself, so pass your
-   own absolute home directory path. Under the default `safe` profile this
+   own absolute home directory path. Put every label anchor in `targets` too,
+   not just the values you are marking: a chip, a counter and an arrow tail
+   each need a measured box exactly as much as a highlight does, and you
+   cannot add a key after the call. Under the default `safe` profile this
    prompts for approval every time. Expect the prompt; it is not a failure.
 2. **Write the config** from that call's return value.
 3. **Draw:** `fast-browser annotate <config-path>`.
@@ -48,9 +51,9 @@ elements, and the boxes then describe a layout the PNG does not show.
 
 ## Missed keys
 
-Every key you asked for comes back in exactly one of `resolved` or `missed`.
-Draw only from `resolved`. Draw nothing for a missed key, and name it and its
-reason in what you report.
+On a call that ran, every key you asked for comes back in exactly one of
+`resolved` or `missed`. Draw only from `resolved`. Draw nothing for a missed
+key, and name it and its reason in what you report.
 
 | Reason | What to do |
 |---|---|
@@ -65,15 +68,19 @@ plainly rather than delivering the image as redacted.
 
 ## Turning boxes into annotations
 
-Pad every measured box by 6 px on each side, then clamp to the image `W` by `H`:
+Pad every measured box by 6 px on each side, then clamp to the image, where `W`
+and `H` are `min(inner, client)` of the returned `viewport`. The two differ
+whenever the page has a classic scrollbar, and clamping to the larger one can
+produce boxes `annotate` refuses as outside the image. The smaller is always
+safe.
 
 ```
 x2 = max(0, x - 6)             y2 = max(0, y - 6)
 w2 = min(W, x + w + 6) - x2    h2 = min(H, y + h + 6) - y2
 ```
 
-Padding is the only adjustment allowed on a measured number. Do not also nudge
-by feel.
+Padding, and the conversions below, are the only arithmetic allowed on a
+measured number. Do not also nudge by feel.
 
 | Primitive | Fields | Use it for |
 |---|---|---|
@@ -82,25 +89,34 @@ by feel.
 | `arrow` | `tail`, `head`, `bow?`, `width?` | Point at one thing |
 | `chip` | `xy`, `text`, `size?`, `w?` | A short label |
 | `ellipse` | `cx`, `cy`, `rx`, `ry?` | Ring a small badge or icon |
-| `counter` | `xy`, `n` | Number the steps of a flow |
+| `counter` | `xy`, `n`, `size?` | Number the steps of a flow |
 | `spotlight` | `box`, `dim?` | Isolate one region in a busy view |
 | `blur` | `box`, `amount?` | Redact PII |
 
 Geometry that is not guessable:
 
+- **`chip.xy`, `counter.xy` and `arrow.tail` come from a resolved anchor box,
+  never from looking at the image.** Inside an anchor `[x, y, w, h]`, centre a
+  label with `xy = [x + (w - width) / 2, y + (h - height) / 2]`. This is why
+  the anchor goes in `targets` with everything else.
 - `chip.xy` is its **top left** corner. Its height is `size * 2` and its width
   is `characters * size * 0.58 + size * 1.4`, so at the default `size: 22` a
   chip is 44 px tall and roughly `13 * characters + 31` px wide. Set `w` to fix
-  the width instead.
+  the width instead. When no anchor is 44 px tall, drop `size` to 16 or 14,
+  which gives a 32 or 28 px chip. Shrink the label rather than put it on
+  content.
 - `counter.xy` is its **centre**, unlike `chip`. Its radius is `size * 0.9`,
   about 16 px at the default `size: 18`.
 - `annotate` bounds-checks only the anchor point of a `chip` and a `counter`,
   so it will not catch a label running off the canvas. Check yourself that
   `x + width <= W` and `y + height <= H`.
-- `blur.amount` is half the box height, clamped to 8 through 40. The default 8
-  covers one line of body text; a 40 px heading needs 20.
-- Coordinates are always in base image pixels. `scale` only changes the output
-  resolution.
+- An `ellipse` takes a centre and radii rather than a box. Convert a resolved
+  `[x, y, w, h]` with `cx = x + w / 2`, `cy = y + h / 2`, `rx = w / 2 + 6`,
+  `ry = h / 2 + 6`, which is the same 6 px of breathing room.
+- `blur.amount` is half the box height rounded up, clamped to 8 through 40. The
+  default 8 covers one line of body text; a 40 px heading needs 20.
+- Coordinates are always in base image pixels. `scale` is an integer from 1 to
+  4, defaults to 2, and only changes the output resolution.
 
 ## Composition
 
@@ -115,6 +131,9 @@ Geometry that is not guessable:
 `base` and `out` are names inside `~/.fast-browser/screenshots/`, never paths,
 and `out` must differ from `base`. Use the macro's returned `name` as `base`.
 
+The capture behind this one asked for three keys: `estimate` and `name` for the
+two values, and `band` for the empty strip the label sits in.
+
 ```json
 {
   "base": "claim.png",
@@ -126,13 +145,15 @@ and `out` must differ from `base`. Use the macro's returned `name` as `base`.
   "annotations": [
     { "type": "highlight", "box": [777, 194, 84, 29] },
     { "type": "blur", "box": [314, 122, 111, 29], "amount": 15 },
-    { "type": "chip", "xy": [612, 470], "text": "new estimate" }
+    { "type": "chip", "xy": [358, 473], "text": "new estimate" }
   ]
 }
 ```
 
-Those two boxes are the macro's `[783, 200, 72, 17]` and `[320, 128, 99, 17]`
-after the 6 px pad, and nothing else.
+Every number above is derived. The two boxes are the resolved `estimate` and
+`name`, `[783, 200, 72, 17]` and `[320, 128, 99, 17]`, after the 6 px pad. The
+chip is 184 px wide by 44 px tall and centred in the resolved `band`
+`[40, 460, 820, 70]`. Nothing was read off the image.
 
 ## First annotation on a machine
 
@@ -150,14 +171,10 @@ Later annotations are silent. Output lands in `~/.fast-browser/screenshots/`,
 which `fast-browser uninstall --purge-data` destroys, so deliver anything worth
 keeping rather than leaving it there.
 
-## Quick reference
+## When something fails
 
-| Situation | Action |
+| Symptom | Cause and fix |
 |---|---|
-| Any annotation task | One macro call, then one config, then one `annotate` |
-| Macro script not installed | `fast-browser setup` |
-| No palette configured | Offer the ten, `configure --palette` once |
-| Key in `missed` | Draw nothing for it, re-run after fixing, report it |
-| Measured box | Pad 6 px, clamp to the image, change nothing else |
-| Before reporting | Read the output PNG and check for clipping and legibility |
-| `annotate` reports a missing renderer | `brew install librsvg`, or `fast-browser doctor` |
+| The return has `failedStep` and no `resolved` | Nothing was captured or measured, so there is no partition to read. Fix the named argument, usually `home`, and call again |
+| `annotate` reports a missing renderer | `brew install librsvg`, then `fast-browser doctor` to confirm |
+| `annotate` refuses a box as outside the image | You clamped to the larger viewport width. Use `min(inner, client)` |

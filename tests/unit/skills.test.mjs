@@ -123,8 +123,10 @@ test('the annotation skill states the rules the baseline runs violated', async (
   // The macro was absent in one baseline environment and went uninstalled.
   assert.match(text, /fast-browser setup/);
 
-  // Corroboration must be copied, never authored.
-  assert.match(text, /Copy `schemaVersion` and\n\s*`viewport` verbatim/);
+  // Corroboration must be copied, never authored. `\s+` rather than an
+  // explicit newline: the assertion is about the two field names sitting
+  // beside "verbatim", not about where the prose happens to wrap.
+  assert.match(text, /Copy `schemaVersion` and\s+`viewport` verbatim/);
 
   // A missed key never becomes an annotation, and never resolves by first hit.
   assert.match(text, /Never take the first of N matches/);
@@ -134,16 +136,40 @@ test('the annotation skill states the rules the baseline runs violated', async (
   assert.match(text, /`chip\.xy` is its \*\*top left\*\* corner/);
   assert.match(text, /bounds-checks only the anchor point/);
 
+  // Every annotation point needs a measured source, not just the box-bearing
+  // ones. Without this a label is the one coordinate an agent may eyeball,
+  // which is the discipline the rest of the skill exists to buy. The anchor
+  // has to be requested in the first call, since keys cannot be added later.
+  assert.match(text, /Put every label anchor in `targets`/);
+  assert.match(
+    text,
+    /`chip\.xy`, `counter\.xy` and `arrow\.tail` come from a resolved anchor box/,
+  );
+  assert.match(text, /Nothing was read off the image/);
+
   // Padding and blur strength were improvised in every baseline sample.
   assert.match(text, /Pad every measured box by 6 px/);
   assert.match(text, /`blur\.amount` is half the box height/);
+  // The clamp bound is ambiguous unless sourced: the two reported widths
+  // differ whenever the page has a classic scrollbar, and clamping to the
+  // larger one yields boxes `annotate` rejects as outside the image.
+  assert.match(text, /`min\(inner, client\)`/);
+  // An ellipse is the one primitive a resolved box does not drop straight
+  // into, so the conversion has to be stated or it gets improvised.
+  assert.match(text, /`rx = w \/ 2 \+ 6`/);
 
   // Spec requirements: composition, palette, approval prompt, purge.
   assert.match(text, /Never blur the value the screenshot exists to prove/);
   assert.match(text, /never over card content/);
-  for (const palette of OFFERED_PALETTES) {
-    assert.match(text, new RegExp(`\`${palette}\``), palette);
-  }
+  // Compare the whole offered list, not each name in isolation: a per-name
+  // check passes just as happily when the skill keeps a palette that
+  // OFFERED_PALETTES has dropped, so the drift guard has to run both ways.
+  const offer = text.match(/Offer these ten[\s\S]*?```bash/);
+  assert.ok(offer, 'the skill offers the palettes');
+  assert.deepEqual(
+    [...offer[0].matchAll(/`([a-z]+)`/g)].map(([, name]) => name),
+    [...OFFERED_PALETTES],
+  );
   assert.match(text, /configure --palette/);
   assert.match(text, /it is not a failure/);
   assert.match(text, /uninstall --purge-data/);
