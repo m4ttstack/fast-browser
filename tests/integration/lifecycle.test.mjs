@@ -50,6 +50,7 @@ function migrationConfig() {
     sessions: { enabled: false, retentionDays: 30 },
     runtime: { version: null, sha256: null, sourceCommit: null },
     managed: { files: [], blocks: [] },
+    annotation: { palette: null },
   };
 }
 

@@ -62,6 +62,7 @@ function validConfig(overrides = {}) {
     sessions: { enabled: false, retentionDays: 30 },
     runtime: { version: '0.1.0-alpha.1', sha256: 'a'.repeat(64), sourceCommit: 'abc' },
     managed: { files: [], blocks: [] },
+    annotation: { palette: null },
     ...overrides,
   };
 }

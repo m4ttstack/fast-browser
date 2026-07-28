@@ -31,6 +31,7 @@ test('safe config contains no secret and disables recording', () => {
     sessions: { enabled: false, retentionDays: 30 },
     runtime: { version: null, sha256: null, sourceCommit: null },
     managed: { files: [], blocks: [] },
+    annotation: { palette: null },
   });
 });
 
@@ -54,6 +55,7 @@ test('parsing returns a clean supported config without unknown keys', () => {
     sessions: { enabled: true, retentionDays: 90 },
     runtime: { version: '1.2.3', sha256: 'abc123', sourceCommit: 'deadbeef' },
     managed: { files: ['a'], blocks: ['b'] },
+    annotation: { palette: null },
   });
 });
 
@@ -173,4 +175,23 @@ test('fails closed when the config file is malformed', async (t) => {
   await writeFile(paths.configFile, '{not-json}\n', { mode: 0o600 });
 
   await assert.rejects(() => loadConfig(paths), ConfigError);
+});
+
+test('annotation palette defaults to unset so the first use must choose', () => {
+  assert.equal(defaultConfig().annotation.palette, null);
+});
+
+test('an existing v1 config without an annotation block still parses', () => {
+  const legacy = defaultConfig();
+  delete legacy.annotation;
+  assert.equal(parseConfig(legacy).annotation.palette, null);
+});
+
+test('a stored palette round-trips and an invalid one is refused', () => {
+  const config = { ...defaultConfig(), annotation: { palette: 'teal' } };
+  assert.equal(parseConfig(config).annotation.palette, 'teal');
+  assert.throws(
+    () => parseConfig({ ...defaultConfig(), annotation: { palette: 'burgundy' } }),
+    /annotation.palette/,
+  );
 });
