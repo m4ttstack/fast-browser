@@ -80,3 +80,22 @@ test('a non-finite or negative geometry value is refused', () => {
   assert.throws(() => svg([{ type: 'box', box: [0, 0, -5, 1] }]), /invalid/);
   assert.throws(() => svg([{ type: 'box', box: [0, 0, 1] }]), /invalid/);
 });
+
+// The zero-area invariant has to hold for every primitive or it holds for
+// none: assertInBounds (lib/commands/annotate.mjs) already refuses a
+// box-bearing annotation whose width or height is zero, because such a shape
+// draws nothing while the command still reports success. An ellipse takes
+// radii rather than a box, so it needs its own guard to reach the same rule.
+test('an ellipse radius of zero is refused rather than drawn as nothing', () => {
+  assert.throws(
+    () => svg([{ type: 'ellipse', cx: 100, cy: 100, rx: 0 }]),
+    /invalid annotation geometry: rx/,
+  );
+  assert.throws(
+    () => svg([{ type: 'ellipse', cx: 100, cy: 100, rx: 20, ry: 0 }]),
+    /invalid annotation geometry: ry/,
+  );
+  // ry defaults to rx, so a zero rx must not be able to reach the output
+  // through the defaulted radius either.
+  assert.match(svg([{ type: 'ellipse', cx: 100, cy: 100, rx: 20 }]), /rx="20" ry="20"/);
+});

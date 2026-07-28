@@ -77,6 +77,17 @@ async (page, args) => {
         Math.round(box.x), Math.round(box.y),
         Math.round(box.width), Math.round(box.height),
       ];
+      // Re-check after rounding, not only before it. The guard above tests
+      // boundingBox()'s own floating-point size, so a sub-pixel element (0.4
+      // px wide) passes it and still rounds to a zero dimension here.
+      // `annotate` refuses a zero-area box, and refuses the WHOLE config with
+      // it, blaming an annotation the agent measured correctly and cannot
+      // act on. Anything this macro puts in `resolved` has to clear annotate's
+      // guards, so a box that rounds away is a miss like any other.
+      if (rect[2] <= 0 || rect[3] <= 0) {
+        missed.push({ key, reason: 'not-visible' });
+        continue;
+      }
       if (
         rect[0] < 0 || rect[1] < 0
         || rect[0] + rect[2] > viewport.inner[0]

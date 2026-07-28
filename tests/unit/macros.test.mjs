@@ -484,6 +484,34 @@ test('capture-annotated never reports a resolved box with a zero-or-negative dim
   assert.ok(result.missed.every((entry) => entry.reason === 'not-visible'));
 });
 
+// The pre-round guard above tests boundingBox()'s own floating-point width
+// and height, but the resolved rect is rounded. A sub-pixel element clears
+// that guard and still rounds to a zero dimension, which `annotate` refuses
+// as a zero-area box -- rejecting the WHOLE config, with an error blaming an
+// annotation the agent measured correctly and cannot act on. The cross-module
+// invariant is that anything in `resolved` passes annotate's guards, so the
+// check has to be made against the numbers actually returned.
+test('capture-annotated never resolves a sub-pixel box that rounds to a zero dimension', async () => {
+  const macro = await loadCaptureAnnotatedMacro();
+  const page = fakeCapturePage({
+    locators: {
+      '.hairline-width': { count: 1, box: { x: 10, y: 10, width: 0.4, height: 40 } },
+      '.hairline-height': { count: 1, box: { x: 10, y: 10, width: 40, height: 0.4 } },
+    },
+  });
+  const result = await macro(page, {
+    targets: { hairlineWidth: '.hairline-width', hairlineHeight: '.hairline-height' },
+    home: '/Users/test',
+  });
+
+  assert.deepEqual(result.resolved, {});
+  assert.equal(result.missed.length, 2);
+  assert.ok(
+    result.missed.every((entry) => entry.reason === 'not-visible'),
+    'a box that rounds away is a miss the agent can act on, not a resolution',
+  );
+});
+
 test('capture-annotated catches a screenshot failure without measuring', async () => {
   const macro = await loadCaptureAnnotatedMacro();
   let evaluated = false;

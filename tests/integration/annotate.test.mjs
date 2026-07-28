@@ -111,6 +111,33 @@ test('annotate refuses a zero-width (but non-zero-height) box', async () => {
   );
 });
 
+// `type` is user-supplied config data and is never validated against
+// ANNOTATION_TYPES before these two guards run, so echoing it puts an
+// arbitrary string into CLI output. Every other diagnosable failure in this
+// command names the field rather than the value (see confinedName and the
+// missing-base error in lib/commands/annotate.mjs, and the duplicate
+// positional in lib/cli/parse-args.mjs); the annotation index is our own
+// number and locates the entry just as precisely.
+test('a bounds failure names the annotation index and never echoes the config type', async () => {
+  const hostile = '"><script>alert(1)</script> /Users/someone/secret';
+  for (const annotations of [
+    [{ type: hostile, box: [860, 200, 100, 17] }],
+    [{ type: hostile, box: [320, 128, 0, 0] }],
+  ]) {
+    const { paths, configPath, config } = await fixture({ ...BODY, annotations });
+    await assert.rejects(
+      () => annotate({ command: 'annotate', config: configPath }, {
+        paths, loadConfig: async () => config, rasterise: async () => {},
+      }),
+      (error) => error.name === 'LifecycleError'
+        && error.exitCode === 2
+        && /annotation 0\b/.test(error.message)
+        && !error.message.includes(hostile)
+        && !error.message.includes('<script>'),
+    );
+  }
+});
+
 test('annotate refuses an arrow whose head lands outside the image', async () => {
   const { paths, configPath, config } = await fixture({
     ...BODY,
