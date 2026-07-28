@@ -347,6 +347,193 @@ test('a first-ever setup leaves the annotation palette unchosen', async () => {
   assert.equal(savedConfig.annotation.palette, null);
 });
 
+// The palette tests above spell out every dependency; the carry-forward tests
+// below vary only in the stored config, the requested hosts, and the requested
+// profile, so they share one stub set. Both hosts are always detected so a
+// host-set change can drive the reinstall branch without a profile change.
+function reinstallingSetup({ current, hosts, profile, saveConfig, pruneSessions }) {
+  return setup(request({ hosts, profile }), {
+    checkPlatform: async () => {},
+    detectHosts: async () => ['claude', 'codex'],
+    ensureDataDirs: async () => {},
+    loadRuntimeLock: async () => ({
+      productVersion: '0.1.0-alpha.1',
+      sourceCommit: 'abc',
+      runtime: { sha256: 'a'.repeat(64) },
+      extension: { id: 'extension-id', version: '1.0.0' },
+    }),
+    installRuntime: async () => ({ version: '0.1.0-alpha.1' }),
+    installExtension: async () => ({ unpacked: '/tmp/extension' }),
+    installClaude: async () => ({ changed: false, changes: [] }),
+    installCodex: async () => ({ changed: false, changes: [] }),
+    installBuiltinMacros: async () => {},
+    prepareRoutingTransition: async () => ({
+      nextState: { profile, files: [], blocks: [] },
+      apply: async () => ({ rollback: async () => {} }),
+    }),
+    saveConfig: async (_paths, config) => {
+      if (saveConfig) saveConfig(config);
+    },
+    pruneSessions: pruneSessions ?? (async () => ({ removedPaths: [], removedBytes: 0 })),
+    doctor: async () => ({ schemaVersion: 1, ok: true, checks: [] }),
+    loadConfig: async () => current,
+    paths: {
+      homeDir: '/home/test',
+      dataDir: '/home/test/.fast-browser',
+      configFile: '/home/test/.fast-browser/config.json',
+    },
+    interactive: true,
+  });
+}
+
+// Same defect class as the palette above, but this one is a privacy setting:
+// adding a host re-enters the reinstall branch with the profile unchanged, so
+// rebuilding sessions from profileDefaults would silently switch recording
+// back on for a user who ran `configure --no-record-sessions` and shorten the
+// retention window they chose.
+test('a reinstalling setup preserves session settings when the profile is unchanged', async () => {
+  const current = {
+    ...migrationConfig(),
+    profile: 'full',
+    hosts: { claude: true, codex: false },
+    sessions: { enabled: false, retentionDays: 90 },
+  };
+  let savedConfig;
+  let pruned = false;
+  const report = await reinstallingSetup({
+    current,
+    hosts: ['claude', 'codex'],
+    profile: 'full',
+    saveConfig: (config) => { savedConfig = config; },
+    pruneSessions: async () => {
+      pruned = true;
+      return { removedPaths: [], removedBytes: 0 };
+    },
+  });
+
+  assert.equal(report.changed, true, 'the host set changed, so this is the reinstall branch');
+  assert.deepEqual(savedConfig.sessions, { enabled: false, retentionDays: 90 });
+  assert.deepEqual(report.config.sessions, { enabled: false, retentionDays: 90 });
+  assert.equal(pruned, false, 'recording is off, so nothing may be pruned');
+});
+
+// Retention reads the same carried value the config write does. Pruning with
+// the profile default instead would delete the sessions between day 30 and
+// day 90 that the user widened the window to keep.
+test('a reinstalling setup prunes with the preserved retention window', async () => {
+  const current = {
+    ...migrationConfig(),
+    profile: 'full',
+    hosts: { claude: true, codex: false },
+    sessions: { enabled: true, retentionDays: 120 },
+  };
+  const pruneWindows = [];
+  const report = await reinstallingSetup({
+    current,
+    hosts: ['claude', 'codex'],
+    profile: 'full',
+    pruneSessions: async ({ retentionDays }) => {
+      pruneWindows.push(retentionDays);
+      return { removedPaths: [], removedBytes: 0 };
+    },
+  });
+
+  assert.equal(report.changed, true, 'the host set changed, so this is the reinstall branch');
+  assert.deepEqual(pruneWindows, [120]);
+});
+
+// The nuance the carry must keep: the profile is what defines these defaults,
+// so a genuine profile change is the one case where resetting them is right.
+test('a setup that changes the profile adopts the new profile session defaults', async () => {
+  const current = {
+    ...migrationConfig(),
+    profile: 'safe',
+    hosts: { claude: true, codex: false },
+    sessions: { enabled: false, retentionDays: 90 },
+  };
+  let savedConfig;
+  const report = await reinstallingSetup({
+    current,
+    hosts: ['claude'],
+    profile: 'full',
+    saveConfig: (config) => { savedConfig = config; },
+  });
+
+  assert.equal(report.changed, true, 'the profile changed, so this is the reinstall branch');
+  assert.deepEqual(savedConfig.sessions, { enabled: true, retentionDays: 30 });
+});
+
+test('a first-ever setup writes the profile session defaults', async () => {
+  let savedConfig;
+  await reinstallingSetup({
+    current: null,
+    hosts: ['claude'],
+    profile: 'full',
+    saveConfig: (config) => { savedConfig = config; },
+  });
+
+  assert.deepEqual(savedConfig.sessions, { enabled: true, retentionDays: 30 });
+});
+
+// Automatic connection is a pairing choice `setup` has no flag for and the
+// Keychain token outlives it, so resetting the mode to manual would leave the
+// token in place while auto-connect silently stopped. doctor's pairing check
+// passes for any non-auto mode, so nothing would report it.
+test('a reinstalling setup preserves automatic connection', async () => {
+  const current = {
+    ...migrationConfig(),
+    profile: 'full',
+    hosts: { claude: true, codex: false },
+    connection: { mode: 'auto' },
+  };
+  let savedConfig;
+  const report = await reinstallingSetup({
+    current,
+    hosts: ['claude', 'codex'],
+    profile: 'full',
+    saveConfig: (config) => { savedConfig = config; },
+  });
+
+  assert.equal(report.changed, true, 'the host set changed, so this is the reinstall branch');
+  assert.equal(savedConfig.connection.mode, 'auto');
+  assert.equal(report.config.connection.mode, 'auto');
+});
+
+// Unlike sessions, the connection mode is not derived from the profile, so
+// even a genuine profile change has no claim on it.
+test('a setup that changes the profile still preserves automatic connection', async () => {
+  const current = {
+    ...migrationConfig(),
+    profile: 'safe',
+    hosts: { claude: true, codex: false },
+    connection: { mode: 'auto' },
+  };
+  let savedConfig;
+  const report = await reinstallingSetup({
+    current,
+    hosts: ['claude'],
+    profile: 'full',
+    saveConfig: (config) => { savedConfig = config; },
+  });
+
+  assert.equal(report.changed, true, 'the profile changed, so this is the reinstall branch');
+  assert.equal(savedConfig.connection.mode, 'auto');
+});
+
+test('a first-ever setup defaults the connection to manual', async () => {
+  let savedConfig;
+  await reinstallingSetup({
+    current: null,
+    hosts: ['claude'],
+    profile: 'safe',
+    saveConfig: (config) => { savedConfig = config; },
+  });
+
+  // Carrying a prior pairing must not become inventing one: with no config to
+  // carry forward there is no Keychain token either.
+  assert.equal(savedConfig.connection.mode, 'manual');
+});
+
 test('second matching setup is a true mutation no-op', async () => {
   const events = [];
   const current = {
