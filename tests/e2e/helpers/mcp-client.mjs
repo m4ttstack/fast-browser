@@ -19,9 +19,8 @@ import { createMetrics } from './metrics.mjs';
 
 const execFile = promisify(execFileCallback);
 const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
-const defaultReleaseDir = path.resolve(
-  pluginRoot,
-  '../../../../../playwright/.worktrees/fast-browser-runtime/fast-browser-dist',
+const RUNTIME_DIST = path.join(
+  'playwright', '.worktrees', 'fast-browser-runtime', 'fast-browser-dist',
 );
 const INTEGRITY_ERROR = 'the local fast-browser runtime artifact failed integrity validation';
 const EXTRACTION_ERROR = 'the validated local fast-browser runtime artifact could not be extracted';
@@ -31,10 +30,39 @@ function integrityError() {
   return new Error(INTEGRITY_ERROR);
 }
 
+// Found by walking up from the plugin rather than by a fixed number of `..`
+// segments. The old fixed path assumed this plugin lived two directories deeper
+// than it does in a plain checkout -- it was written from a worktree under
+// `.worktrees/` -- so every e2e suite failed on ENOENT the moment the same code
+// was run from the repository itself. Which sibling checkout holds the runtime
+// is the stable fact here; how deep this plugin happens to sit is not.
+export async function resolveReleaseDir() {
+  const fromEnvironment = process.env.FAST_BROWSER_RELEASE_DIR;
+  if (fromEnvironment) return fromEnvironment;
+  let directory = pluginRoot;
+  for (;;) {
+    const candidate = path.join(directory, RUNTIME_DIST);
+    try {
+      await access(candidate);
+      return candidate;
+    } catch {
+      const parent = path.dirname(directory);
+      if (parent === directory) {
+        throw new Error(
+          `no local fast-browser runtime found in any ancestor of ${pluginRoot};`
+          + ' set FAST_BROWSER_RELEASE_DIR to the release directory',
+        );
+      }
+      directory = parent;
+    }
+  }
+}
+
 // Exported (in addition to startMcpClient below) so tests/e2e/helpers/identity-client.mjs
 // can launch the same integrity-checked runtime in --extension mode without
 // duplicating the checksum/extraction logic.
-export async function runtimeCliFor({ outputDir, releaseDir = process.env.FAST_BROWSER_RELEASE_DIR ?? defaultReleaseDir }) {
+export async function runtimeCliFor({ outputDir, releaseDir: requested }) {
+  const releaseDir = requested ?? await resolveReleaseDir();
   // Derived from the bundled lock rather than hardcoded: a pinned filename
   // here silently validates the previous release against the current lock's
   // checksum after every re-pin, which reads as an integrity failure.

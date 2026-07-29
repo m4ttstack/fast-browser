@@ -17,13 +17,9 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 
 import { startOrderFixture } from '../fixtures/order-flow/server.mjs';
-import { startMcpClient } from './helpers/mcp-client.mjs';
+import { resolveReleaseDir, startMcpClient } from './helpers/mcp-client.mjs';
 
 const pluginRoot = fileURLToPath(new URL('../../', import.meta.url));
-const acceptedReleaseDir = process.env.FAST_BROWSER_RELEASE_DIR ?? path.resolve(
-  pluginRoot,
-  '../../../../../playwright/.worktrees/fast-browser-runtime/fast-browser-dist',
-);
 
 function fixtureCliOutput() {
   return new Promise((resolve, reject) => {
@@ -75,6 +71,7 @@ async function copyAcceptedRelease(root) {
     'utf8',
   ));
   const manifestName = `fast-browser-release-${pinnedLock.productVersion}.json`;
+  const acceptedReleaseDir = await resolveReleaseDir();
   const manifestText = await readFile(path.join(acceptedReleaseDir, manifestName), 'utf8');
   const manifest = JSON.parse(manifestText);
   await Promise.all([
