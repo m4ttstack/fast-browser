@@ -559,6 +559,13 @@ test('second matching setup is a true mutation no-op', async () => {
       return { schemaVersion: 1, ok: true, checks: [] };
     },
     ensureDataDirs: async () => events.push('mutation'),
+    // Setup consults the built-ins on this path now, so `paths: {}` alone no
+    // longer reaches the return. The real installer is exercised against real
+    // fixtures in setup-macro-refresh.test.mjs; here it is stubbed inert
+    // because this test is about setup performing no mutation of its own, and
+    // an installer reporting nothing installed and nothing refreshed is
+    // exactly the "no writes" input that keeps `changed` false.
+    installBuiltinMacros: async () => ({ installed: [], refreshed: [], preserved: [] }),
     paths: {},
   });
   assert.deepEqual(events, ['check-platform', 'detect-hosts', 'doctor']);
@@ -583,6 +590,10 @@ test('matching setup is a no-op without a test-only current-state hook', async (
     loadConfig: async () => current,
     doctor: async () => ({ schemaVersion: 1, ok: true, checks: [] }),
     ensureDataDirs: async () => events.push('mutation'),
+    // Inert for the same reason as the test above: nothing installed and
+    // nothing refreshed is the input under which this path must still report
+    // no mutation and `changed: false`.
+    installBuiltinMacros: async () => ({ installed: [], refreshed: [], preserved: [] }),
     paths: {},
   });
   assert.deepEqual(events, []);

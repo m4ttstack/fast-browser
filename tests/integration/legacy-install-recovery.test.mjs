@@ -10,6 +10,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 import { main } from '../../lib/cli/main.mjs';
 import { launchRuntime } from '../../lib/runtime/launch.mjs';
@@ -20,9 +21,11 @@ import { resolvePaths } from '../../lib/core/paths.mjs';
 import { extensionInstallLocation } from '../../lib/extension/install.mjs';
 import { buildContentManifestDigest } from '../../lib/core/content-manifest.mjs';
 import { DOCTOR_CHECK_IDS } from '../../lib/doctor/checks.mjs';
+import { installBuiltinMacros } from '../../lib/macros/install.mjs';
 import { runtimeLockIdentity } from '../../lib/runtime/lock.mjs';
 
 const execFile = promisify(execFileCallback);
+const PLUGIN_ROOT = fileURLToPath(new URL('../..', import.meta.url));
 
 // Reproduces the coordinator's real-machine deadlock: an install made
 // before content-digest verification existed (runtime and extension
@@ -168,6 +171,18 @@ function doctorSequence(firstFailing, secondFailing) {
   };
 }
 
+// installBuiltinMacros was spied here too and was deliberately removed, not
+// allowed to lapse. The spy dated from when the macro installer was an
+// unconditional copy, where calling it meant writing, so "never called" was
+// the only way to guarantee an upgrade left the user's macros alone. Since the
+// checksum work it classifies each destination by its bytes: it writes nothing
+// when the installed bytes already match the packaged ones and preserves
+// anything the user edited, so a call no longer implies a write and the spy no
+// longer evidences the guarantee. The guarantee stands and is asserted on the
+// bytes instead (see the user-macro assertions in setup-upgrade.test.mjs and
+// the never-clobber tests in tests/unit/macros.test.mjs). Keeping the spy
+// would re-break the macro-only fix MAT-87 delivers, since such a fix never
+// moves runtime-lock.json and reaches a machine only through this path.
 function untouchedDuringUpgrade(calls) {
   return {
     installClaude: async () => { calls.push('installClaude'); return { changed: false, changes: [] }; },
@@ -177,13 +192,19 @@ function untouchedDuringUpgrade(calls) {
       return { nextState: {}, apply: async () => ({ rollback: async () => {} }) };
     },
     pruneSessions: async () => { calls.push('pruneSessions'); return { removedPaths: [], removedBytes: 0 }; },
-    installBuiltinMacros: async () => { calls.push('installBuiltinMacros'); },
   };
 }
 
+// A real plugin root with its built-ins already installed, matching what these
+// scenarios describe: a machine that has run setup before. Setup refreshes the
+// built-ins on every outcome now, so an empty macros directory would model a
+// half-installed machine and make the refresh report an install that has
+// nothing to do with the legacy markers under test.
 async function fixtureHome(prefix) {
   const home = await mkdtemp(path.join(os.tmpdir(), prefix));
-  return resolvePaths({ homeDir: home });
+  const paths = { ...resolvePaths({ homeDir: home }), pluginRoot: PLUGIN_ROOT };
+  await installBuiltinMacros(paths);
+  return paths;
 }
 
 function exitingSpawn(exitCode, captured) {

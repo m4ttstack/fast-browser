@@ -3364,7 +3364,7 @@ test('setup carries the built-in macros it deliberately left alone into its repo
 
   assert.deepEqual(
     JSON.parse(writes.join('')).macros,
-    { preserved: ['page-recon.js', 'MACROS.md#page-recon'] },
+    { refreshed: [], preserved: ['page-recon.js', 'MACROS.md#page-recon'] },
   );
 });
 

@@ -6,6 +6,7 @@ import {
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 import { main } from '../../lib/cli/main.mjs';
 import { setup } from '../../lib/commands/setup.mjs';
@@ -15,7 +16,10 @@ import { resolvePaths } from '../../lib/core/paths.mjs';
 import { DOCTOR_CHECK_IDS } from '../../lib/doctor/checks.mjs';
 import { extensionInstallLocation } from '../../lib/extension/install.mjs';
 import { buildContentManifestDigest } from '../../lib/core/content-manifest.mjs';
+import { installBuiltinMacros } from '../../lib/macros/install.mjs';
 import { runtimeLockIdentity } from '../../lib/runtime/lock.mjs';
+
+const PLUGIN_ROOT = fileURLToPath(new URL('../..', import.meta.url));
 
 // Reproduces the brief's exact scenario: a pinned install (runtime
 // 0.1.0-alpha.1 / extension 0.2.1) with the lock re-pinned forward (runtime
@@ -131,9 +135,30 @@ function doctorSequence(firstFailing, secondFailing) {
 }
 
 // Functions setup must never call during an upgrade: host plugin
-// registration, routing, session pruning, and built-in macro installs are
-// all unrelated to "the pinned artifacts changed." Each records its name if
-// invoked so tests can assert none of them ever ran.
+// registration, routing, and session pruning are all unrelated to "the pinned
+// artifacts changed." Each records its name if invoked so tests can assert
+// none of them ever ran.
+//
+// installBuiltinMacros used to be spied here too, and was deliberately taken
+// out rather than allowed to fail. When this list was written the macro
+// installer was an unconditional copy, which put it squarely in the same class
+// as the other three: calling it meant writing, so the only way to guarantee
+// an upgrade left the user's macros alone was to guarantee it was never
+// called. The checksum work made it categorically different. It classifies
+// every destination by what its bytes are, so it provably writes nothing when
+// the installed bytes already match the packaged ones, and provably preserves
+// anything the user has edited (the never-clobber tests in
+// tests/unit/macros.test.mjs are the standing proof of both).
+//
+// The guarantee itself is unchanged and still worth having: an upgrade must
+// not write to the user's macros directory. What stopped being true is that
+// calling the installer implies writing, so a call spy is no longer evidence
+// of anything. The property is now asserted where it actually lives, on the
+// bytes: this file still reads a real user macro before and after an upgrade
+// and asserts it is unchanged. Reinstating the spy here would only re-break
+// the macro-only fix that MAT-87 exists to deliver, since a macro fix never
+// moves runtime-lock.json and so can only ever reach a machine through this
+// path.
 function untouchedDuringUpgrade(calls) {
   return {
     installClaude: async () => {
@@ -152,15 +177,21 @@ function untouchedDuringUpgrade(calls) {
       calls.push('pruneSessions');
       return { removedPaths: [], removedBytes: 0 };
     },
-    installBuiltinMacros: async () => {
-      calls.push('installBuiltinMacros');
-    },
   };
 }
 
+// A real plugin root plus the built-ins already installed from it, because
+// that is what every scenario in this file is about: a machine that has run
+// setup before. Setup now refreshes the built-ins on the already-current and
+// upgrade paths, so a fixture whose macros directory is empty would model a
+// half-installed machine and report `changed: true` for having finally
+// installed them, which is true but has nothing to do with the pinned
+// artifacts these tests are asserting about.
 async function fixtureHome(prefix) {
   const home = await mkdtemp(path.join(tmpdir(), prefix));
-  return resolvePaths({ homeDir: home });
+  const paths = { ...resolvePaths({ homeDir: home }), pluginRoot: PLUGIN_ROOT };
+  await installBuiltinMacros(paths);
+  return paths;
 }
 
 const baseRequest = { hosts: ['claude'], profile: 'full', source: '/repo/mattstack', runtimeLock: null };
@@ -622,9 +653,12 @@ test('an upgrade leaves pairing mode, session settings, routing files, and host 
   });
 
   assert.equal(report.changed, true);
-  // No host, routing, session, or macro dependency setup uses for a fresh
-  // install was ever invoked: pairing/Keychain, routing files, and host
-  // registrations are therefore provably untouched, not merely unaffected.
+  // No host, routing, or session dependency setup uses for a fresh install was
+  // ever invoked: pairing/Keychain, routing files, and host registrations are
+  // therefore provably untouched, not merely unaffected. Macros are asserted
+  // differently and deliberately so: the installer does run here, because a
+  // macro-only fix can reach a machine no other way, and it is the byte
+  // comparison below that proves it left the user's macro alone.
   assert.deepEqual(untouchedCalls, []);
 
   assert.equal(await readFile(routingPath, 'utf8'), beforeRouting);
