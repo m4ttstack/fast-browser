@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "source": "published npm tarballs",
+  "versions": [
+    "0.1.0-alpha.1",
+    "0.1.0-alpha.2",
+    "0.1.0-alpha.3",
+    "0.1.0-alpha.4"
+  ],
+  "macros": {
+    "page-recon.js": [
+      "3fc2484c2b14a9cb0c48e647ed131b1e54101d9f40b6125612b2784623e19971"
+    ],
+    "capture-annotated.js": [
+      "8f35bc6798c642a78c5e04117de8ff4e69a1cbab80d7a167621ac3eb94b522df"
+    ]
+  },
+  "indexSections": {
+    "page-recon": [
+      "f2e2703af5103d93c5e2ecd4b32bf1348ce40db9e3d8a4697242d0f28c1c1b41"
+    ],
+    "capture-annotated": [
+      "84ca775a46a4acdd864aa7ad8dc18ae6a2b2dd2160241eaa90eb85395fa806e6"
+    ]
+  }
+}

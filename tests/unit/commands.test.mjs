@@ -3128,6 +3128,54 @@ test('CLI main renders exact setup human ending and JSON without invoking other 
   assert.deepEqual(JSON.parse(writes.join('')), report);
 });
 
+// Setup keeps a built-in the user has edited, which means it can finish having
+// knowingly left a stale macro behind. That is the state the old copy-and-skip
+// installer left everywhere and nobody could see, so it has to reach the
+// human ending, counted and unnamed like every other warning here.
+test('CLI main reports preserved built-in macros as a count without naming them', async () => {
+  for (const [preserved, expected] of [
+    [[], null],
+    [
+      ['page-recon.js'],
+      'Note: 1 edited built-in macro entry was kept as-is and may be out of date;'
+        + ' rerun with --json for details.',
+    ],
+    [
+      ['page-recon.js', 'MACROS.md#page-recon'],
+      'Note: 2 edited built-in macro entries were kept as-is and may be out of date;'
+        + ' rerun with --json for details.',
+    ],
+  ]) {
+    const writes = [];
+    await main(
+      { command: 'setup', json: false },
+      {
+        commands: {
+          setup: async () => ({
+            command: 'setup',
+            hosts: ['claude'],
+            profile: 'full',
+            extensionPath: '/tmp/extension',
+            extensionManual: true,
+            changed: true,
+            macros: { preserved },
+          }),
+        },
+        write: (text) => writes.push(text),
+      },
+    );
+    const output = writes.join('');
+    if (expected === null) {
+      assert.doesNotMatch(output, /kept as-is/);
+    } else {
+      assert.ok(output.includes(expected), output);
+      for (const name of preserved) {
+        assert.ok(!output.includes(name), `the human ending must not name ${name}`);
+      }
+    }
+  }
+});
+
 test('CLI migrate apply human mode adds a count-only warning exactly when unmanaged candidates exist', async () => {
   const writes = [];
   const cleanReport = {
@@ -3274,6 +3322,50 @@ test('CLI production dispatch composes setup entirely from injected adapters', a
   assert.equal(exitCode, 0);
   assert.deepEqual(events, ['platform', 'dirs', 'save']);
   assert.equal(JSON.parse(writes.join('')).command, 'setup');
+});
+
+test('setup carries the built-in macros it deliberately left alone into its report', async () => {
+  const writes = [];
+  await main(
+    {
+      command: 'setup', hosts: ['claude'], profile: 'safe', source: '/repo/mattstack', json: true,
+    },
+    {
+      write: (text) => writes.push(text),
+      checkPlatform: async () => {},
+      detectHosts: async () => ['claude'],
+      ensureDataDirs: async () => {},
+      loadRuntimeLock: async () => ({
+        productVersion: '0.1.0-alpha.1',
+        sourceCommit: 'abc',
+        runtime: { sha256: 'a'.repeat(64) },
+        extension: { id: 'extension-id', version: '1.0.0' },
+      }),
+      installRuntime: async () => ({ version: '0.1.0-alpha.1' }),
+      installExtension: async () => ({ unpacked: '/tmp/extension' }),
+      installClaude: async () => ({ host: 'claude', changed: false, changes: [] }),
+      installBuiltinMacros: async () => ({
+        macros: [{ name: 'page-recon.js', action: 'preserved' }],
+        index: [{ name: 'page-recon', action: 'preserved' }],
+        preserved: ['page-recon.js', 'MACROS.md#page-recon'],
+      }),
+      prepareRoutingTransition: async () => ({
+        nextState: { profile: 'safe', files: [], blocks: [] },
+        apply: async () => ({ rollback: async () => {} }),
+      }),
+      saveConfig: async () => {},
+      doctor: async () => ({ schemaVersion: 1, ok: true, profile: 'safe', checks: [] }),
+      loadConfig: async () => null,
+      isSetupCurrent: async () => false,
+      paths: {},
+      interactive: false,
+    },
+  );
+
+  assert.deepEqual(
+    JSON.parse(writes.join('')).macros,
+    { preserved: ['page-recon.js', 'MACROS.md#page-recon'] },
+  );
 });
 
 async function extensionLoadedStatus({ extensionDir, lock, profiles }) {

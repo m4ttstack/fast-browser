@@ -30,6 +30,7 @@
     "THIRD_PARTY_NOTICES.md"
   ],
   "scripts": {
+    "macro-hashes": "node scripts/generate-macro-hashes.mjs",
     "test": "node --test tests/unit/*.test.mjs tests/integration/*.test.mjs",
     "test:unit": "node --test tests/unit/*.test.mjs",
     "test:integration": "node --test tests/integration/*.test.mjs",

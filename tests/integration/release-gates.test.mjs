@@ -98,13 +98,21 @@ test('runtime lock artifact URLs are immutable and checksummed', async () => {
   }
 });
 
+// One `npm pack` for the whole file. Every gate here asks the same question of
+// the same immutable working tree, and each spawn is a full npm process
+// competing with the host-install integration tests node --test runs in
+// parallel; those shell out to real host CLIs under a timeout, and enough
+// concurrent npm processes make them time out. Adding a gate should not cost
+// another subprocess.
+let packedFilesPromise = null;
+
 async function packedFiles() {
-  const { stdout } = await execFile(
+  packedFilesPromise ??= execFile(
     'npm',
     ['pack', '--dry-run', '--json'],
     { cwd: pluginRoot, maxBuffer: 32 * 1024 * 1024 },
-  );
-  return JSON.parse(stdout)[0].files.map(({ path: entry }) => entry);
+  ).then(({ stdout }) => JSON.parse(stdout)[0].files.map(({ path: entry }) => entry));
+  return packedFilesPromise;
 }
 
 test('npm pack ships no tests, sessions, macros, or local state', async () => {
@@ -188,6 +196,74 @@ test('the annotation skill ships for both hosts', async () => {
   assert.ok(files.includes('skills/annotating-screenshots/SKILL.md'));
   assert.ok(files.includes('skills/annotating-screenshots/agents/openai.yaml'));
   assert.ok(files.includes('builtins/macros/capture-annotated.js'));
+});
+
+// The installer refreshes a built-in only when the installed bytes match a
+// hash this project is recorded as having shipped. A release that changes a
+// macro without recording the outgoing hash therefore does not just miss an
+// entry: every existing install now holds bytes the manifest has never heard
+// of, so the next setup classifies all of them as user-edited and refuses to
+// refresh them forever. Recording the packaged bytes has to be a release gate
+// for that reason, not a chore.
+test('the shipped macro hash manifest covers every built-in and its packaged bytes', async () => {
+  const {
+    BUILTIN_NAMES,
+    INDEX_NAME,
+    MACRO_HASHES_NAME,
+    digestText,
+    indexSectionBody,
+    macroIndexName,
+  } = await import('../../lib/macros/install.mjs');
+  const [manifest, template] = await Promise.all([
+    json(path.join('builtins', MACRO_HASHES_NAME)),
+    readFile(path.join(pluginRoot, 'skills', 'browser-macros', INDEX_NAME), 'utf8'),
+  ]);
+
+  assert.deepEqual(Object.keys(manifest.macros).sort(), [...BUILTIN_NAMES].sort());
+  assert.deepEqual(
+    Object.keys(manifest.indexSections).sort(),
+    BUILTIN_NAMES.map(macroIndexName).sort(),
+  );
+
+  for (const name of BUILTIN_NAMES) {
+    const sectionName = macroIndexName(name);
+    const packaged = await readFile(path.join(pluginRoot, 'builtins', 'macros', name), 'utf8');
+    const section = indexSectionBody(template, sectionName);
+    assert.ok(section, `the packaged index documents ${sectionName}`);
+
+    for (const [label, hashes] of [
+      [name, manifest.macros[name]],
+      [sectionName, manifest.indexSections[sectionName]],
+    ]) {
+      assert.ok(Array.isArray(hashes) && hashes.length > 0, `${label} has recorded hashes`);
+      for (const hash of hashes) {
+        assert.match(hash, /^[0-9a-f]{64}$/, `${label} records a sha256`);
+        // A generator that reads published tarballs and hashes whatever it got
+        // back for an absent file records this, which is a claim that a
+        // release shipped an empty macro. None ever did.
+        assert.notEqual(hash, digestText(''), `${label} must not record the empty-file digest`);
+      }
+    }
+    assert.ok(
+      manifest.macros[name].includes(digestText(packaged)),
+      `${name} packaged bytes are recorded; regenerate with scripts/generate-macro-hashes.mjs`,
+    );
+    assert.ok(
+      manifest.indexSections[sectionName].includes(digestText(section)),
+      `${sectionName} packaged index section is recorded;`
+        + ' regenerate with scripts/generate-macro-hashes.mjs',
+    );
+  }
+});
+
+test('the shipped macro hash manifest is published', async () => {
+  const { MACRO_HASHES_NAME } = await import('../../lib/macros/install.mjs');
+  const files = await packedFiles();
+
+  assert.ok(
+    files.includes(`builtins/${MACRO_HASHES_NAME}`),
+    'the installer cannot classify installed bytes without the manifest',
+  );
 });
 
 test('the vendored Radix palette carries its licence notice', async () => {

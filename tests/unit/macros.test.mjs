@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile as execFileCallback } from 'node:child_process';
+import crypto from 'node:crypto';
 import {
   chmod,
   lstat,
@@ -36,6 +37,72 @@ async function temporaryPaths(t, prefix = 'fast-browser-macros-', base = os.tmpd
 
 async function macroFixture(t, prefix = 'fast-browser-macros-') {
   return { paths: await temporaryPaths(t, prefix) };
+}
+
+function sha256(text) {
+  return crypto.createHash('sha256').update(text, 'utf8').digest('hex');
+}
+
+// The real manifest currently records exactly the bytes this working tree
+// packages, so the refresh branch is unreachable through the real plugin root
+// and a test written against it would assert nothing. These fixtures build a
+// throwaway plugin root whose packaged bytes, index template, and hash
+// manifest are chosen per branch, so each of the three outcomes is exercised
+// on its own terms rather than on whatever the current release happens to
+// contain.
+function syntheticSection(name, body) {
+  return `## ${name}\n\n- Params: \`{ ${body} }\`\n- Status: built-in`;
+}
+
+async function syntheticPluginRoot(t, { macros, sections, macroHashes = {}, sectionHashes = {} }) {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'fast-browser-synthetic-plugin-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await mkdir(path.join(root, 'builtins', 'macros'), { recursive: true });
+  await mkdir(path.join(root, 'skills', 'browser-macros'), { recursive: true });
+  for (const [name, text] of Object.entries(macros)) {
+    await writeFile(path.join(root, 'builtins', 'macros', name), text, 'utf8');
+  }
+  const index = ['# Macro Index', '', sections['page-recon'], '', sections['capture-annotated'], '']
+    .join('\n');
+  await writeFile(path.join(root, 'skills', 'browser-macros', 'MACROS.md'), index, 'utf8');
+  await writeFile(
+    path.join(root, 'builtins', 'macro-hashes.json'),
+    `${JSON.stringify({
+      schemaVersion: 1,
+      macros: {
+        'page-recon.js': macroHashes['page-recon.js'] ?? [sha256(macros['page-recon.js'])],
+        'capture-annotated.js': macroHashes['capture-annotated.js']
+          ?? [sha256(macros['capture-annotated.js'])],
+      },
+      indexSections: {
+        'page-recon': sectionHashes['page-recon'] ?? [sha256(sections['page-recon'])],
+        'capture-annotated': sectionHashes['capture-annotated']
+          ?? [sha256(sections['capture-annotated'])],
+      },
+    }, null, 2)}\n`,
+    'utf8',
+  );
+  return { root };
+}
+
+const SHIPPED_RECON = '// shipped recon\n';
+const CURRENT_RECON = '// current recon\n';
+const CURRENT_CAPTURE = '// current capture\n';
+const SHIPPED_RECON_SECTION = syntheticSection('page-recon', 'maxLinks?: number');
+const CURRENT_RECON_SECTION = syntheticSection('page-recon', 'maxLinks?: number, home: string');
+const CURRENT_CAPTURE_SECTION = syntheticSection('capture-annotated', 'targets: object');
+
+// A plugin root whose packaged macro and index section have both moved on from
+// a previous release, with that previous release's bytes recorded as shipped.
+async function movedOnPluginRoot(t) {
+  return syntheticPluginRoot(t, {
+    macros: { 'page-recon.js': CURRENT_RECON, 'capture-annotated.js': CURRENT_CAPTURE },
+    sections: { 'page-recon': CURRENT_RECON_SECTION, 'capture-annotated': CURRENT_CAPTURE_SECTION },
+    macroHashes: { 'page-recon.js': [sha256(SHIPPED_RECON), sha256(CURRENT_RECON)] },
+    sectionHashes: {
+      'page-recon': [sha256(SHIPPED_RECON_SECTION), sha256(CURRENT_RECON_SECTION)],
+    },
+  });
 }
 
 function fakeCapturePage({
@@ -365,6 +432,153 @@ test('a macro index missing only one section gains just that section', async (t)
   const index = await readFile(paths.macroIndexFile, 'utf8');
   assert.equal(index.match(/^## page-recon$/gm).length, 1);
   assert.equal(index.match(/^## capture-annotated$/gm).length, 1);
+});
+
+// A shipped bug in a built-in used to be permanent: the installer copied
+// without overwriting, so the first install won forever and rerunning setup
+// repaired nothing. capture-annotated gaining a required `home` argument is
+// the case that proved it, since existing machines kept both the old macro and
+// an index entry documenting the old signature. Refresh is therefore gated on
+// provenance, not on age: bytes the project itself shipped may be replaced,
+// anything else is the user's.
+test('a built-in macro still holding an earlier release\'s shipped bytes is refreshed', async (t) => {
+  const { installBuiltinMacros } = await import('../../lib/macros/install.mjs');
+  const paths = await temporaryPaths(t, 'fast-browser-macros-refresh-');
+  const { root } = await movedOnPluginRoot(t);
+  await mkdir(paths.macrosDir, { recursive: true, mode: 0o700 });
+  const installed = path.join(paths.macrosDir, 'page-recon.js');
+  await writeFile(installed, SHIPPED_RECON, 'utf8');
+
+  const report = await installBuiltinMacros({ ...paths, pluginRoot: root });
+
+  assert.equal(await readFile(installed, 'utf8'), CURRENT_RECON);
+  assert.deepEqual(
+    report.macros.find((entry) => entry.name === 'page-recon.js'),
+    { name: 'page-recon.js', action: 'refreshed' },
+  );
+  assert.deepEqual(report.preserved, []);
+});
+
+test('a built-in macro that already matches the packaged bytes is left byte-identical and unwritten', async (t) => {
+  const { installBuiltinMacros } = await import('../../lib/macros/install.mjs');
+  const paths = await temporaryPaths(t, 'fast-browser-macros-current-');
+  const { root } = await movedOnPluginRoot(t);
+  const request = { ...paths, pluginRoot: root };
+  await installBuiltinMacros(request);
+  const installed = path.join(paths.macrosDir, 'page-recon.js');
+  const beforeMacro = await lstat(installed);
+  const beforeIndex = await lstat(paths.macroIndexFile);
+
+  const report = await installBuiltinMacros(request);
+
+  const afterMacro = await lstat(installed);
+  const afterIndex = await lstat(paths.macroIndexFile);
+  // Both write paths land a fresh inode over the destination, so an unchanged
+  // inode is direct evidence that nothing was rewritten, which mtime
+  // granularity alone would not give.
+  assert.equal(afterMacro.ino, beforeMacro.ino, 'an up-to-date macro is not rewritten');
+  assert.equal(afterMacro.mtimeMs, beforeMacro.mtimeMs);
+  assert.equal(afterIndex.ino, beforeIndex.ino, 'an up-to-date index is not rewritten');
+  assert.equal(afterIndex.mtimeMs, beforeIndex.mtimeMs);
+  assert.equal(await readFile(installed, 'utf8'), CURRENT_RECON);
+  assert.equal(
+    report.macros.find((entry) => entry.name === 'page-recon.js').action,
+    'current',
+  );
+  assert.equal(
+    report.index.find((entry) => entry.name === 'page-recon').action,
+    'current',
+  );
+});
+
+test('a built-in macro matching neither the packaged nor any shipped bytes is preserved and reported', async (t) => {
+  const { installBuiltinMacros } = await import('../../lib/macros/install.mjs');
+  const paths = await temporaryPaths(t, 'fast-browser-macros-preserve-');
+  const { root } = await movedOnPluginRoot(t);
+  await mkdir(paths.macrosDir, { recursive: true, mode: 0o700 });
+  const installed = path.join(paths.macrosDir, 'page-recon.js');
+  await writeFile(installed, '// mine\n', 'utf8');
+
+  const report = await installBuiltinMacros({ ...paths, pluginRoot: root });
+
+  assert.equal(await readFile(installed, 'utf8'), '// mine\n');
+  assert.equal(
+    report.macros.find((entry) => entry.name === 'page-recon.js').action,
+    'preserved',
+  );
+  // Silently keeping a stale macro is what made the original bug invisible, so
+  // the caller has to be able to say so.
+  assert.deepEqual(report.preserved, ['page-recon.js']);
+});
+
+test('a live index section still holding an earlier release\'s shipped text is refreshed', async (t) => {
+  const { installBuiltinMacros } = await import('../../lib/macros/install.mjs');
+  const paths = await temporaryPaths(t, 'fast-browser-index-refresh-');
+  const { root } = await movedOnPluginRoot(t);
+  await mkdir(paths.macrosDir, { recursive: true, mode: 0o700 });
+  const custom = '## custom-export\n\n- Status: approved';
+  await writeFile(
+    paths.macroIndexFile,
+    ['# Macro Index', '', SHIPPED_RECON_SECTION, '', custom, '', CURRENT_CAPTURE_SECTION, '']
+      .join('\n'),
+    'utf8',
+  );
+
+  const report = await installBuiltinMacros({ ...paths, pluginRoot: root });
+
+  const merged = await readFile(paths.macroIndexFile, 'utf8');
+  assert.ok(merged.includes(CURRENT_RECON_SECTION), 'the stale section is replaced');
+  assert.ok(!merged.includes(SHIPPED_RECON_SECTION), 'the stale section does not survive');
+  assert.equal(merged.match(/^## page-recon$/gm).length, 1);
+  assert.ok(merged.includes(custom), 'a neighbouring user section is untouched');
+  assert.equal(
+    report.index.find((entry) => entry.name === 'page-recon').action,
+    'refreshed',
+  );
+});
+
+test('a user-edited index section is preserved and reported rather than refreshed', async (t) => {
+  const { installBuiltinMacros } = await import('../../lib/macros/install.mjs');
+  const paths = await temporaryPaths(t, 'fast-browser-index-preserve-');
+  const { root } = await movedOnPluginRoot(t);
+  await mkdir(paths.macrosDir, { recursive: true, mode: 0o700 });
+  const mine = '## page-recon\n\n- Status: mine';
+  await writeFile(
+    paths.macroIndexFile,
+    ['# Macro Index', '', mine, '', CURRENT_CAPTURE_SECTION, ''].join('\n'),
+    'utf8',
+  );
+
+  const report = await installBuiltinMacros({ ...paths, pluginRoot: root });
+
+  const merged = await readFile(paths.macroIndexFile, 'utf8');
+  assert.ok(merged.includes(mine), 'the user-authored section survives');
+  assert.ok(!merged.includes(CURRENT_RECON_SECTION));
+  assert.equal(
+    report.index.find((entry) => entry.name === 'page-recon').action,
+    'preserved',
+  );
+  assert.deepEqual(report.preserved, ['MACROS.md#page-recon']);
+});
+
+test('the shipped hash manifest refuses the empty-string digest', async (t) => {
+  const { installBuiltinMacros } = await import('../../lib/macros/install.mjs');
+  const paths = await temporaryPaths(t, 'fast-browser-macros-empty-digest-');
+  const { root } = await syntheticPluginRoot(t, {
+    macros: { 'page-recon.js': CURRENT_RECON, 'capture-annotated.js': CURRENT_CAPTURE },
+    sections: { 'page-recon': CURRENT_RECON_SECTION, 'capture-annotated': CURRENT_CAPTURE_SECTION },
+    // The digest of no bytes at all. A generator that hashes whatever readFile
+    // returned for an absent file writes exactly this, and it would make the
+    // installer treat a truncated macro as project-shipped and overwrite it.
+    macroHashes: {
+      'page-recon.js': [sha256(''), sha256(CURRENT_RECON)],
+    },
+  });
+
+  await assert.rejects(
+    () => installBuiltinMacros({ ...paths, pluginRoot: root }),
+    /empty/,
+  );
 });
 
 test('capture-annotated requires at least one target', async () => {
