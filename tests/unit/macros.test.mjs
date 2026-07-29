@@ -1220,6 +1220,35 @@ test('page-affordances reports a scan that hit its cap', async () => {
   assert.equal(skipCount(result, 'page', 'scan-limit'), 1200);
 });
 
+// The landmark collector stops transferring once it has four times what the
+// caller asked for, which leaves elements after that point unexamined. Every
+// other refusal in this macro is counted, and a cap that reports nothing is
+// exactly the silent partial digest the whole design refuses to produce.
+test('page-affordances reports landmarks the collector never looked at', async () => {
+  const macro = await loadMacro('page-affordances.js');
+  const page = fakeAffordancePage({
+    landmarks: [{ role: 'main', label: '' }],
+    landmarksUnexamined: 40,
+  });
+
+  const result = await macro(page, {});
+
+  assert.deepEqual(result.landmarks, [{ role: 'main' }]);
+  assert.equal(skipCount(result, 'landmarks', 'collect-limit'), 40);
+});
+
+// A page whose landmarks all fitted reports no truncation at all, and a page
+// that failed before it could say either must not invent one.
+test('page-affordances reports no landmark truncation when the collector saw everything', async () => {
+  const macro = await loadMacro('page-affordances.js');
+
+  const complete = await macro(fakeAffordancePage({ landmarksUnexamined: 0 }), {});
+  const silent = await macro(fakeAffordancePage({}), {});
+
+  assert.deepEqual(complete.skipped, []);
+  assert.deepEqual(silent.skipped, []);
+});
+
 test('page-affordances passes its bounds into the page and reads identity from that call', async () => {
   const macro = await loadMacro('page-affordances.js');
   const page = fakeAffordancePage({});

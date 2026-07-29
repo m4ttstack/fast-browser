@@ -328,10 +328,18 @@ async (page, args) => {
     }
 
     const landmarks = [];
-    for (const element of document.querySelectorAll(
+    // The cap bounds what is transferred, not what the page has. Elements
+    // after the break were never examined, so how many of THEM were landmarks
+    // is unknowable from here; what is knowable, and what the caller is owed,
+    // is how many went unlooked-at. Reported rather than swallowed, the same
+    // way the scan cap reports its own remainder.
+    const landmarkNodes = document.querySelectorAll(
       'header,nav,main,aside,footer,form,section,search,[role]',
-    )) {
+    );
+    let landmarksSeen = 0;
+    for (const element of landmarkNodes) {
       if (landmarks.length >= input.landmarks * 4) break;
+      landmarksSeen += 1;
       const declared = explicitRole(element);
       const role = declared
         ? (LANDMARK_ROLES.indexOf(declared) >= 0 ? declared : null)
@@ -391,6 +399,7 @@ async (page, args) => {
       title: document.title,
       landmarks,
       candidates,
+      landmarksUnexamined: landmarkNodes.length - landmarksSeen,
       scanTruncated: all.length > scanned,
       scanTotal: all.length,
     };
@@ -572,6 +581,11 @@ async (page, args) => {
   if (collected.scanTruncated) {
     skip('page', 'scan-limit', Math.max(0, (collected.scanTotal || 0) - limits.scan));
   }
+  // Counted like every other refusal: the collector's own landmark cap is the
+  // one bound that used to drop elements without ever saying so, which would
+  // let an agent read a complete-looking `landmarks` list off a page whose
+  // structure was only partly seen.
+  skip('landmarks', 'collect-limit', Math.max(0, Number(collected.landmarksUnexamined) || 0));
 
   return {
     schemaVersion: 1,
