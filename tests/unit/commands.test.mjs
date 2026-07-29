@@ -3176,6 +3176,54 @@ test('CLI main reports preserved built-in macros as a count without naming them'
   }
 });
 
+// A macro-only release installs a built-in that was never on this machine
+// before, which is a new executable file in the user's macros directory. A
+// rerun that writes one and prints nothing but "already configured" is the
+// same silence that let the last stale built-in survive unnoticed.
+test('CLI main reports newly installed built-in macros as a count without naming them', async () => {
+  for (const [installed, expected] of [
+    [[], null],
+    [
+      ['page-affordances.js'],
+      'Note: 1 built-in macro entry was newly installed;'
+        + ' rerun with --json for details.',
+    ],
+    [
+      ['page-affordances.js', 'MACROS.md#page-affordances'],
+      'Note: 2 built-in macro entries were newly installed;'
+        + ' rerun with --json for details.',
+    ],
+  ]) {
+    const writes = [];
+    await main(
+      { command: 'setup', json: false },
+      {
+        commands: {
+          setup: async () => ({
+            command: 'setup',
+            hosts: ['claude'],
+            profile: 'full',
+            extensionPath: '/tmp/extension',
+            extensionManual: true,
+            changed: true,
+            macros: { installed },
+          }),
+        },
+        write: (text) => writes.push(text),
+      },
+    );
+    const output = writes.join('');
+    if (expected === null) {
+      assert.doesNotMatch(output, /newly installed/);
+    } else {
+      assert.ok(output.includes(expected), output);
+      for (const name of installed) {
+        assert.ok(!output.includes(name), `the human ending must not name ${name}`);
+      }
+    }
+  }
+});
+
 test('CLI migrate apply human mode adds a count-only warning exactly when unmanaged candidates exist', async () => {
   const writes = [];
   const cleanReport = {
@@ -3364,7 +3412,7 @@ test('setup carries the built-in macros it deliberately left alone into its repo
 
   assert.deepEqual(
     JSON.parse(writes.join('')).macros,
-    { refreshed: [], preserved: ['page-recon.js', 'MACROS.md#page-recon'] },
+    { installed: [], refreshed: [], preserved: ['page-recon.js', 'MACROS.md#page-recon'] },
   );
 });
 

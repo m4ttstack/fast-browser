@@ -367,3 +367,68 @@ for (const scenario of ['already-current', 'lock-upgrade']) {
     assert.ok(!report.macros.refreshed.includes('page-recon.js'));
   });
 }
+
+// Deleting ~/.fast-browser/macros is an ordinary thing for a user to do: a
+// cleanup, a partial backup restore. No doctor check covers the directory, so
+// the drift-repair branch never runs and the refresh is the only thing left
+// that can put it back. If the refresh cannot, `setup` fails with a message
+// whose only implied remedy is to rerun `setup`, which fails the same way
+// forever.
+for (const scenario of ['already-current', 'lock-upgrade']) {
+  test(`setup recreates a deleted macros directory on the ${scenario} path`, async (t) => {
+    const prefix = `fast-browser-setup-macro-absent-${scenario}-`;
+    const fixture = scenario === 'already-current'
+      ? await currentInstall(t, prefix)
+      : await upgradeInstall(t, prefix);
+    const { paths } = fixture;
+    await rm(paths.macrosDir, { recursive: true, force: true });
+
+    const report = scenario === 'already-current'
+      ? await setup(baseRequest, {
+        ...inertDeps(),
+        paths,
+        loadRuntimeLock: async () => fixture.lock,
+        doctor: async () => doctorReportWithFailures([]),
+      })
+      : await setup(baseRequest, upgradeDeps(paths, fixture.newLock));
+
+    const state = await lstat(paths.macrosDir);
+    assert.ok(!state.isSymbolicLink() && state.isDirectory(), 'a real directory is back');
+    // The data directories are created private and the recreated one is not
+    // allowed to be looser: these files are executed by the browser tooling.
+    assert.equal(state.mode & 0o777, 0o700, 'the recreated directory stays private');
+    for (const name of BUILTIN_NAMES) {
+      assert.equal(
+        await readFile(path.join(paths.macrosDir, name), 'utf8'),
+        CURRENT_MACROS[name],
+        `${name} is back on disk`,
+      );
+    }
+    assert.equal(report.changed, true);
+  });
+}
+
+// The macro-only release this branch exists to serve: an install that is
+// otherwise entirely current gains a brand new built-in. Writing a new
+// executable file into the user's macros directory and reporting nothing is
+// the same class of problem as leaving a stale built-in behind unannounced,
+// and `--json` could not explain the `changed: true` flag either.
+test('an already-current setup reports a newly installed built-in macro', async (t) => {
+  const { paths, lock } = await currentInstall(t, 'fast-browser-setup-macro-new-');
+  await installBuiltinMacros(paths);
+  const added = path.join(paths.macrosDir, 'page-affordances.js');
+  await rm(added);
+
+  const report = await setup(baseRequest, {
+    ...inertDeps(),
+    paths,
+    loadRuntimeLock: async () => lock,
+    doctor: async () => doctorReportWithFailures([]),
+  });
+
+  assert.equal(await readFile(added, 'utf8'), CURRENT_AFFORDANCES);
+  assert.deepEqual(report.macros.installed, ['page-affordances.js']);
+  assert.deepEqual(report.macros.refreshed, []);
+  assert.deepEqual(report.macros.preserved, []);
+  assert.equal(report.changed, true);
+});
