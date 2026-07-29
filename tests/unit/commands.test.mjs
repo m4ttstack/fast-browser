@@ -3128,22 +3128,31 @@ test('CLI main renders exact setup human ending and JSON without invoking other 
   assert.deepEqual(JSON.parse(writes.join('')), report);
 });
 
-// Setup keeps a built-in the user has edited, which means it can finish having
-// knowingly left a stale macro behind. That is the state the old copy-and-skip
-// installer left everywhere and nobody could see, so it has to reach the
-// human ending, counted and unnamed like every other warning here.
+// Setup keeps a built-in whose bytes it does not recognise, which means it can
+// finish having knowingly left a stale macro behind. That is the state the old
+// copy-and-skip installer left everywhere and nobody could see, so it has to
+// reach the human ending, counted and unnamed like every other warning here.
+//
+// The wording is asserted in full because its accuracy is the point: an
+// install made from a working tree between releases is preserved without
+// anyone having edited it, so a note that says "edited" tells that user
+// something false about their own machine and hides the one-line remedy.
 test('CLI main reports preserved built-in macros as a count without naming them', async () => {
   for (const [preserved, expected] of [
     [[], null],
     [
       ['page-recon.js'],
-      'Note: 1 edited built-in macro entry was kept as-is and may be out of date;'
-        + ' rerun with --json for details.',
+      'Note: 1 built-in macro entry was kept as-is; its bytes match no version'
+        + ' this project shipped, so it will never be refreshed.\n'
+        + 'If you did not edit it, delete it and rerun setup to adopt the current version;'
+        + ' rerun with --json for names.',
     ],
     [
       ['page-recon.js', 'MACROS.md#page-recon'],
-      'Note: 2 edited built-in macro entries were kept as-is and may be out of date;'
-        + ' rerun with --json for details.',
+      'Note: 2 built-in macro entries were kept as-is; their bytes match no version'
+        + ' this project shipped, so they will never be refreshed.\n'
+        + 'If you did not edit them, delete them and rerun setup to adopt the current version;'
+        + ' rerun with --json for names.',
     ],
   ]) {
     const writes = [];
