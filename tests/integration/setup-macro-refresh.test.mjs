@@ -14,7 +14,7 @@ import { saveConfig } from '../../lib/core/files.mjs';
 import { resolvePaths } from '../../lib/core/paths.mjs';
 import { DOCTOR_CHECK_IDS } from '../../lib/doctor/checks.mjs';
 import { extensionInstallLocation } from '../../lib/extension/install.mjs';
-import { installBuiltinMacros } from '../../lib/macros/install.mjs';
+import { BUILTIN_NAMES, installBuiltinMacros, macroIndexName } from '../../lib/macros/install.mjs';
 import { runtimeLockIdentity } from '../../lib/runtime/lock.mjs';
 
 // A macro-only fix is the case this whole refresh exists for, and it is the one
@@ -132,39 +132,52 @@ function syntheticSection(name, body) {
 const SHIPPED_RECON = '// shipped recon\n';
 const CURRENT_RECON = '// current recon\n';
 const CURRENT_CAPTURE = '// current capture\n';
+const CURRENT_AFFORDANCES = '// current affordances\n';
 const SHIPPED_RECON_SECTION = syntheticSection('page-recon', 'maxLinks?: number');
 const CURRENT_RECON_SECTION = syntheticSection('page-recon', 'maxLinks?: number, home: string');
 const CURRENT_CAPTURE_SECTION = syntheticSection('capture-annotated', 'targets: object');
+const CURRENT_AFFORDANCES_SECTION = syntheticSection('page-affordances', 'maxButtons?: number');
+const CURRENT_MACROS = {
+  'page-recon.js': CURRENT_RECON,
+  'page-affordances.js': CURRENT_AFFORDANCES,
+  'capture-annotated.js': CURRENT_CAPTURE,
+};
+const CURRENT_SECTIONS = {
+  'page-recon': CURRENT_RECON_SECTION,
+  'page-affordances': CURRENT_AFFORDANCES_SECTION,
+  'capture-annotated': CURRENT_CAPTURE_SECTION,
+};
 
 async function movedOnPluginRoot(t) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'fast-browser-setup-macro-plugin-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   await mkdir(path.join(root, 'builtins', 'macros'), { recursive: true });
   await mkdir(path.join(root, 'skills', 'browser-macros'), { recursive: true });
-  await writeFile(path.join(root, 'builtins', 'macros', 'page-recon.js'), CURRENT_RECON, 'utf8');
-  await writeFile(
-    path.join(root, 'builtins', 'macros', 'capture-annotated.js'),
-    CURRENT_CAPTURE,
-    'utf8',
-  );
+  const macros = {};
+  const indexSections = {};
+  const sections = [];
+  // Driven by BUILTIN_NAMES: the installer refuses a manifest that omits any
+  // built-in, so a fixture that lags the real set fails for a reason that has
+  // nothing to do with the branch under test.
+  for (const name of BUILTIN_NAMES) {
+    const section = macroIndexName(name);
+    await writeFile(path.join(root, 'builtins', 'macros', name), CURRENT_MACROS[name], 'utf8');
+    macros[name] = [sha256(CURRENT_MACROS[name])];
+    indexSections[section] = [sha256(CURRENT_SECTIONS[section])];
+    sections.push(CURRENT_SECTIONS[section], '');
+  }
+  // page-recon alone also records a previous release's bytes, which is what
+  // makes it the one destination the refresh branch can act on.
+  macros['page-recon.js'].unshift(sha256(SHIPPED_RECON));
+  indexSections['page-recon'].unshift(sha256(SHIPPED_RECON_SECTION));
   await writeFile(
     path.join(root, 'skills', 'browser-macros', 'MACROS.md'),
-    ['# Macro Index', '', CURRENT_RECON_SECTION, '', CURRENT_CAPTURE_SECTION, ''].join('\n'),
+    ['# Macro Index', '', ...sections].join('\n'),
     'utf8',
   );
   await writeFile(
     path.join(root, 'builtins', 'macro-hashes.json'),
-    `${JSON.stringify({
-      schemaVersion: 1,
-      macros: {
-        'page-recon.js': [sha256(SHIPPED_RECON), sha256(CURRENT_RECON)],
-        'capture-annotated.js': [sha256(CURRENT_CAPTURE)],
-      },
-      indexSections: {
-        'page-recon': [sha256(SHIPPED_RECON_SECTION), sha256(CURRENT_RECON_SECTION)],
-        'capture-annotated': [sha256(CURRENT_CAPTURE_SECTION)],
-      },
-    }, null, 2)}\n`,
+    `${JSON.stringify({ schemaVersion: 1, macros, indexSections }, null, 2)}\n`,
     'utf8',
   );
   return root;

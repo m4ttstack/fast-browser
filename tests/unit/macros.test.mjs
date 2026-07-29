@@ -19,6 +19,8 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import vm from 'node:vm';
 
+import { BUILTIN_NAMES, macroIndexName } from '../../lib/macros/install.mjs';
+
 const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const execFile = promisify(execFileCallback);
 
@@ -62,24 +64,30 @@ async function syntheticPluginRoot(t, { macros, sections, macroHashes = {}, sect
   for (const [name, text] of Object.entries(macros)) {
     await writeFile(path.join(root, 'builtins', 'macros', name), text, 'utf8');
   }
-  const index = ['# Macro Index', '', sections['page-recon'], '', sections['capture-annotated'], '']
-    .join('\n');
+  const index = [
+    '# Macro Index',
+    '',
+    sections['page-recon'],
+    '',
+    sections['page-affordances'],
+    '',
+    sections['capture-annotated'],
+    '',
+  ].join('\n');
   await writeFile(path.join(root, 'skills', 'browser-macros', 'MACROS.md'), index, 'utf8');
+  const macroList = {};
+  const sectionList = {};
+  // Driven by BUILTIN_NAMES rather than a hand-kept list: the installer refuses
+  // a manifest that omits any built-in, so a fixture that lags the real set
+  // fails for a reason that has nothing to do with the branch under test.
+  for (const name of BUILTIN_NAMES) {
+    const section = macroIndexName(name);
+    macroList[name] = macroHashes[name] ?? [sha256(macros[name])];
+    sectionList[section] = sectionHashes[section] ?? [sha256(sections[section])];
+  }
   await writeFile(
     path.join(root, 'builtins', 'macro-hashes.json'),
-    `${JSON.stringify({
-      schemaVersion: 1,
-      macros: {
-        'page-recon.js': macroHashes['page-recon.js'] ?? [sha256(macros['page-recon.js'])],
-        'capture-annotated.js': macroHashes['capture-annotated.js']
-          ?? [sha256(macros['capture-annotated.js'])],
-      },
-      indexSections: {
-        'page-recon': sectionHashes['page-recon'] ?? [sha256(sections['page-recon'])],
-        'capture-annotated': sectionHashes['capture-annotated']
-          ?? [sha256(sections['capture-annotated'])],
-      },
-    }, null, 2)}\n`,
+    `${JSON.stringify({ schemaVersion: 1, macros: macroList, indexSections: sectionList }, null, 2)}\n`,
     'utf8',
   );
   return { root };
@@ -88,16 +96,26 @@ async function syntheticPluginRoot(t, { macros, sections, macroHashes = {}, sect
 const SHIPPED_RECON = '// shipped recon\n';
 const CURRENT_RECON = '// current recon\n';
 const CURRENT_CAPTURE = '// current capture\n';
+const CURRENT_AFFORDANCES = '// current affordances\n';
 const SHIPPED_RECON_SECTION = syntheticSection('page-recon', 'maxLinks?: number');
 const CURRENT_RECON_SECTION = syntheticSection('page-recon', 'maxLinks?: number, home: string');
 const CURRENT_CAPTURE_SECTION = syntheticSection('capture-annotated', 'targets: object');
+const CURRENT_AFFORDANCES_SECTION = syntheticSection('page-affordances', 'maxButtons?: number');
 
 // A plugin root whose packaged macro and index section have both moved on from
 // a previous release, with that previous release's bytes recorded as shipped.
 async function movedOnPluginRoot(t) {
   return syntheticPluginRoot(t, {
-    macros: { 'page-recon.js': CURRENT_RECON, 'capture-annotated.js': CURRENT_CAPTURE },
-    sections: { 'page-recon': CURRENT_RECON_SECTION, 'capture-annotated': CURRENT_CAPTURE_SECTION },
+    macros: {
+      'page-recon.js': CURRENT_RECON,
+      'page-affordances.js': CURRENT_AFFORDANCES,
+      'capture-annotated.js': CURRENT_CAPTURE,
+    },
+    sections: {
+      'page-recon': CURRENT_RECON_SECTION,
+      'page-affordances': CURRENT_AFFORDANCES_SECTION,
+      'capture-annotated': CURRENT_CAPTURE_SECTION,
+    },
     macroHashes: { 'page-recon.js': [sha256(SHIPPED_RECON), sha256(CURRENT_RECON)] },
     sectionHashes: {
       'page-recon': [sha256(SHIPPED_RECON_SECTION), sha256(CURRENT_RECON_SECTION)],
@@ -139,12 +157,13 @@ function fakeCapturePage({
   };
 }
 
-async function loadCaptureAnnotatedMacro() {
-  const source = await readFile(
-    path.join(pluginRoot, 'builtins/macros/capture-annotated.js'),
-    'utf8',
-  );
+async function loadMacro(fileName) {
+  const source = await readFile(path.join(pluginRoot, 'builtins/macros', fileName), 'utf8');
   return Function(`"use strict"; return (${source});`)();
+}
+
+async function loadCaptureAnnotatedMacro() {
+  return loadMacro('capture-annotated.js');
 }
 
 // `Function(...)` (used by loadCaptureAnnotatedMacro above, and by every
@@ -164,15 +183,16 @@ async function loadCaptureAnnotatedMacro() {
 // calling the loaded macro here still throws ReferenceError for any bare
 // `process`/`require`/`module`/`Buffer` reference exactly as the live tool
 // would.
-async function loadCaptureAnnotatedMacroWithoutNodeGlobals() {
-  const source = await readFile(
-    path.join(pluginRoot, 'builtins/macros/capture-annotated.js'),
-    'utf8',
-  );
+async function loadMacroWithoutNodeGlobals(fileName) {
+  const source = await readFile(path.join(pluginRoot, 'builtins/macros', fileName), 'utf8');
   const sandbox = {};
   vm.createContext(sandbox);
   const script = new vm.Script(`(${source})`);
   return script.runInContext(sandbox);
+}
+
+async function loadCaptureAnnotatedMacroWithoutNodeGlobals() {
+  return loadMacroWithoutNodeGlobals('capture-annotated.js');
 }
 
 test('page-recon returns only bounded headings and links', async () => {
@@ -395,17 +415,18 @@ test('an index merge failure preserves the original live index', async (t) => {
   }
 });
 
-test('both builtin macros install and appear in the index', async (t) => {
+test('every builtin macro installs and appears in the index', async (t) => {
   const { installBuiltinMacros } = await import('../../lib/macros/install.mjs');
   const { paths } = await macroFixture(t, 'fast-browser-macros-both-');
   await installBuiltinMacros(paths);
-  for (const name of ['page-recon.js', 'capture-annotated.js']) {
+  for (const name of BUILTIN_NAMES) {
     const state = await lstat(path.join(paths.macrosDir, name));
     assert.equal(state.isFile(), true, name);
   }
   const index = await readFile(paths.macroIndexFile, 'utf8');
-  assert.match(index, /^## page-recon$/m);
-  assert.match(index, /^## capture-annotated$/m);
+  for (const name of BUILTIN_NAMES) {
+    assert.match(index, new RegExp(`^## ${macroIndexName(name)}$`, 'm'), name);
+  }
 });
 
 test('installing twice does not duplicate index sections or overwrite edits', async (t) => {
@@ -565,8 +586,16 @@ test('the shipped hash manifest refuses the empty-string digest', async (t) => {
   const { installBuiltinMacros } = await import('../../lib/macros/install.mjs');
   const paths = await temporaryPaths(t, 'fast-browser-macros-empty-digest-');
   const { root } = await syntheticPluginRoot(t, {
-    macros: { 'page-recon.js': CURRENT_RECON, 'capture-annotated.js': CURRENT_CAPTURE },
-    sections: { 'page-recon': CURRENT_RECON_SECTION, 'capture-annotated': CURRENT_CAPTURE_SECTION },
+    macros: {
+      'page-recon.js': CURRENT_RECON,
+      'page-affordances.js': CURRENT_AFFORDANCES,
+      'capture-annotated.js': CURRENT_CAPTURE,
+    },
+    sections: {
+      'page-recon': CURRENT_RECON_SECTION,
+      'page-affordances': CURRENT_AFFORDANCES_SECTION,
+      'capture-annotated': CURRENT_CAPTURE_SECTION,
+    },
     // The digest of no bytes at all. A generator that hashes whatever readFile
     // returned for an absent file writes exactly this, and it would make the
     // installer treat a truncated macro as project-shipped and overwrite it.
@@ -796,4 +825,444 @@ test('capture-annotated runs to completion with no Node globals in scope, matchi
   assert.equal(plain.png, '/Users/test/.fast-browser/screenshots/iso.png');
   assert.deepEqual(plain.resolved, { a: [1, 2, 3, 4] });
   assert.deepEqual(plain.missed, []);
+});
+
+// page-affordances splits deliberately: the browser side of `page.evaluate`
+// only reports what it can see, and every judgment call (selector preference,
+// generated-id rejection, bounds, skip accounting) happens on this side, where
+// a fake page can drive it. The candidate records below are exactly what the
+// in-page collector returns.
+function affordanceCandidate(overrides = {}) {
+  return {
+    kind: 'button',
+    role: null,
+    name: 'Save',
+    attrs: { testid: null, name: null, ariaLabel: null, id: null },
+    counts: { testid: 0, name: 0, ariaLabel: 0, id: 0 },
+    ...overrides,
+    attrs: { testid: null, name: null, ariaLabel: null, id: null, ...(overrides.attrs || {}) },
+    counts: { testid: 0, name: 0, ariaLabel: 0, id: 0, ...(overrides.counts || {}) },
+  };
+}
+
+function fakeAffordancePage(payload, { onEvaluate } = {}) {
+  const evaluated = [];
+  return {
+    evaluated,
+    async evaluate(callback, input) {
+      evaluated.push({ callback, input });
+      if (onEvaluate) return onEvaluate(input);
+      return {
+        url: 'https://example.test/',
+        title: 'Example',
+        landmarks: [],
+        candidates: [],
+        scanTruncated: false,
+        scanTotal: 0,
+        ...payload,
+      };
+    },
+    url() {
+      return 'https://example.test/';
+    },
+  };
+}
+
+function skipCount(result, list, reason) {
+  const entry = (result.skipped || []).find(
+    (candidate) => candidate.list === list && candidate.reason === reason,
+  );
+  return entry ? entry.count : 0;
+}
+
+test('page-affordances returns labelled, addressable structure and echoes the page identity', async () => {
+  const macro = await loadMacro('page-affordances.js');
+  const page = fakeAffordancePage({
+    landmarks: [{ role: 'navigation', label: 'Primary' }, { role: 'main', label: '' }],
+    candidates: [
+      affordanceCandidate({
+        kind: 'field',
+        role: 'textbox',
+        name: 'Search',
+        type: 'search',
+        attrs: { name: 'q' },
+        counts: { name: 1 },
+      }),
+      affordanceCandidate({ kind: 'button', role: 'button', name: 'Sign in' }),
+      affordanceCandidate({ kind: 'link', name: 'Docs', href: 'https://example.test/docs' }),
+    ],
+  });
+
+  const result = await macro(page, {});
+
+  assert.equal(result.schemaVersion, 1);
+  assert.equal(result.url, 'https://example.test/');
+  assert.equal(result.title, 'Example');
+  assert.deepEqual(result.landmarks, [
+    { role: 'navigation', label: 'Primary' },
+    { role: 'main' },
+  ]);
+  assert.deepEqual(result.fields, [
+    { label: 'Search', type: 'search', selector: 'role=textbox[name="Search"]' },
+  ]);
+  assert.deepEqual(result.buttons, [
+    { label: 'Sign in', selector: 'role=button[name="Sign in"]' },
+  ]);
+  assert.deepEqual(result.links, [{ label: 'Docs', href: 'https://example.test/docs' }]);
+  assert.deepEqual(result.skipped, []);
+});
+
+// The failure this macro exists to prevent. A React-minted id looks like a
+// perfectly good handle and is regenerated on the next render, so an agent
+// that stores one gets a silent miss on a later turn.
+for (const id of [
+  '_R_eqd5_',
+  ':r0:',
+  'radix-:r1:-trigger',
+  '«r0»',
+  'mat-input-3',
+  'ember1054',
+  'css-1a2b3c',
+  'headlessui-menu-button-1',
+  'user-4f2a',
+  'qxwvzt',
+]) {
+  test(`page-affordances never emits the generated id ${JSON.stringify(id)}`, async () => {
+    const macro = await loadMacro('page-affordances.js');
+    const page = fakeAffordancePage({
+      candidates: [
+        affordanceCandidate({ name: 'Search or jump to...', attrs: { id }, counts: { id: 1 } }),
+      ],
+    });
+
+    const result = await macro(page, {});
+
+    assert.deepEqual(result.buttons, [], `${id} must never reach a selector`);
+    assert.equal(skipCount(result, 'buttons', 'generated-id'), 1);
+    assert.equal(
+      JSON.stringify(result).includes(id),
+      false,
+      'a rejected id must not appear anywhere in the digest',
+    );
+  });
+}
+
+for (const id of ['main-content', 'search', 'btn-primary', 'nav', 'h2-title', 'user_menu']) {
+  test(`page-affordances still addresses the author-written id ${JSON.stringify(id)}`, async () => {
+    const macro = await loadMacro('page-affordances.js');
+    const page = fakeAffordancePage({
+      candidates: [affordanceCandidate({ name: 'Open', attrs: { id }, counts: { id: 1 } })],
+    });
+
+    const result = await macro(page, {});
+
+    assert.deepEqual(result.buttons, [{ label: 'Open', selector: `#${id}` }]);
+    assert.deepEqual(result.skipped, []);
+  });
+}
+
+test('page-affordances refuses an author-shaped id that is not unique in the document', async () => {
+  const macro = await loadMacro('page-affordances.js');
+  const page = fakeAffordancePage({
+    candidates: [
+      affordanceCandidate({ name: 'Open', attrs: { id: 'main-content' }, counts: { id: 2 } }),
+    ],
+  });
+
+  const result = await macro(page, {});
+
+  assert.deepEqual(result.buttons, []);
+  assert.equal(skipCount(result, 'buttons', 'no-stable-selector'), 1);
+});
+
+test('page-affordances skips and counts an element it cannot label', async () => {
+  const macro = await loadMacro('page-affordances.js');
+  const page = fakeAffordancePage({
+    candidates: [
+      // The exact shape a naive extractor emitted from GitHub: no label, and a
+      // React id. Both halves of the contract fail, and it must be counted
+      // once rather than emitted with an empty label.
+      affordanceCandidate({ name: '', attrs: { id: '_R_eqd5_' }, counts: { id: 1 } }),
+      affordanceCandidate({ name: '', attrs: { testid: 'close' }, counts: { testid: 1 } }),
+      affordanceCandidate({ kind: 'field', name: '', type: 'text' }),
+      affordanceCandidate({ kind: 'link', name: '', href: 'https://example.test/x' }),
+      affordanceCandidate({ name: 'Save', attrs: { testid: 'save' }, counts: { testid: 1 } }),
+    ],
+  });
+
+  const result = await macro(page, {});
+
+  assert.deepEqual(result.buttons, [{ label: 'Save', selector: '[data-testid="save"]' }]);
+  assert.deepEqual(result.fields, []);
+  assert.deepEqual(result.links, []);
+  assert.equal(skipCount(result, 'buttons', 'no-label'), 2);
+  assert.equal(skipCount(result, 'fields', 'no-label'), 1);
+  assert.equal(skipCount(result, 'links', 'no-label'), 1);
+  // Unlabelled beats unaddressable: an element with neither is reported once,
+  // under the reason that stops it being usable at all.
+  assert.equal(skipCount(result, 'buttons', 'generated-id'), 0);
+});
+
+test('page-affordances honours the selector preference order', async () => {
+  const macro = await loadMacro('page-affordances.js');
+  const every = {
+    attrs: { testid: 'save-button', name: 'save', ariaLabel: 'Save the form', id: 'save-form' },
+    counts: { testid: 1, name: 1, ariaLabel: 1, id: 1 },
+  };
+  const steps = [
+    [{ role: 'button', ...every }, 'role=button[name="Save"]'],
+    [{ role: null, ...every }, '[data-testid="save-button"]'],
+    [
+      {
+        role: null,
+        attrs: { ...every.attrs, testid: null },
+        counts: { ...every.counts, testid: 0 },
+      },
+      '[name="save"]',
+    ],
+    [
+      {
+        role: null,
+        attrs: { ...every.attrs, testid: null, name: null },
+        counts: { ...every.counts, testid: 0, name: 0 },
+      },
+      '[aria-label="Save the form"]',
+    ],
+    [
+      {
+        role: null,
+        attrs: { id: 'save-form' },
+        counts: { id: 1 },
+      },
+      '#save-form',
+    ],
+  ];
+
+  for (const [overrides, expected] of steps) {
+    const page = fakeAffordancePage({
+      candidates: [affordanceCandidate({ name: 'Save', ...overrides })],
+    });
+    const result = await macro(page, {});
+    assert.deepEqual(result.buttons, [{ label: 'Save', selector: expected }], expected);
+  }
+});
+
+test('page-affordances refuses an ambiguous role and name and falls to the next strategy', async () => {
+  const macro = await loadMacro('page-affordances.js');
+  const page = fakeAffordancePage({
+    candidates: [
+      affordanceCandidate({
+        role: 'button',
+        name: 'Delete',
+        attrs: { testid: 'delete-first' },
+        counts: { testid: 1 },
+      }),
+      affordanceCandidate({ role: 'button', name: 'Delete' }),
+      // Same role, and a name that CONTAINS the other two. `role=` matching is
+      // exact, but a caller who relaxes it to a substring must not silently
+      // select a different row, so containment makes the SHORTER name
+      // ambiguous while this longer one stays addressable under either
+      // reading.
+      affordanceCandidate({ role: 'button', name: 'Delete everything' }),
+    ],
+  });
+
+  const result = await macro(page, {});
+
+  assert.deepEqual(result.buttons, [
+    { label: 'Delete', selector: '[data-testid="delete-first"]' },
+    { label: 'Delete everything', selector: 'role=button[name="Delete everything"]' },
+  ]);
+  assert.equal(skipCount(result, 'buttons', 'no-stable-selector'), 1);
+});
+
+test('page-affordances refuses an attribute value that is shared with another element', async () => {
+  const macro = await loadMacro('page-affordances.js');
+  const page = fakeAffordancePage({
+    candidates: [
+      affordanceCandidate({
+        kind: 'field',
+        name: 'Delivery method',
+        type: 'radio',
+        attrs: { name: 'delivery' },
+        counts: { name: 3 },
+      }),
+    ],
+  });
+
+  const result = await macro(page, {});
+
+  assert.deepEqual(result.fields, []);
+  assert.equal(skipCount(result, 'fields', 'no-stable-selector'), 1);
+});
+
+test('page-affordances never puts an unquotable value inside a selector', async () => {
+  const macro = await loadMacro('page-affordances.js');
+  const page = fakeAffordancePage({
+    candidates: [
+      affordanceCandidate({ role: 'button', name: 'Say "hello"' }),
+      affordanceCandidate({
+        role: 'button',
+        name: 'Escape\\now',
+        attrs: { testid: 'back\\slash' },
+        counts: { testid: 1 },
+      }),
+      affordanceCandidate({
+        role: 'button',
+        name: 'x'.repeat(140),
+        attrs: { id: 'long-label-button' },
+        counts: { id: 1 },
+      }),
+    ],
+  });
+
+  const result = await macro(page, {});
+
+  assert.equal(skipCount(result, 'buttons', 'no-stable-selector'), 2);
+  // A label is only ever shortened when it was already too long to sit inside
+  // a selector, so a truncated label and its selector can never disagree.
+  assert.deepEqual(result.buttons, [
+    { label: `${'x'.repeat(100)}...`, selector: '#long-label-button' },
+  ]);
+});
+
+test('page-affordances bounds every list and counts what the bound cut', async () => {
+  const macro = await loadMacro('page-affordances.js');
+  const candidates = [];
+  for (let index = 0; index < 60; index += 1) {
+    candidates.push(affordanceCandidate({
+      kind: 'field',
+      name: `Field ${index}`,
+      type: 'text',
+      attrs: { testid: `field-${index}` },
+      counts: { testid: 1 },
+    }));
+    candidates.push(affordanceCandidate({
+      name: `Button ${index}`,
+      attrs: { testid: `button-${index}` },
+      counts: { testid: 1 },
+    }));
+    candidates.push(affordanceCandidate({
+      kind: 'link',
+      name: `Link ${index}`,
+      href: `https://example.test/${index}`,
+    }));
+  }
+  const landmarks = [];
+  for (let index = 0; index < 30; index += 1) landmarks.push({ role: 'region', label: `R${index}` });
+  const page = fakeAffordancePage({ candidates, landmarks });
+
+  const result = await macro(page, {});
+
+  assert.equal(result.fields.length, 30);
+  assert.equal(result.buttons.length, 30);
+  assert.equal(result.links.length, 40);
+  assert.equal(result.landmarks.length, 12);
+  assert.equal(skipCount(result, 'fields', 'over-limit'), 30);
+  assert.equal(skipCount(result, 'buttons', 'over-limit'), 30);
+  assert.equal(skipCount(result, 'links', 'over-limit'), 20);
+  assert.equal(skipCount(result, 'landmarks', 'over-limit'), 18);
+  // Bounded by construction: one entry per (list, reason) pair, never one per
+  // element, so a pathological page cannot blow up the report either.
+  assert.equal(result.skipped.length, 4);
+});
+
+test('page-affordances clamps caller-supplied bounds and ignores nonsense ones', async () => {
+  const macro = await loadMacro('page-affordances.js');
+  const candidates = [];
+  for (let index = 0; index < 200; index += 1) {
+    candidates.push(affordanceCandidate({
+      name: `Button ${index}`,
+      attrs: { testid: `button-${index}` },
+      counts: { testid: 1 },
+    }));
+  }
+
+  const small = await macro(fakeAffordancePage({ candidates }), { maxButtons: 3 });
+  assert.equal(small.buttons.length, 3);
+
+  const capped = await macro(fakeAffordancePage({ candidates }), { maxButtons: 100000 });
+  assert.equal(capped.buttons.length, 100);
+
+  const nonsense = await macro(fakeAffordancePage({ candidates }), { maxButtons: -1 });
+  assert.equal(nonsense.buttons.length, 30);
+});
+
+test('page-affordances skips a link it cannot address and drops repeats', async () => {
+  const macro = await loadMacro('page-affordances.js');
+  const page = fakeAffordancePage({
+    candidates: [
+      affordanceCandidate({ kind: 'link', name: 'Home', href: 'https://example.test/' }),
+      affordanceCandidate({ kind: 'link', name: 'Home', href: 'https://example.test/' }),
+      affordanceCandidate({ kind: 'link', name: 'Nowhere', href: '' }),
+      affordanceCandidate({
+        kind: 'link',
+        name: 'Huge',
+        href: `https://example.test/${'a'.repeat(600)}`,
+      }),
+    ],
+  });
+
+  const result = await macro(page, {});
+
+  assert.deepEqual(result.links, [{ label: 'Home', href: 'https://example.test/' }]);
+  assert.equal(skipCount(result, 'links', 'duplicate'), 1);
+  // Truncating an href produces a wrong href, so an oversized one is a skip.
+  assert.equal(skipCount(result, 'links', 'no-usable-href'), 2);
+});
+
+test('page-affordances reports a scan that hit its cap', async () => {
+  const macro = await loadMacro('page-affordances.js');
+  const page = fakeAffordancePage({ scanTruncated: true, scanTotal: 3200 });
+
+  const result = await macro(page, { maxScan: 2000 });
+
+  assert.equal(skipCount(result, 'page', 'scan-limit'), 1200);
+});
+
+test('page-affordances passes its bounds into the page and reads identity from that call', async () => {
+  const macro = await loadMacro('page-affordances.js');
+  const page = fakeAffordancePage({});
+
+  await macro(page, { maxScan: 50, maxLandmarks: 5 });
+
+  assert.equal(page.evaluated.length, 1, 'one round trip, not one per element');
+  assert.equal(typeof page.evaluated[0].callback, 'function');
+  assert.deepEqual(page.evaluated[0].input, { scan: 50, landmarks: 5 });
+});
+
+test('page-affordances returns a failure result rather than throwing', async () => {
+  const macro = await loadMacro('page-affordances.js');
+  const page = fakeAffordancePage({}, {
+    onEvaluate: () => {
+      throw new Error('execution context was destroyed');
+    },
+  });
+
+  assert.deepEqual(await macro(page, {}), {
+    failedStep: 'collect',
+    error: 'execution context was destroyed',
+    url: 'https://example.test/',
+  });
+});
+
+test('page-affordances runs to completion with no Node globals in scope, matching the real sandbox', async () => {
+  const macro = await loadMacroWithoutNodeGlobals('page-affordances.js');
+  const page = fakeAffordancePage({
+    landmarks: [{ role: 'main', label: '' }],
+    candidates: [
+      affordanceCandidate({ role: 'button', name: 'Sign in' }),
+      affordanceCandidate({ name: '', attrs: { id: '_R_eqd5_' }, counts: { id: 1 } }),
+    ],
+  });
+
+  const result = await macro(page, {});
+  // Built inside another vm realm, so round-trip through JSON before asserting
+  // rather than risking a cross-realm prototype mismatch in deepEqual.
+  const plain = JSON.parse(JSON.stringify(result));
+
+  assert.equal(plain.schemaVersion, 1);
+  assert.deepEqual(plain.buttons, [{ label: 'Sign in', selector: 'role=button[name="Sign in"]' }]);
+  assert.deepEqual(plain.landmarks, [{ role: 'main' }]);
+  assert.deepEqual(plain.skipped, [{ list: 'buttons', reason: 'no-label', count: 1 }]);
 });

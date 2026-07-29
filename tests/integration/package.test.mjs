@@ -25,6 +25,7 @@ const requiredEntries = [
   'package/adapters/codex/mcp.json',
   'package/agents/browser-driver.md',
   'package/builtins/macros/page-recon.js',
+  'package/builtins/macros/page-affordances.js',
   'package/lib/cli/main.mjs',
   'package/lib/cli/parse-args.mjs',
   'package/lib/commands/configure.mjs',

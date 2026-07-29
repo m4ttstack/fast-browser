@@ -92,10 +92,19 @@ test('old skill locations are repository-relative transition links to real packa
 test('macro index exposes only the portable built-in macros', async () => {
   const text = await readFile(path.join(pluginRoot, 'skills/browser-macros/MACROS.md'), 'utf8');
 
-  assert.equal((text.match(/^## /gm) || []).length, 2);
+  assert.equal((text.match(/^## /gm) || []).length, 3);
   assert.match(text, /^## page-recon$/m);
   assert.match(text, /maxLinks\?: number \(default 10\)/);
   assert.match(text, /~\/\.fast-browser\/macros\/page-recon\.js/);
+  assert.match(text, /^## page-affordances$/m);
+  assert.match(text, /~\/\.fast-browser\/macros\/page-affordances\.js/);
+  // The two properties that make this macro worth reaching for instead of
+  // browser_snapshot, and the one that makes its output trustworthy. An entry
+  // that drops either sends an agent back to the expensive path or, worse,
+  // lets it read the digest as the whole page.
+  assert.match(text, /maxFields\?: number \(default 30\)/);
+  assert.match(text, /Auto-generated ids .+ are never\s+emitted/);
+  assert.match(text, /counted in `skipped`/);
   assert.match(text, /^## capture-annotated$/m);
   assert.match(text, /targets: Record<string, string>, out\?: string \(default "capture"\)/);
   // `home` is required, not optional: the macro cannot read the caller's home
@@ -104,7 +113,7 @@ test('macro index exposes only the portable built-in macros', async () => {
   // substring above, which a docs edit dropping `home` would still satisfy.
   assert.match(text, /home: string \(your absolute home directory path\)/);
   assert.match(text, /~\/\.fast-browser\/macros\/capture-annotated\.js/);
-  assert.equal((text.match(/Status: built-in/g) || []).length, 2);
+  assert.equal((text.match(/Status: built-in/g) || []).length, 3);
 });
 
 // Each assertion here pins one instruction that a baseline run without the

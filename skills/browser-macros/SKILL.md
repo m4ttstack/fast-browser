@@ -25,6 +25,21 @@ materially. After the same macro fails twice, append:
 to `~/.fast-browser/macro-failures.md`, then switch to fast-browsing recovery.
 Do not keep repeating the macro.
 
+## Prefer the affordances digest to a snapshot
+
+On an unfamiliar page the matching entry is usually `page-affordances`. It
+returns the page's visible fields, buttons, links and landmarks with a selector
+for each, which is enough to act on, where `page-recon` only says what the page
+is. Reach for `browser_snapshot` only after the digest comes back without the
+control you need: a full accessibility tree costs roughly 5k to 35k tokens and
+stays in context for the rest of the session.
+
+The digest is partial on purpose. Nothing appears in it that could not be both
+labelled and addressed, and everything refused is counted in `skipped` as
+`{ list, reason, count }`. Read those counts before concluding a control is
+absent, and never invent a selector for something the macro declined to
+address.
+
 ## Authoring contract
 
 - Store scripts in `~/.fast-browser/macros/` and use that stable path in the
@@ -48,6 +63,8 @@ or successful verification.
 | Result | Next action |
 |---|---|
 | Exact index match | Run filename plus args |
+| Unfamiliar page | `page-affordances`, not `browser_snapshot` |
+| Control missing from the digest | Read `skipped`, then snapshot |
 | Success | Return the distilled value |
 | First failure | Retry materially using failure context |
 | Second failure | Log it and use fast-browsing |

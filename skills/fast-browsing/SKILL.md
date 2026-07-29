@@ -19,15 +19,23 @@ then use the loop below.
 
 ## Use the fast loop
 
-1. **Scout once.** On an unfamiliar page, call `browser_snapshot` once. Use
-   `browser_find` instead when the desired text or control is already known.
+1. **Scout cheaply.** On an unfamiliar page, run the `page-affordances`
+   built-in. It returns the page's fields, buttons, links and landmarks with a
+   selector for each, which is what you need in order to act, and it lists in
+   `skipped` whatever it could not both label and address. Use `browser_find`
+   instead when the desired text or control is already known. Reach for
+   `browser_snapshot` only when `page-affordances` skipped the thing you need
+   or the page is genuinely unlike its digest: a full accessibility tree costs
+   roughly 5k to 35k tokens, stays in context for the rest of the session, and
+   is re-read on every later turn.
 2. **Batch the known remainder.** Put every predictable navigation,
    interaction, assertion, and wait into one `browser_run_code_unsafe` call.
    Split only when the next action depends on information the script cannot
    determine internally.
 3. **Read narrowly.** Use `browser_find` for known text and a targeted
    `browser_snapshot` for one region. Take another full snapshot only when
-   genuinely lost.
+   genuinely lost. A `page-affordances` digest is partial by design, so read
+   its `skipped` counts before concluding a control does not exist.
 4. **Recover materially.** If the same scripted step fails twice, perform that
    step with a single-step tool, then resume batching.
 5. **Return distilled data.** Return only the requested string, small object,
@@ -56,7 +64,8 @@ ask the user to complete it in the real Chrome window, then continue.
 | Situation | Action |
 |---|---|
 | Matching macro | Run its filename and args once |
-| Unfamiliar page | Scout once |
+| Unfamiliar page | Run `page-affordances`, not `browser_snapshot` |
+| Digest lacks the control you need | Check `skipped`, then snapshot |
 | Predictable multi-step flow | Batch it |
 | Known text or region | Read it narrowly |
 | Same step failed twice | Change to single-step recovery |

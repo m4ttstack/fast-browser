@@ -11,6 +11,9 @@
     "page-recon.js": [
       "3fc2484c2b14a9cb0c48e647ed131b1e54101d9f40b6125612b2784623e19971"
     ],
+    "page-affordances.js": [
+      "eb7ed77834d07988915040b65f155f18089adae886634ea9d9911de151805c8d"
+    ],
     "capture-annotated.js": [
       "8f35bc6798c642a78c5e04117de8ff4e69a1cbab80d7a167621ac3eb94b522df"
     ]
@@ -18,6 +21,9 @@
   "indexSections": {
     "page-recon": [
       "f2e2703af5103d93c5e2ecd4b32bf1348ce40db9e3d8a4697242d0f28c1c1b41"
+    ],
+    "page-affordances": [
+      "3a6c7f3474d29eca6cc016862f94f69ca5e96789a83b1264e68c526d96dab634"
     ],
     "capture-annotated": [
       "84ca775a46a4acdd864aa7ad8dc18ae6a2b2dd2160241eaa90eb85395fa806e6"
