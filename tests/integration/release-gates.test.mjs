@@ -256,6 +256,109 @@ test('the shipped macro hash manifest covers every built-in and its packaged byt
   }
 });
 
+// Losing a hash the manifest already recorded is the one way to break refresh
+// that leaves no symptom: every install still holding those bytes is then
+// classified as the user's and preserved forever, and "preserved" is a
+// legitimate outcome, so no test fails and nothing looks wrong. The gate above
+// only covers the CURRENT packaged bytes, so a historical entry can be deleted
+// by hand and every check still passes.
+//
+// The invariant is not plain append-only. `scripts/generate-macro-hashes.mjs`
+// rebuilds from published tarballs plus the working tree, so a hash recorded
+// for an unreleased working-tree state legitimately disappears when that state
+// is superseded before it ever ships. page-affordances.js did exactly that
+// between 073b3ce and 51cd598. What must never disappear is a hash that was
+// not merely the working tree of its own commit, because the only other way
+// one gets into the manifest is a published tarball.
+async function gitLines(args) {
+  const { stdout } = await execFile('git', ['-C', pluginRoot, ...args], {
+    maxBuffer: 16 * 1024 * 1024,
+  });
+  return stdout;
+}
+
+async function gitShowOrNull(revision, repoPath) {
+  try {
+    return await gitLines(['show', `${revision}:${repoPath}`]);
+  } catch {
+    return null;
+  }
+}
+
+test('the macro hash manifest never drops a hash it did not mint itself', async (t) => {
+  const {
+    BUILTIN_NAMES,
+    INDEX_NAME,
+    MACRO_HASHES_NAME,
+    digestText,
+    indexSectionBody,
+    macroIndexName,
+  } = await import('../../lib/macros/install.mjs');
+
+  let prefix;
+  try {
+    prefix = (await gitLines(['rev-parse', '--show-prefix'])).trim();
+  } catch {
+    t.skip('not a git work tree, so there is no manifest history to read');
+    return;
+  }
+  const manifestPath = `${prefix}builtins/${MACRO_HASHES_NAME}`;
+  const indexPath = `${prefix}skills/browser-macros/${INDEX_NAME}`;
+  const macroPath = (name) => `${prefix}builtins/macros/${name}`;
+
+  const current = await json(path.join('builtins', MACRO_HASHES_NAME));
+  // Pathspecs are resolved against the working directory, which `-C` has set to
+  // the plugin root; only the `git show` paths above need the repo-root prefix.
+  const revisions = (await gitLines([
+    'log', '--format=%H', '--', `builtins/${MACRO_HASHES_NAME}`,
+  ]))
+    .split('\n')
+    .filter(Boolean);
+  assert.ok(revisions.length > 0, 'the manifest has a history to check against');
+
+  for (const revision of revisions) {
+    const raw = await gitShowOrNull(revision, manifestPath);
+    if (raw === null) continue;
+    const past = JSON.parse(raw);
+    const index = await gitShowOrNull(revision, indexPath);
+
+    for (const name of BUILTIN_NAMES) {
+      const sectionName = macroIndexName(name);
+      const macroText = await gitShowOrNull(revision, macroPath(name));
+      const section = index === null ? null : indexSectionBody(index, sectionName);
+      for (const [recorded, live, minted, label] of [
+        [
+          past.macros?.[name],
+          current.macros?.[name],
+          macroText === null ? null : digestText(macroText),
+          name,
+        ],
+        [
+          past.indexSections?.[sectionName],
+          current.indexSections?.[sectionName],
+          section === null ? null : digestText(section),
+          sectionName,
+        ],
+      ]) {
+        // A built-in the project has since dropped from BUILTIN_NAMES has no
+        // current entry to keep anything in, and that removal is deliberate.
+        if (!Array.isArray(recorded) || !Array.isArray(live)) continue;
+        for (const hash of recorded) {
+          if (live.includes(hash)) continue;
+          assert.equal(
+            hash,
+            minted,
+            `${revision.slice(0, 7)} recorded a hash for ${label} that is gone from`
+              + ` builtins/${MACRO_HASHES_NAME} and was not that commit's own working-tree`
+              + ' bytes, so it can only have come from a published tarball;'
+              + ' restore it or every install holding those bytes is stranded',
+          );
+        }
+      }
+    }
+  }
+});
+
 test('the shipped macro hash manifest is published', async () => {
   const { MACRO_HASHES_NAME } = await import('../../lib/macros/install.mjs');
   const files = await packedFiles();
