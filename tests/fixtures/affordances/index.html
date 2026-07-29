@@ -1,0 +1,117 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Affordances fixture</title>
+<!--
+  Every element here exists to drive one branch of the in-page half of
+  builtins/macros/page-affordances.js, which unit tests never execute. The
+  comments name the branch rather than describing the markup.
+-->
+<style>
+  body { font: 14px Helvetica, Arial, sans-serif; margin: 0; padding: 16px; }
+  .zero { width: 0; height: 0; padding: 0; border: 0; overflow: hidden; }
+</style>
+
+<header>
+  <!-- banner: a top-level header, unlike the one inside <article> below -->
+  <nav aria-label="Primary">
+    <a href="/docs">Docs</a>
+    <!-- same label and same href: the second is a duplicate, not a second link -->
+    <a href="/docs">Docs</a>
+  </nav>
+</header>
+
+<main>
+  <form aria-label="Claimant">
+    <!-- label[for] association -->
+    <label for="claimant-name">Full name</label>
+    <input id="claimant-name" name="claimant-name" type="text">
+
+    <!-- wrapping label, with the control itself contributing no text -->
+    <label>Phone number <input type="tel" name="phone"></label>
+
+    <!-- HTML-AAM gives a password input no role, so the role strategy must be
+         skipped rather than emitting a role=textbox selector that matches
+         nothing; the name attribute carries it instead -->
+    <input type="password" name="secret" aria-label="Passphrase">
+
+    <select name="plan" aria-label="Plan">
+      <option value="a">Starter</option>
+      <option value="b">Scale</option>
+    </select>
+
+    <!-- aria-labelledby, resolved through a separate element -->
+    <input type="checkbox" name="agree" aria-labelledby="agree-text">
+    <span id="agree-text">Accept terms</span>
+
+    <!-- never a candidate at all: kindOf refuses a hidden input -->
+    <input type="hidden" name="csrf" value="tokenish">
+
+    <!-- identical role name AND identical name/aria-label on both, so every
+         strategy above the id is ambiguous and only the authored id is left -->
+    <input type="text" name="dup" aria-label="Duplicate" id="first-duplicate">
+    <input type="text" name="dup" aria-label="Duplicate" id="second-duplicate">
+
+    <!-- no accessible name of any kind -->
+    <input type="text" id="no-name-field">
+
+    <button type="submit">Submit claim</button>
+
+    <!-- identical accessible names, distinct testids: proves data-testid is
+         preferred over name and aria-label once the role name collides -->
+    <button data-testid="save-top" name="save">Save</button>
+    <button data-testid="save-bottom" name="save">Save</button>
+
+    <!-- identical accessible names and nothing else to go on but ids no author
+         wrote, so both are refused and counted -->
+    <button id="_R_eqd5_">More</button>
+    <button id="_R_eqf7_">More</button>
+
+    <!-- no accessible name -->
+    <button style="width:40px;height:20px"></button>
+
+    <button disabled data-testid="void-claim">Void claim</button>
+
+    <!-- an image button's name is its alt text, and its role is one no role=
+         selector can express -->
+    <input type="image" name="upload" alt="Upload photo"
+           src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7">
+
+    <!-- a hidden subtree contributes nothing to the accessible name, which is
+         where this macro and Playwright have to agree or the selector misses -->
+    <button id="cancel-claim">Cancel <span hidden>(not available)</span></button>
+  </form>
+
+  <!-- an explicit role, taken ahead of the tag -->
+  <div role="button" tabindex="0" aria-label="Custom action">Custom</div>
+
+  <!-- the link's name comes from its image's alt text -->
+  <a href="/pricing"><img alt="Pricing" width="16" height="16"
+     src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"></a>
+
+  <!-- unnamed, so not a landmark; the named one below is -->
+  <section>
+    <p>Unnamed section.</p>
+  </section>
+  <section aria-label="Assessment">
+    <p>Named section.</p>
+  </section>
+
+  <article>
+    <!-- not a banner: a header is only one at the top level -->
+    <header>Nested header</header>
+  </article>
+
+  <!-- three ways to be invisible -->
+  <a href="/hidden-link" hidden>Hidden link</a>
+  <div aria-hidden="true"><button>Ghost</button></div>
+  <button style="display:none">Invisible</button>
+  <button class="zero">Zero</button>
+</main>
+
+<aside aria-label="Related">
+  <p>Related items.</p>
+</aside>
+
+<footer>
+  <p>Footer.</p>
+</footer>
