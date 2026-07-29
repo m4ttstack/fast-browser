@@ -31,6 +31,7 @@
   ],
   "scripts": {
     "macro-hashes": "node scripts/generate-macro-hashes.mjs",
+    "prepublishOnly": "node scripts/generate-macro-hashes.mjs --check",
     "test": "node --test tests/unit/*.test.mjs tests/integration/*.test.mjs",
     "test:unit": "node --test tests/unit/*.test.mjs",
     "test:integration": "node --test tests/integration/*.test.mjs",

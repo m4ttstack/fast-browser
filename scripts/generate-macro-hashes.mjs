@@ -130,12 +130,65 @@ async function build() {
   };
 }
 
+// "Out of date" is two failures wearing one name and they are not equally bad.
+// A hash the tarballs hold and the file does not means every install carrying
+// those bytes is about to be classified as the user's and stranded unrefreshed
+// forever; a hash the file holds and the tarballs do not is a claim about a
+// release that cannot be checked. Saying which one happened is the difference
+// between a fixable release step and a shrug.
+function differences(expected, recorded) {
+  const lines = [];
+  const published = expected.versions.join(', ');
+  const claimed = (recorded?.versions ?? []).join(', ');
+  if (published !== claimed) lines.push(`versions: recorded [${claimed}], published [${published}]`);
+  for (const group of ['macros', 'indexSections']) {
+    for (const [label, hashes] of Object.entries(expected[group])) {
+      const held = recorded?.[group]?.[label] ?? [];
+      const lost = hashes.filter((hash) => !held.includes(hash));
+      const unattested = held.filter((hash) => !hashes.includes(hash));
+      if (lost.length > 0) {
+        lines.push(
+          `${label}: ${lost.length} hash(es) a published tarball or the working tree holds`
+          + ' are missing; installs holding those bytes can never be refreshed',
+        );
+      }
+      if (unattested.length > 0) {
+        lines.push(
+          `${label}: ${unattested.length} recorded hash(es) match no published tarball`
+          + ' and not the working tree',
+        );
+      }
+    }
+  }
+  return lines;
+}
+
 const manifest = await build();
 const serialized = `${JSON.stringify(manifest, null, 2)}\n`;
 if (process.argv.includes('--check')) {
   const current = await readIfPresent(manifestFile);
-  if (current !== serialized) {
-    process.stderr.write(`${MACRO_HASHES_NAME} is out of date; rerun without --check\n`);
+  if (current === serialized) {
+    process.stdout.write(`${MACRO_HASHES_NAME} matches the published tarballs\n`);
+  } else {
+    let recorded = null;
+    try {
+      recorded = current === null ? null : JSON.parse(current);
+    } catch {
+      recorded = null;
+    }
+    const lines = current === null
+      ? [`${MACRO_HASHES_NAME} is absent`]
+      : recorded === null
+        ? [`${MACRO_HASHES_NAME} is not readable JSON`]
+        : differences(manifest, recorded);
+    // The comparison above is over serialized bytes, so key order and spacing
+    // count too. A semantic match with a byte mismatch is still a rerun.
+    if (lines.length === 0) lines.push('the recorded content is equivalent but not identical');
+    process.stderr.write(
+      `${MACRO_HASHES_NAME} does not match the published tarballs:\n`
+      + `${lines.map((line) => `  ${line}\n`).join('')}`
+      + 'rerun `npm run macro-hashes` and commit the result\n',
+    );
     process.exitCode = 1;
   }
 } else {

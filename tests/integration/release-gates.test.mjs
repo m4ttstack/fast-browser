@@ -359,6 +359,21 @@ test('the macro hash manifest never drops a hash it did not mint itself', async 
   }
 });
 
+// The generator's `--check` mode existed and ran nowhere, which is the same
+// class of nothing as a manifest nobody verifies. It needs the network to fetch
+// published tarballs so it cannot live in `npm test`; publish is the moment it
+// is both affordable and load-bearing, because that is when a release that
+// forgot to record the outgoing bytes would otherwise ship.
+test('the macro hash check runs before publish', async () => {
+  const packageJson = await json('package.json');
+
+  assert.match(
+    packageJson.scripts?.prepublishOnly ?? '',
+    /generate-macro-hashes\.mjs --check/,
+    'publishing must verify the manifest against the published tarballs first',
+  );
+});
+
 test('the shipped macro hash manifest is published', async () => {
   const { MACRO_HASHES_NAME } = await import('../../lib/macros/install.mjs');
   const files = await packedFiles();
