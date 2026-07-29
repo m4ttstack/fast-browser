@@ -1191,6 +1191,64 @@ test('setup refuses malformed or unreadable existing config before any mutation'
   assert.deepEqual(events, []);
 });
 
+// Companion to the doctor wrapper fix: when a host install/preflight throws,
+// `Setup failed; inspect the reported managed state and retry.` with an empty
+// `hosts` array told the user to inspect state that was never populated, and
+// the one sentence that named the real failure was dropped on the floor.
+function throwingHostSetup(installCodex) {
+  return {
+    checkPlatform: async () => {},
+    detectHosts: async () => ['codex'],
+    ensureDataDirs: async () => {},
+    loadRuntimeLock: async () => ({
+      productVersion: '0.1.0-alpha.1',
+      sourceCommit: 'abc',
+      runtime: { sha256: 'a'.repeat(64) },
+      extension: { id: 'extension-id', version: '1.0.0' },
+    }),
+    installRuntime: async () => ({ version: '0.1.0-alpha.1' }),
+    installExtension: async () => ({ unpacked: '/tmp/extension' }),
+    installCodex,
+    loadConfig: async () => null,
+    paths: {
+      dataDir: '/home/test/.fast-browser',
+      configFile: '/home/test/.fast-browser/config.json',
+    },
+    interactive: false,
+  };
+}
+
+test('setup names the host failure that stopped it', async () => {
+  await assert.rejects(
+    setup(request({ hosts: ['codex'], profile: 'safe' }), throwingHostSetup(async () => {
+      const error = new Error('codex plugin list exited with code 1');
+      error.name = 'HostInstallError';
+      throw error;
+    })),
+    (error) => {
+      assert.equal(error.name, 'LifecycleError');
+      assert.equal(error.stage, 'setup');
+      assert.match(error.message, /codex plugin list exited with code 1/);
+      assert.equal(error.partialState.cause, 'codex plugin list exited with code 1');
+      return true;
+    },
+  );
+});
+
+test('setup still withholds a host failure it cannot vouch for', async () => {
+  await assert.rejects(
+    setup(request({ hosts: ['codex'], profile: 'safe' }), throwingHostSetup(async () => {
+      throw new Error('ENOENT: no such file or directory, open /Users/secret/token');
+    })),
+    (error) => {
+      assert.equal(error.name, 'LifecycleError');
+      assert.doesNotMatch(error.message, /Users|secret/);
+      assert.doesNotMatch(JSON.stringify(error.partialState), /Users|secret/);
+      return true;
+    },
+  );
+});
+
 test('migration production config preflight rejects unsafe config before every mutation', async (t) => {
   const canonicalTemp = await realpath(tmpdir());
   const cases = [

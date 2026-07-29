@@ -233,7 +233,9 @@ The JSON result includes `schemaVersion`, `ok`, `profile`, and the ordered
 checks with status, message, and remediation. Doctor checks the platform, host
 CLIs and plugins, owned routing, pinned runtime and extension, Chrome extension,
 pairing, private data permissions, MCP handshake, and tool contract. A failed
-doctor exits nonzero; run the printed remediation and repeat the check.
+doctor exits nonzero; run the printed remediation and repeat the check. A check
+that knows no specific fix reports a null remediation and names the underlying
+cause in its message instead.
 
 ## Migrate and roll back
 

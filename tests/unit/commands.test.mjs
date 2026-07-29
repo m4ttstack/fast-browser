@@ -102,10 +102,59 @@ test('doctor returns every stable check in order and catches individual failures
   assert.deepEqual(report.checks.find(({ id }) => id === 'chrome'), {
     id: 'chrome',
     status: 'fail',
-    message: 'Chrome check failed.',
-    remediation: 'Run `fast-browser doctor` after fixing Chrome.',
+    message: 'Chrome check failed with an unreportable error.',
+    remediation: null,
   });
   assert.doesNotMatch(JSON.stringify(report), /Users|secret/);
+});
+
+// The bug this covers: `preflightCodexUninstall` throws instead of returning
+// `{installed: false}` when `codex plugin list` exits non-zero, so the
+// codex-plugin check's own "Codex does not have Fast Browser installed"
+// branch is unreachable in exactly the case that needs diagnosing. The wrapper
+// used to replace the thrown message with a content-free `<id> check failed.`,
+// which is how a moved marketplace root became undiagnosable.
+function hostInstallError(message) {
+  const error = new Error(message);
+  error.name = 'HostInstallError';
+  return error;
+}
+
+test('doctor reports the cause when a check throws one of our own errors', async () => {
+  const checks = passingChecksExcept('codex-plugin');
+  checks['codex-plugin'] = async () => {
+    throw hostInstallError('codex plugin list exited with code 1');
+  };
+
+  const report = await doctor({ profile: 'safe' }, { checks });
+
+  assert.deepEqual(report.checks.find(({ id }) => id === 'codex-plugin'), {
+    id: 'codex-plugin',
+    status: 'fail',
+    message: 'codex-plugin check failed: codex plugin list exited with code 1',
+    remediation: null,
+  });
+  assert.equal(report.ok, false);
+});
+
+test('doctor never answers a failure by telling the user to rerun doctor', async () => {
+  const checks = passingChecksExcept('codex-plugin');
+  checks['codex-plugin'] = async () => {
+    throw hostInstallError('codex plugin list exited with code 1');
+  };
+  // The other circular-remediation site: a check whose return value does not
+  // match the reported schema at all.
+  checks.chrome = async () => ({ status: 'not-a-status' });
+
+  const report = await doctor({ profile: 'safe' }, { checks });
+
+  assert.doesNotMatch(JSON.stringify(report), /fast-browser doctor/);
+  assert.equal(report.checks.find(({ id }) => id === 'codex-plugin').remediation, null);
+  assert.equal(report.checks.find(({ id }) => id === 'chrome').remediation, null);
+  assert.match(
+    report.checks.find(({ id }) => id === 'chrome').message,
+    /invalid result/,
+  );
 });
 
 test('doctor keeps the full check schema healthy for an unselected host', async () => {
