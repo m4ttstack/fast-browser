@@ -55,6 +55,26 @@ test('install writes the exact three-line executable shim into an empty home', a
   assert.equal(state.mode & 0o777, 0o755);
 });
 
+// Refused, not escaped: a double quote in the path breaks out of the exec
+// line's own quoting and a dollar sign expands at shim run time, while
+// doctor's stale-target check reads the literal parsed path and passes. The
+// empirical break: a root containing 'x"; rm -rf $HOME; "' produced a shim
+// whose exec line escaped its own quoting.
+test('shim text refuses a plugin root no shell quoting can carry safely', () => {
+  for (const hostile of ['x"; rm -rf $HOME; "', 'a$HOME', 'back\\slash', 'new\nline']) {
+    assert.throws(
+      () => launcherShimText(path.join('/tmp', hostile)),
+      /cannot be quoted safely/,
+      hostile,
+    );
+  }
+  assert.match(
+    launcherShimText('/tmp/with spaces and (parens)'),
+    /"\/tmp\/with spaces and \(parens\)\/bin\/fast-browser\.mjs"/,
+    'spaces and parentheses stay supported; only unquotable characters refuse',
+  );
+});
+
 test('a second install of the identical shim is current and writes nothing', async (t) => {
   const paths = await tempPaths(t);
   await installLauncher(paths);
