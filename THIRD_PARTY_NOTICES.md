@@ -6,7 +6,7 @@ that license: Playwright is licensed under the Apache License 2.0.
 
 - Playwright license: https://github.com/microsoft/playwright/blob/main/LICENSE
 - Source repository: https://github.com/m4ttheweric/playwright
-- Source commit: `c714013f4bde551e3540e4f69f0a2525479d47f4`
+- Source commit: `5763ccf80cbbd8fbde69d0445caac6b0692eb9bf`
 
 The MIT license covers this plugin's own source. The runtime and Chrome
 extension artifacts it downloads remain Apache-2.0 works of the Playwright
@@ -16,12 +16,13 @@ project and its contributors.
 
 The URLs in `runtime-lock.json` are immutable release coordinates: a specific
 tag, never `latest`, so the bytes behind them cannot change without the lock
-changing. That commit, the `fast-browser-v0.1.0-alpha.8` tag, and its release
-assets are published in the fork, and the installer verifies both checksums
+changing. The artifacts are built from that commit of the fork; publishing the
+`fast-browser-v0.1.0-alpha.8` tag and its release assets is part of cutting
+the release this lock belongs to, and the installer verifies both checksums
 after download regardless.
 
 - Runtime: `fast-browser-mcp-0.1.0-alpha.8.tar.gz`
-  SHA-256 `11a7a0d79580fdd69ecbf62db2ffc2155b0d70921880c36594057e5f194e8f13`
+  SHA-256 `709c6cab42247063de86e151b56624afad592f23faccb3384ad220a2fd7f4ac2`
   https://github.com/m4ttheweric/playwright/releases/download/fast-browser-v0.1.0-alpha.8/fast-browser-mcp-0.1.0-alpha.8.tar.gz
 - Chrome extension: `fast-browser-extension-0.1.0-alpha.8.zip`
   SHA-256 `764beb8d2adca7b50a34a648a98005bfbc845d253fb43d6ef90ad54e52b23ad5`

@@ -229,13 +229,13 @@ test('bundled lock pins the intended candidate identity and immutable artifact U
   assert.deepEqual(lock, {
     schemaVersion: 1,
     productVersion: '0.1.0-alpha.8',
-    sourceCommit: 'c714013f4bde551e3540e4f69f0a2525479d47f4',
+    sourceCommit: '5763ccf80cbbd8fbde69d0445caac6b0692eb9bf',
     protocolVersion: 2,
     runtime: {
       url: 'https://github.com/m4ttheweric/playwright/releases/download/'
         + 'fast-browser-v0.1.0-alpha.8/fast-browser-mcp-0.1.0-alpha.8.tar.gz',
       file: 'fast-browser-mcp-0.1.0-alpha.8.tar.gz',
-      sha256: '11a7a0d79580fdd69ecbf62db2ffc2155b0d70921880c36594057e5f194e8f13',
+      sha256: '709c6cab42247063de86e151b56624afad592f23faccb3384ad220a2fd7f4ac2',
       node: '>=20',
     },
     extension: {
