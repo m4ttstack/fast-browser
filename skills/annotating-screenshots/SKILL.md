@@ -20,11 +20,15 @@ the image, and nothing is typed by hand.
    own absolute home directory path. Then
    `args: { targets: { <key>: '<selector>' }, out: '<name>', home: '<your $HOME>' }`.
    The macro cannot read `$HOME` itself, so pass your own absolute home
-   directory path there too. Put every label anchor in `targets` too,
-   not just the values you are marking: a chip, a counter and an arrow tail
-   each need a measured box exactly as much as a highlight does, and you
-   cannot add a key after the call. Under the default `safe` profile this
-   prompts for approval every time. Expect the prompt; it is not a failure.
+   directory path there too. `targets` is for elements: the values you mark
+   and anything an arrow points at. The empty space a label sits in is
+   usually not an element, so the macro measures that for you: the return's
+   `space` map gives each resolved key up to four verified-empty bands
+   (`{ side, box }`, sides `above`/`below`/`left`/`right`, a side omitted
+   wherever no empty room of useful size exists). What that verification
+   covers, and the blind spots it cannot, is stated under Composition. You
+   cannot add a key after the call. Under the default `safe` profile this prompts for approval every
+   time. Expect the prompt; it is not a failure.
 2. **Write the config** from that call's return value.
 3. **Draw:** `fast-browser annotate <config-path>`.
 4. **Read the output PNG yourself** before reporting: nothing clipped at an
@@ -100,19 +104,27 @@ measured number. Do not also nudge by feel.
 
 Geometry that is not guessable:
 
-- **`chip.xy`, `counter.xy` and `arrow.tail` come from a resolved anchor box,
-  never from looking at the image.** This is why the anchor goes in `targets`
-  with everything else. The three are not anchored alike, so each has its own
-  derivation from an anchor `[x, y, w, h]`:
+- **`chip.xy`, `counter.xy` and `arrow.tail` anchor inside a band from the
+  macro's `space` map, never at a spot read off the image.** Pick one of the
+  target's returned bands and place with fixed arithmetic only, padding and
+  centring, no nudging by feel. The three are not anchored alike, so each has
+  its own derivation from a band `[x, y, w, h]`:
   - A `chip` is anchored by its top left, so centring it has to subtract its
     own size: `xy = [x + (w - width) / 2, y + (h - height) / 2]`, using the
-    chip width and height given below.
-  - A `counter` is anchored by its centre, so its centre is the anchor's
+    chip width and height given below. In a deep band, centre across it but
+    sit 6 px inside the edge nearest the target rather than centring on the
+    long axis, e.g. `y + 6` in a `below` band, so the label stays visually
+    attached to what it names.
+  - A `counter` is anchored by its centre, so its centre is the band's
     centre: `xy = [x + w / 2, y + h / 2]`. Using the chip formula puts every
     counter up and left of where you meant by its radius, about 16 px at the
     default size.
-  - An `arrow.tail` is a bare point, so it centres the same way:
-    `[x + w / 2, y + h / 2]`.
+  - An `arrow.tail` is a bare point placed in the band the same way as a
+    counter; the head comes from the target's own resolved box.
+  - When `space` has no band for a target, anchor at the target's own padded
+    box corner, the `[x2, y2]` from the padding step, and say plainly in your
+    report that the label sits on content because no empty band existed.
+    Eyeballing empty space on a live capture remains forbidden.
 - `chip.xy` is its **top left** corner. Its height is `size * 2` and its width
   is `characters * size * 0.58 + size * 1.4`, so at the default `size: 22` a
   chip is 44 px tall and roughly `13 * characters + 31` px wide. Set `w` to fix
@@ -136,8 +148,16 @@ Geometry that is not guessable:
 
 - A highlight must fully enclose its value. Never clip the first or last
   character; widen it.
-- Labels go in genuinely empty space, never over card content. A chip dropped
-  on a card's other fields is the most common obstruction.
+- Labels go in a `space` band, which is the only measured evidence a spot is
+  empty. The measurement is geometric, so it catches what point hit-testing
+  cannot: pointer-events:none text, a background image an ancestor (or the
+  body) paints under a transparent container, an iframe's content, text
+  smaller than any sampling grid. It still has stated blind spots -- closed
+  shadow roots, and decoration painted only by borders, box shadows, or
+  background colours can sit under a returned band -- which is one more
+  reason step 4 makes you read the output PNG before reporting. A chip
+  dropped on a card's other fields is the most common obstruction, and it is
+  exactly what an unmeasured "that looks clear" produces.
 - Never blur the value the screenshot exists to prove.
 
 ## The config
@@ -145,8 +165,8 @@ Geometry that is not guessable:
 `base` and `out` are names inside `~/.fast-browser/screenshots/`, never paths,
 and `out` must differ from `base`. Use the macro's returned `name` as `base`.
 
-The capture behind this one asked for three keys: `estimate` and `name` for the
-two values, and `band` for the empty strip the label sits in.
+The capture behind this one asked for two keys, `estimate` and `name`, and
+took the label's spot from the `space` bands the same call measured.
 
 ```json
 {
@@ -159,15 +179,16 @@ two values, and `band` for the empty strip the label sits in.
   "annotations": [
     { "type": "highlight", "box": [777, 194, 84, 29] },
     { "type": "blur", "box": [314, 122, 111, 29], "amount": 15 },
-    { "type": "chip", "xy": [358, 473], "text": "new estimate" }
+    { "type": "chip", "xy": [760, 229], "text": "new estimate", "size": 14 }
   ]
 }
 ```
 
 Every number above is derived. The two boxes are the resolved `estimate` and
 `name`, `[783, 200, 72, 17]` and `[320, 128, 99, 17]`, after the 6 px pad. The
-chip is 184 px wide by 44 px tall and centred in the resolved `band`
-`[40, 460, 820, 70]`. Nothing was read off the image.
+chip is 117 px wide by 28 px tall at `size: 14`, centred across the `below`
+band `space` returned for `estimate`, `[759, 223, 120, 240]`, and 6 px inside
+its top edge, the edge nearest the target. Nothing was read off the image.
 
 ## Foreign images
 

@@ -33,10 +33,24 @@
 - Description: Capture the viewport to a PNG and measure named CSS selectors to
   pixel boxes in the same page state, for use with `fast-browser annotate`.
   Returns resolved boxes plus a `missed` list naming any selector that did not
-  match, matched more than once, or fell outside the viewport. Runs with no
-  Node globals in scope, so it cannot read `$HOME` itself; pass your own
-  absolute home directory as `home`.
-- Params: `{ targets: Record<string, string>, out?: string (default "capture"), home: string (your absolute home directory path) }`
+  match, matched more than once, or fell outside the viewport, and a `space`
+  map giving each resolved key up to four measured empty bands
+  (`{ side: "above"|"below"|"left"|"right", box: [x, y, w, h] }`, in the same
+  pixel space as `resolved`) for placing labels where no addressable element
+  exists. Emptiness is judged by geometry, not hit-testing: every element's
+  text lines, visual and interactive elements (iframes included), background
+  images (html and body included), and pseudo-element content refuse any
+  band they touch, whether or not a pointer could ever reach them. The
+  judgment has stated blind spots -- closed shadow roots, and decoration
+  painted only by borders, box shadows, or background colours -- and a page
+  with more elements than the scan cap returns no bands at all, so a band is
+  measured evidence, not a substitute for reviewing the annotated output. A
+  side with no empty room of useful size is omitted, and a key with no
+  usable side at all is absent from `space`; absence is the honest answer,
+  never a license to eyeball a spot. Runs with no Node globals in scope, so
+  it cannot read `$HOME` itself; pass your own absolute home directory as
+  `home`.
+- Params: `{ targets: Record<string, string>, out?: string (default "capture"), home: string (your absolute home directory path), space?: boolean (default true; false skips the empty-band measurement) }`
 - Target: Current page (site-agnostic)
 - Script: `~/.fast-browser/macros/capture-annotated.js`
 - Status: built-in

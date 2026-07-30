@@ -112,6 +112,18 @@ test('macro index exposes only the portable built-in macros', async () => {
   // fails on its first argument check. Pinned separately from the `targets`
   // substring above, which a docs edit dropping `home` would still satisfy.
   assert.match(text, /home: string \(your absolute home directory path\)/);
+  // The space measurement is what lets a label be placed from measured
+  // numbers when no addressable element exists near it; an index entry that
+  // drops it sends agents back to hunting for spacer elements.
+  assert.match(text, /space\?: boolean \(default true/);
+  assert.match(text, /up to four measured empty bands/);
+  // The emptiness judgment has blind spots the geometric scan cannot see,
+  // and the index has to state them: a reviewed MAT-112 build shipped a rule
+  // whose misses were documented nowhere while the docs asserted proof,
+  // which is exactly the confident wrongness the feature exists to avoid.
+  assert.match(text, /judged by geometry, not hit-testing/);
+  assert.match(text, /stated blind spots/);
+  assert.match(text, /measured evidence, not a substitute for reviewing/);
   assert.match(text, /~\/\.fast-browser\/macros\/capture-annotated\.js/);
   assert.equal((text.match(/Status: built-in/g) || []).length, 3);
 });
@@ -162,13 +174,17 @@ test('the annotation skill states the rules the baseline runs violated', async (
 
   // Every annotation point needs a measured source, not just the box-bearing
   // ones. Without this a label is the one coordinate an agent may eyeball,
-  // which is the discipline the rest of the skill exists to buy. The anchor
-  // has to be requested in the first call, since keys cannot be added later.
-  assert.match(text, /Put every label anchor in `targets`/);
+  // which is the discipline the rest of the skill exists to buy. Labels
+  // anchor inside the macro's measured `space` bands, and when no band came
+  // back the fallback is the target's own padded corner, stated plainly --
+  // never a spot judged clear by looking at the PNG.
+  assert.match(text, /up to four verified-empty bands/);
   assert.match(
     text,
-    /`chip\.xy`, `counter\.xy` and `arrow\.tail` come from a resolved anchor box/,
+    /`chip\.xy`, `counter\.xy` and `arrow\.tail` anchor inside a band from the\s+macro's `space` map/,
   );
+  assert.match(text, /anchor at the target's own padded\s+box corner/);
+  assert.match(text, /Eyeballing empty space on a live capture remains forbidden/);
   assert.match(text, /Nothing was read off the image/);
 
   // The three anchored primitives are not anchored alike, so one shared
@@ -198,7 +214,13 @@ test('the annotation skill states the rules the baseline runs violated', async (
 
   // Spec requirements: composition, palette, approval prompt, purge.
   assert.match(text, /Never blur the value the screenshot exists to prove/);
-  assert.match(text, /never over card content/);
+  // "Evidence", never "proof": the emptiness scan is geometric and strong,
+  // but it has blind spots (closed shadow roots, border/shadow/colour-only
+  // decoration) the skill must name rather than paper over, and the output
+  // review in step 4 is the backstop for exactly those.
+  assert.match(text, /only measured evidence a spot is\s+empty/);
+  assert.match(text, /stated blind spots/);
+  assert.match(text, /read the output PNG before reporting/);
   // Compare the whole offered list, not each name in isolation: a per-name
   // check passes just as happily when the skill keeps a palette that
   // OFFERED_PALETTES has dropped, so the drift guard has to run both ways.

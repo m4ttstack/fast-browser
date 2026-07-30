@@ -128,17 +128,25 @@ function fakeCapturePage({
   viewport = { inner: [1280, 800], client: [1280, 800] },
   onScreenshot,
   onEvaluateError,
+  spaceBands = [],
 } = {}) {
   const screenshots = [];
+  const spaceCalls = [];
   return {
     screenshots,
+    spaceCalls,
     async screenshot(options) {
       if (onScreenshot) await onScreenshot(options);
       screenshots.push(options);
     },
-    async evaluate() {
+    async evaluate(callback, input) {
       if (onEvaluateError) throw onEvaluateError;
-      return viewport;
+      // The macro's viewport read passes no argument; the space measurement
+      // is the only evaluate that carries a plan, so the argument's presence
+      // is what tells the two calls apart here.
+      if (input === undefined) return viewport;
+      spaceCalls.push(input);
+      return spaceBands;
     },
     locator(selector) {
       const entry = locators[selector];
@@ -791,8 +799,10 @@ test('capture-annotated screenshots before it measures, with nothing between', a
   // a layout the PNG never showed. Pin the call order directly rather than
   // only inferring it from output shape.
   const calls = [];
+  // A mid-viewport target so the space measurement has viable sides and its
+  // evaluate is actually issued and ordered.
   const page = fakeCapturePage({
-    locators: { a: { count: 1, box: { x: 0, y: 0, width: 1, height: 1 } } },
+    locators: { a: { count: 1, box: { x: 400, y: 300, width: 100, height: 30 } } },
   });
   const originalScreenshot = page.screenshot.bind(page);
   const originalEvaluate = page.evaluate.bind(page);
@@ -806,7 +816,9 @@ test('capture-annotated screenshots before it measures, with nothing between', a
   };
   const macro = await loadCaptureAnnotatedMacro();
   await macro(page, { targets: { a: 'a' }, home: '/Users/test' });
-  assert.deepEqual(calls, ['screenshot', 'evaluate']);
+  // Two evaluates: the viewport read and the space measurement, both after
+  // the one screenshot.
+  assert.deepEqual(calls, ['screenshot', 'evaluate', 'evaluate']);
 });
 
 test('capture-annotated runs to completion with no Node globals in scope, matching the real sandbox', async () => {
@@ -825,6 +837,102 @@ test('capture-annotated runs to completion with no Node globals in scope, matchi
   assert.equal(plain.png, '/Users/test/.fast-browser/screenshots/iso.png');
   assert.deepEqual(plain.resolved, { a: [1, 2, 3, 4] });
   assert.deepEqual(plain.missed, []);
+});
+
+// The space feature splits like page-affordances: every judgment the unit
+// suite can reach lives on the caller side -- side viability, band geometry,
+// the shrink schedule, the scan cap -- and all of it is visible in the plan
+// handed to page.evaluate, where a fake page can inspect it. Only the
+// geometric occupancy verdicts run in-page, and tests/e2e/annotate.test.mjs
+// covers those against a real page, including the classes point hit-testing
+// used to miss.
+test('capture-annotated plans space bands that clear the target and omit impossible sides', async () => {
+  const macro = await loadCaptureAnnotatedMacro();
+  const page = fakeCapturePage({
+    locators: { '.title': { count: 1, box: { x: 10, y: 20, width: 100, height: 30 } } },
+  });
+  await macro(page, { targets: { title: '.title' }, home: '/Users/test' });
+
+  assert.equal(page.spaceCalls.length, 1);
+  const plan = page.spaceCalls[0];
+  assert.equal(typeof plan.scanCap, 'number');
+  assert.ok(plan.scanCap > 0, 'the in-page walk is always bounded');
+  assert.equal(plan.targets.length, 1);
+  const [target] = plan.targets;
+  assert.equal(target.key, 'title');
+  // 14 px above the padded box and 4 px left of it are both beneath any
+  // minimum useful band size, so those sides never reach the page at all.
+  assert.deepEqual(target.sides.map((side) => side.side), ['below', 'right']);
+  // The shrink schedule: the edge nearest the target stays fixed 6 px below
+  // it, the far edge pulls in, and the cross extent is widened to the 120 px
+  // minimum centred on the target.
+  assert.deepEqual(target.sides[0].candidates.map((candidate) => candidate.box), [
+    [0, 56, 120, 240],
+    [0, 56, 120, 120],
+    [0, 56, 120, 60],
+  ]);
+  for (const side of target.sides) {
+    for (const { box } of side.candidates) {
+      const [x, y, w, h] = box;
+      assert.ok(x >= 0 && y >= 0 && x + w <= 1280 && y + h <= 800, 'band inside the viewport');
+      assert.ok(
+        x >= 116 || y >= 56 || x + w <= 4 || y + h <= 14,
+        'band clear of the padded target box',
+      );
+    }
+  }
+});
+
+test('capture-annotated returns the bands the page verified, keyed by resolved target', async () => {
+  const macro = await loadCaptureAnnotatedMacro();
+  const page = fakeCapturePage({
+    locators: { '.title': { count: 1, box: { x: 10, y: 20, width: 100, height: 30 } } },
+    spaceBands: [
+      { key: 'title', side: 'below', box: [0, 56, 120, 240] },
+      { key: 'title', side: 'right', box: [116, 14, 240, 42] },
+    ],
+  });
+  const result = await macro(page, { targets: { title: '.title' }, home: '/Users/test' });
+  assert.deepEqual(result.space, {
+    title: [
+      { side: 'below', box: [0, 56, 120, 240] },
+      { side: 'right', box: [116, 14, 240, 42] },
+    ],
+  });
+});
+
+test('capture-annotated omits a target from space when the page verifies no band', async () => {
+  const macro = await loadCaptureAnnotatedMacro();
+  const page = fakeCapturePage({
+    locators: { '.title': { count: 1, box: { x: 10, y: 20, width: 100, height: 30 } } },
+    spaceBands: [],
+  });
+  const result = await macro(page, { targets: { title: '.title' }, home: '/Users/test' });
+  assert.deepEqual(result.resolved.title, [10, 20, 100, 30]);
+  // An absent key is the honest answer; an empty array would read as a
+  // measurement where {} reads as a refusal, and refusal is what happened.
+  assert.deepEqual(result.space, {});
+});
+
+test('capture-annotated skips the space measurement entirely when space is false', async () => {
+  const macro = await loadCaptureAnnotatedMacro();
+  const page = fakeCapturePage({
+    locators: { '.title': { count: 1, box: { x: 10, y: 20, width: 100, height: 30 } } },
+  });
+  const result = await macro(page, {
+    targets: { title: '.title' }, home: '/Users/test', space: false,
+  });
+  assert.equal(page.spaceCalls.length, 0, 'no plan may reach the page');
+  assert.equal(result.space, undefined);
+  assert.deepEqual(result.resolved.title, [10, 20, 100, 30]);
+});
+
+test('capture-annotated returns an empty space map without sampling when nothing resolved', async () => {
+  const macro = await loadCaptureAnnotatedMacro();
+  const page = fakeCapturePage({ locators: { '.missing': { count: 0 } } });
+  const result = await macro(page, { targets: { a: '.missing' }, home: '/Users/test' });
+  assert.equal(page.spaceCalls.length, 0);
+  assert.deepEqual(result.space, {});
 });
 
 // page-affordances splits deliberately: the browser side of `page.evaluate`

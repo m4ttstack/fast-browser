@@ -17,7 +17,8 @@
       "04b504f09e6a4e0d14f17be43443d81174e0fb0701e38db157176dab6b58b991"
     ],
     "capture-annotated.js": [
-      "8f35bc6798c642a78c5e04117de8ff4e69a1cbab80d7a167621ac3eb94b522df"
+      "8f35bc6798c642a78c5e04117de8ff4e69a1cbab80d7a167621ac3eb94b522df",
+      "d1abda2ea66b6236171a358fc7717bb2cc2bc6da8abb7c63b42bb01e7b108e6d"
     ]
   },
   "indexSections": {
@@ -28,7 +29,8 @@
       "3a6c7f3474d29eca6cc016862f94f69ca5e96789a83b1264e68c526d96dab634"
     ],
     "capture-annotated": [
-      "84ca775a46a4acdd864aa7ad8dc18ae6a2b2dd2160241eaa90eb85395fa806e6"
+      "84ca775a46a4acdd864aa7ad8dc18ae6a2b2dd2160241eaa90eb85395fa806e6",
+      "459cb8e5440581f3edafc040181a15d42d0af00ef2a481523b8f81a1879c0cf2"
     ]
   }
 }
