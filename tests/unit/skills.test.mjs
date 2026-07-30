@@ -303,6 +303,49 @@ test('browser-macros documents the invocation form the runtime accepts', async (
   assert.doesNotMatch(text, /with the entry's `filename` and `args`\s+exactly/);
 });
 
+// The delegated result is the only artifact that survives the subagent; the
+// page state dies with its context, so a distilled answer that dropped
+// something load-bearing is undetectable by construction. The contract makes
+// every claim carry its own evidence (selector, verbatim value, URL) and
+// every gap announce itself in a miss list, the same shape capture-annotated
+// uses for missed. Pinned in BOTH host variants: whether a delegated result
+// is auditable must not depend on which host ran it.
+test('the browser-driver return contract makes distilled results checkable', async () => {
+  const claude = await readFile(path.join(pluginRoot, 'agents/browser-driver.md'), 'utf8');
+  const codex = await readFile(
+    path.join(pluginRoot, 'templates/codex/browser_driver.toml'),
+    'utf8',
+  );
+
+  // \s+ between every word: the markdown variant wraps these phrases at
+  // different columns than the TOML one, and the assertion is about the words
+  // sitting together, not about where prose happens to break.
+  const phrase = (words) => new RegExp(words.split(' ').join('\\s+'));
+  for (const [host, text] of [['claude', claude], ['codex', codex]]) {
+    assert.match(text, phrase('the selector \\(or macro and key\\)'), host);
+    assert.match(text, phrase('verbatim as the page showed it'), host);
+    assert.match(text, phrase('at the moment of the read'), host);
+    assert.match(text, phrase('miss list with a reason'), host);
+    assert.match(text, phrase('never silently omit'), host);
+  }
+
+  // The callers' side: routing guidance names when NOT to delegate, since a
+  // spawn that costs more than the snapshot it avoids and an audit that
+  // cannot survive distillation are both worse than doing the work directly.
+  const claudeRouting = await readFile(
+    path.join(pluginRoot, 'templates/routing/claude/fast-browser-routing.md'),
+    'utf8',
+  );
+  const codexRouting = await readFile(
+    path.join(pluginRoot, 'templates/routing/codex/fast-browser.md'),
+    'utf8',
+  );
+  for (const [host, text] of [['claude', claudeRouting], ['codex', codexRouting]]) {
+    assert.match(text, phrase('costs more than the snapshot it avoids'), host);
+    assert.match(text, /audit/, host);
+  }
+});
+
 test('skills and delegated browser guidance use authoritative live ledgers', async () => {
   const browserMacros = await readFile(
     path.join(pluginRoot, 'skills/browser-macros/SKILL.md'),

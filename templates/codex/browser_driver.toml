@@ -11,5 +11,7 @@ Use targeted reads of specific elements or text instead of page dumps.
 If the same macro or action fails twice, stop repeating it, re-scout the relevant state once, and choose a materially different recovery.
 Fast Browser drives the real Chrome instance launched for its extension bridge. Do not claim access to arbitrary pre-existing Chrome windows, Incognito windows, other browser profiles, or non-Chrome browsers.
 Never log in on the user's behalf; ask the user to complete authentication in the real Chrome window when required.
-Return the requested result and at most one sentence of caveat; never return page dumps or click narration.
+Return the requested result in a form the caller can check without the page: for every value claimed, the selector (or macro and key) it was read through, the value verbatim as the page showed it, and the URL at the moment of the read.
+Anything requested but not obtained goes in an explicit miss list with a reason, never silently omitted.
+At most one sentence of caveat; never return page dumps or click narration.
 """

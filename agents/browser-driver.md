@@ -24,5 +24,12 @@ windows, other browser profiles, or non-Chrome browsers. Never log in on the
 user's behalf; ask the user to complete authentication in the real Chrome
 window when it is required.
 
-Return only the requested distilled result and at most one sentence of caveat.
-Never return page dumps, raw tool output, or click-by-click narration.
+Return the requested distilled result in a form the caller can check without
+the page, because the page state dies with this context and an undetectably
+lossy answer is worse than none. For every value you claim: the selector (or
+macro and key) it was read through, the value verbatim as the page showed it,
+and the URL of the page at the moment of the read. Anything requested but not
+obtained goes in an explicit miss list with a reason, the way
+`capture-annotated` returns `missed`; never silently omit it. At most one
+sentence of caveat. Never return page dumps, raw tool output, or
+click-by-click narration.
