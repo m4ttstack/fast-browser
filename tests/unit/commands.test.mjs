@@ -3287,6 +3287,41 @@ test('CLI main renders exact setup human ending and JSON without invoking other 
   assert.deepEqual(JSON.parse(writes.join('')), report);
 });
 
+// A profile change resets session settings to the new profile's defaults by
+// design, which makes it the one deliberate config rewrite left on the
+// reinstall path, and therefore the one the human output must announce.
+test('CLI main announces a profile change and stays silent without one', async () => {
+  for (const [extra, expected] of [
+    [{ previousProfile: 'full' }, 'Note: profile changed from full to safe;'],
+    [{}, null],
+  ]) {
+    const writes = [];
+    await main(
+      { command: 'setup', json: false },
+      {
+        commands: {
+          setup: async () => ({
+            command: 'setup',
+            hosts: ['claude'],
+            profile: 'safe',
+            extensionPath: '/tmp/extension',
+            extensionManual: true,
+            changed: true,
+            ...extra,
+          }),
+        },
+        write: (text) => writes.push(text),
+      },
+    );
+    const output = writes.join('');
+    if (expected === null) assert.doesNotMatch(output, /profile changed/);
+    else {
+      assert.ok(output.includes(expected), output);
+      assert.match(output, /follow the new profile's defaults/);
+    }
+  }
+});
+
 // Setup keeps a built-in whose bytes it does not recognise, which means it can
 // finish having knowingly left a stale macro behind. That is the state the old
 // copy-and-skip installer left everywhere and nobody could see, so it has to

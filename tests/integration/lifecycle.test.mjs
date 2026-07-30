@@ -29,6 +29,7 @@ import {
   preflightRoutingRemoval,
 } from '../../lib/hosts/routing.mjs';
 import { parseRuntimeLock } from '../../lib/runtime/lock.mjs';
+import { defaultConfig } from '../../lib/core/config.mjs';
 
 function request(overrides = {}) {
   return {
@@ -329,6 +330,136 @@ test('a reinstalling setup preserves the configured annotation palette', async (
   assert.equal(report.changed, true, 'the profile changed, so this is the reinstall branch');
   assert.equal(savedConfig.annotation.palette, 'violet');
   assert.equal(report.config.annotation.palette, 'violet');
+});
+
+// Shared fixture for the rewrite-contract tests below: everything stubbed the
+// way the palette test above stubs it, with only the current config and the
+// request varying per test.
+function reinstallDeps({ current, onSave }) {
+  return {
+    checkPlatform: async () => {},
+    detectHosts: async () => ['claude', 'codex'],
+    ensureDataDirs: async () => {},
+    loadRuntimeLock: async () => ({
+      productVersion: '0.1.0-alpha.1',
+      sourceCommit: 'abc',
+      runtime: { sha256: 'a'.repeat(64) },
+      extension: { id: 'extension-id', version: '1.0.0' },
+    }),
+    installRuntime: async () => ({ version: '0.1.0-alpha.1' }),
+    installExtension: async () => ({ unpacked: '/tmp/extension' }),
+    installClaude: async () => ({ changed: false, changes: [] }),
+    installCodex: async () => ({ changed: false, changes: [] }),
+    getCodexVersion: async () => '0.99.0',
+    installBuiltinMacros: async () => {},
+    installLauncher: async () => ({
+      action: 'installed',
+      path: '/home/test/.local/bin/fast-browser',
+    }),
+    prepareRoutingTransition: async () => ({
+      nextState: { profile: 'full', files: [], blocks: [] },
+      apply: async () => ({ rollback: async () => {} }),
+    }),
+    saveConfig: async (_paths, config) => onSave(config),
+    pruneSessions: async () => ({ removedPaths: [], removedBytes: 0 }),
+    doctor: async () => ({ schemaVersion: 1, ok: true, checks: [] }),
+    loadConfig: async () => current,
+    paths: {
+      homeDir: '/home/test',
+      dataDir: '/home/test/.fast-browser',
+      configFile: '/home/test/.fast-browser/config.json',
+    },
+    interactive: true,
+  };
+}
+
+// The rewrite contract, pinned as a set: setup's reinstall branch may rewrite
+// exactly these config fields and must carry every other one by construction.
+// The key-set assertion is the structural half: a field added to
+// defaultConfig() tomorrow fails HERE first, forcing its author to classify
+// it as carried or rewritten instead of finding out one shipped release
+// later, which is how sessions, the palette, the connection mode, and the
+// profile itself were each lost in turn.
+test('the reinstall branch rewrites its declared fields and carries everything else', async () => {
+  const REWRITTEN = ['schemaVersion', 'productVersion', 'profile', 'hosts', 'sessions', 'runtime', 'managed'];
+  const CARRIED = {
+    connection: { mode: 'auto' },
+    annotation: { palette: 'crimson' },
+    video: { width: 1024, height: 768 },
+  };
+  assert.deepEqual(
+    Object.keys(defaultConfig()).sort(),
+    [...REWRITTEN, ...Object.keys(CARRIED)].sort(),
+    'a new config field must be classified as rewritten or carried in this test',
+  );
+
+  const current = {
+    ...migrationConfig(),
+    profile: 'full',
+    hosts: { claude: true, codex: false },
+    sessions: { enabled: false, retentionDays: 90 },
+    ...CARRIED,
+  };
+  let savedConfig;
+  await setup(
+    request({ hosts: ['claude', 'codex'], profile: 'full' }),
+    reinstallDeps({ current, onSave: (config) => { savedConfig = config; } }),
+  );
+
+  for (const [key, value] of Object.entries(CARRIED)) {
+    assert.deepEqual(savedConfig[key], value, `${key} is a configure choice setup has no claim on`);
+  }
+  assert.deepEqual(
+    savedConfig.sessions,
+    { enabled: false, retentionDays: 90 },
+    'an unchanged profile carries the user session settings too',
+  );
+});
+
+// The fourth instance of the class, live on 2026-07-30: a routine
+// `setup --host both` with no --profile downgraded a full-profile machine to
+// safe, and with it reset the session settings keyed on the profile. Omitted
+// means keep, on any machine that has a profile to keep.
+test('setup without --profile keeps the configured profile on a reinstall', async () => {
+  const current = {
+    ...migrationConfig(),
+    profile: 'full',
+    hosts: { claude: true, codex: false },
+    sessions: { enabled: true, retentionDays: 90 },
+  };
+  let savedConfig;
+  const report = await setup(
+    request({ hosts: ['claude', 'codex'], profile: undefined }),
+    reinstallDeps({ current, onSave: (config) => { savedConfig = config; } }),
+  );
+
+  assert.equal(savedConfig.profile, 'full');
+  assert.deepEqual(savedConfig.sessions, { enabled: true, retentionDays: 90 });
+  assert.equal(report.previousProfile, undefined, 'nothing changed, nothing to announce');
+});
+
+// Resetting sessions on a GENUINE profile change is correct and must
+// survive any structural carry; what was missing is the announcement.
+test('a genuine profile change resets sessions to the new defaults and says so', async () => {
+  const current = {
+    ...migrationConfig(),
+    profile: 'full',
+    hosts: { claude: true, codex: true },
+    sessions: { enabled: true, retentionDays: 90 },
+  };
+  let savedConfig;
+  const report = await setup(
+    request({ hosts: ['claude', 'codex'], profile: 'safe' }),
+    reinstallDeps({ current, onSave: (config) => { savedConfig = config; } }),
+  );
+
+  assert.equal(savedConfig.profile, 'safe');
+  assert.deepEqual(
+    savedConfig.sessions,
+    { enabled: false, retentionDays: 30 },
+    'the new profile defines the session defaults',
+  );
+  assert.equal(report.previousProfile, 'full');
 });
 
 test('a first-ever setup leaves the annotation palette unchosen', async () => {
