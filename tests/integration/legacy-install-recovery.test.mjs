@@ -21,6 +21,7 @@ import { resolvePaths } from '../../lib/core/paths.mjs';
 import { extensionInstallLocation } from '../../lib/extension/install.mjs';
 import { buildContentManifestDigest } from '../../lib/core/content-manifest.mjs';
 import { DOCTOR_CHECK_IDS } from '../../lib/doctor/checks.mjs';
+import { installLauncher } from '../../lib/core/launcher.mjs';
 import { installBuiltinMacros } from '../../lib/macros/install.mjs';
 import { runtimeLockIdentity } from '../../lib/runtime/lock.mjs';
 
@@ -204,6 +205,10 @@ async function fixtureHome(prefix) {
   const home = await mkdtemp(path.join(os.tmpdir(), prefix));
   const paths = { ...resolvePaths({ homeDir: home }), pluginRoot: PLUGIN_ROOT };
   await installBuiltinMacros(paths);
+  // The launcher shim is refreshed on every outcome like the built-ins, so a
+  // machine that ran setup already has it; installing it here keeps `changed`
+  // about the legacy markers under test.
+  await installLauncher(paths);
   return paths;
 }
 

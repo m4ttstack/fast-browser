@@ -111,6 +111,11 @@ and extension, installs the host plugin adapters, writes owned routing state,
 and prints the unpacked extension directory. It does not load the extension
 into Chrome for you.
 
+Setup also installs a `fast-browser` command into `~/.local/bin`, so the bare
+`fast-browser <command>` invocations used throughout this README work without
+npx. If your shell cannot find it, add
+`export PATH="$HOME/.local/bin:$PATH"` to your shell profile.
+
 ### Load the Chrome extension
 
 1. Open `chrome://extensions` in Google Chrome

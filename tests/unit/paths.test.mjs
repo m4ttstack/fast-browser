@@ -21,6 +21,15 @@ test('resolves every mutable path below the supplied home', () => {
   assert.equal(paths.pluginRoot, '/plugin');
 });
 
+// The launcher paths sit under ~/.local/bin rather than the data dir, and
+// deriving them here is what lets every test point them at a temp home
+// instead of the developer's real one.
+test('launcher paths resolve below the supplied home, outside the data dir', () => {
+  const paths = resolvePaths({ homeDir: '/tmp/fb-home', pluginRoot: '/plugin' });
+  assert.equal(paths.launcherDir, '/tmp/fb-home/.local/bin');
+  assert.equal(paths.launcherFile, '/tmp/fb-home/.local/bin/fast-browser');
+});
+
 test('screenshotsDir is an exact data-directory child', () => {
   const paths = resolvePaths({ homeDir: '/tmp/fb-home', pluginRoot: '/plugin' });
   assert.equal(paths.screenshotsDir, '/tmp/fb-home/.fast-browser/screenshots');

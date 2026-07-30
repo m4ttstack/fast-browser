@@ -16,6 +16,7 @@ import { resolvePaths } from '../../lib/core/paths.mjs';
 import { DOCTOR_CHECK_IDS } from '../../lib/doctor/checks.mjs';
 import { extensionInstallLocation } from '../../lib/extension/install.mjs';
 import { buildContentManifestDigest } from '../../lib/core/content-manifest.mjs';
+import { installLauncher } from '../../lib/core/launcher.mjs';
 import { installBuiltinMacros } from '../../lib/macros/install.mjs';
 import { runtimeLockIdentity } from '../../lib/runtime/lock.mjs';
 
@@ -191,6 +192,11 @@ async function fixtureHome(prefix) {
   const home = await mkdtemp(path.join(tmpdir(), prefix));
   const paths = { ...resolvePaths({ homeDir: home }), pluginRoot: PLUGIN_ROOT };
   await installBuiltinMacros(paths);
+  // The launcher shim is refreshed on every outcome exactly like the
+  // built-ins, so a machine that has run setup before already has it; without
+  // this the no-change scenarios would report `changed: true` for finally
+  // installing a shim, which is true but unrelated to the pinned artifacts.
+  await installLauncher(paths);
   return paths;
 }
 

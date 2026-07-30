@@ -14,6 +14,7 @@ import { saveConfig } from '../../lib/core/files.mjs';
 import { resolvePaths } from '../../lib/core/paths.mjs';
 import { DOCTOR_CHECK_IDS } from '../../lib/doctor/checks.mjs';
 import { extensionInstallLocation } from '../../lib/extension/install.mjs';
+import { installLauncher } from '../../lib/core/launcher.mjs';
 import { BUILTIN_NAMES, installBuiltinMacros, macroIndexName } from '../../lib/macros/install.mjs';
 import { runtimeLockIdentity } from '../../lib/runtime/lock.mjs';
 
@@ -218,6 +219,10 @@ async function currentInstall(t, prefix) {
   await writeExtensionInstall(paths, lock);
   await saveConfig(paths, configFor(lock));
   await mkdir(paths.macrosDir, { recursive: true, mode: 0o700 });
+  // A machine that ran setup already has the launcher shim; without it, every
+  // scenario here would report `changed: true` for installing the shim rather
+  // than for the macro behaviour under test.
+  await installLauncher(paths);
   return { paths, lock };
 }
 
@@ -230,6 +235,8 @@ async function upgradeInstall(t, prefix) {
   await writeExtensionInstall(paths, oldLock);
   await saveConfig(paths, configFor(oldLock));
   await mkdir(paths.macrosDir, { recursive: true, mode: 0o700 });
+  // Same reason as currentInstall above.
+  await installLauncher(paths);
   return { paths, newLock };
 }
 

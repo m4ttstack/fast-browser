@@ -694,6 +694,8 @@ test('doctor real composition accepts complete injected platform adapters with n
         configFile: '/home/test/.fast-browser/config.json',
         runtimeDir: '/home/test/.fast-browser/runtime',
         extensionDir: '/home/test/.fast-browser/extension',
+        launcherDir: '/home/test/.local/bin',
+        launcherFile: '/home/test/.local/bin/fast-browser',
         pluginRoot: '/plugin',
       },
       config,
@@ -704,6 +706,8 @@ test('doctor real composition accepts complete injected platform adapters with n
       },
       platform: 'darwin',
       nodeVersion: '22.0.0',
+      env: { PATH: '/home/test/.local/bin:/usr/bin' },
+      inspectLauncher: async () => ({ status: 'ok' }),
       checkChrome: async () => {},
       detectHosts: async () => ['claude', 'codex'],
       preflightClaude: async () => ({ installed: true }),
@@ -2742,6 +2746,10 @@ test('ordinary uninstall preflights all targets and retains data and Keychain', 
       removeRouting: async () => events.push('remove-routing'),
       uninstallClaude: async () => events.push('remove-claude'),
       uninstallCodex: async () => events.push('remove-codex'),
+      removeLauncher: async () => {
+        events.push('remove-launcher');
+        return { removed: true };
+      },
       saveConfig: async () => events.push('save'),
       deleteToken: async () => events.push('delete-token'),
       removeDataDir: async () => events.push('remove-data'),
@@ -2755,10 +2763,12 @@ test('ordinary uninstall preflights all targets and retains data and Keychain', 
     'remove-routing',
     'remove-claude',
     'remove-codex',
+    'remove-launcher',
     'save',
   ]);
   assert.equal(report.dataRetained, true);
   assert.equal(report.keychainRetained, true);
+  assert.equal(report.launcherRemoved, true);
 });
 
 test('host-selective uninstall removes only exact selected ownership and retains the other host', async () => {
@@ -2810,6 +2820,9 @@ test('host-selective uninstall removes only exact selected ownership and retains
       },
       uninstallClaude: async () => events.push('remove-claude'),
       uninstallCodex: async () => assert.fail('Codex registration must remain'),
+      // A host remains configured, so the CLI (and its PATH shim) is still in
+      // use and must stay.
+      removeLauncher: async () => assert.fail('launcher must remain while a host stays configured'),
       saveConfig: async (_paths, value) => {
         retained = value;
         events.push('save');
@@ -2845,6 +2858,10 @@ test('host-selective uninstall removes only exact selected ownership and retains
         secondEvents.push(`remove-routing:${managedState.files.length}:${managedState.blocks.length}`);
       },
       uninstallCodex: async () => secondEvents.push('remove-codex'),
+      removeLauncher: async () => {
+        secondEvents.push('remove-launcher');
+        return { removed: true };
+      },
       saveConfig: async (_paths, value) => {
         finalConfig = value;
         secondEvents.push('save');
@@ -2856,6 +2873,7 @@ test('host-selective uninstall removes only exact selected ownership and retains
     'preflight-host:codex',
     'remove-routing:1:2',
     'remove-codex',
+    'remove-launcher',
     'save',
   ]);
   assert.deepEqual(finalConfig.hosts, { claude: false, codex: false });
@@ -2926,6 +2944,7 @@ test('purge refuses aliases and requires explicit confirmation', async () => {
     loadConfig: async () => validConfig({ hosts: { claude: false, codex: false } }),
     preflightRouting: async () => {},
     removeRouting: async () => {},
+    removeLauncher: async () => ({ removed: false }),
     saveConfig: async () => {},
     confirmPurge: async () => true,
     inspectDataDir: async () => ({ isDirectory: true, isSymbolicLink: false, realpath: '/home/test/.fast-browser' }),
@@ -2963,6 +2982,7 @@ test('purge revalidates the exact root immediately before deletion', async () =>
         loadConfig: async () => validConfig({ hosts: { claude: false, codex: false } }),
         preflightRouting: async () => {},
         removeRouting: async () => {},
+        removeLauncher: async () => ({ removed: false }),
         confirmPurge: async () => true,
         inspectDataDir: async () => {
           inspections += 1;
@@ -3010,6 +3030,7 @@ test('production purge confirmation requires a real TTY and exact affirmative an
     loadConfig: async () => validConfig({ hosts: { claude: false, codex: false } }),
     preflightRouting: async () => {},
     removeRouting: async () => {},
+    removeLauncher: async () => ({ removed: false }),
     inspectDataDir: async () => inspected,
     saveConfig: async () => {},
   };
@@ -3075,6 +3096,7 @@ test('ordinary uninstall reports recoverable state when retained config cannot b
         preflightHostRemoval: async () => {},
         removeRouting: async () => {},
         uninstallClaude: async () => {},
+        removeLauncher: async () => ({ removed: true }),
         saveConfig: async () => {
           throw new Error('/Users/secret');
         },
@@ -3233,6 +3255,92 @@ test('CLI main reports newly installed built-in macros as a count without naming
   }
 });
 
+// Setup never clobbers a foreign fast-browser at the launcher path, which
+// means it can finish with the documented bare commands still resolving to
+// somebody else's binary. That has to reach the human ending, with the
+// adopt-ours remedy, and without echoing the path (the JSON report names it).
+test('CLI main reports a preserved foreign launcher with the adoption remedy', async () => {
+  for (const [action, expected] of [
+    ['current', null],
+    ['installed', null],
+    [
+      'preserved',
+      'Note: an existing fast-browser command was left untouched;'
+        + ' delete it and rerun setup to adopt the managed launcher.',
+    ],
+  ]) {
+    const writes = [];
+    await main(
+      { command: 'setup', json: false },
+      {
+        env: { PATH: '/home/test/.local/bin:/usr/bin' },
+        commands: {
+          setup: async () => ({
+            command: 'setup',
+            hosts: ['claude'],
+            profile: 'full',
+            extensionPath: '/tmp/extension',
+            extensionManual: true,
+            changed: true,
+            launcher: { action, path: '/home/test/.local/bin/fast-browser' },
+          }),
+        },
+        write: (text) => writes.push(text),
+      },
+    );
+    const output = writes.join('');
+    if (expected === null) {
+      assert.doesNotMatch(output, /left untouched/);
+    } else {
+      assert.ok(output.includes(expected), output);
+      assert.ok(
+        !output.includes('/home/test/.local/bin/fast-browser'),
+        'the human ending must not name the launcher path',
+      );
+    }
+  }
+});
+
+// The one thing a fresh install most often still needs from the user. The
+// line is printed with a literal $HOME so it can be pasted into any shell
+// profile and so the expanded home directory never reaches our output.
+test('CLI main prints the exact PATH export line only when the launcher directory is off PATH', async () => {
+  const report = () => ({
+    command: 'setup',
+    hosts: ['claude'],
+    profile: 'full',
+    extensionPath: '/tmp/extension',
+    extensionManual: true,
+    changed: true,
+    launcher: { action: 'installed', path: '/home/test/.local/bin/fast-browser' },
+  });
+  const note = 'Note: add export PATH="$HOME/.local/bin:$PATH" to your shell profile'
+    + ' so the fast-browser command is found.';
+
+  const offPath = [];
+  await main(
+    { command: 'setup', json: false },
+    {
+      env: { PATH: '/usr/bin:/bin' },
+      commands: { setup: async () => report() },
+      write: (text) => offPath.push(text),
+    },
+  );
+  assert.ok(offPath.join('').includes(note), offPath.join(''));
+  assert.ok(!offPath.join('').includes('/home/test/.local'), 'the note must use the literal $HOME');
+
+  const onPath = [];
+  await main(
+    { command: 'setup', json: false },
+    {
+      env: { PATH: '/usr/bin:/home/test/.local/bin' },
+      commands: { setup: async () => report() },
+      write: (text) => onPath.push(text),
+    },
+  );
+  assert.doesNotMatch(onPath.join(''), /export PATH/);
+});
+
 test('CLI migrate apply human mode adds a count-only warning exactly when unmanaged candidates exist', async () => {
   const writes = [];
   const cleanReport = {
@@ -3364,6 +3472,7 @@ test('CLI production dispatch composes setup entirely from injected adapters', a
       installExtension: async () => ({ unpacked: '/tmp/extension' }),
       installClaude: async () => ({ host: 'claude', changed: false, changes: [] }),
       installBuiltinMacros: async () => {},
+      installLauncher: async () => ({ action: 'installed', path: '/home/test/.local/bin/fast-browser' }),
       prepareRoutingTransition: async () => ({
         nextState: { profile: 'safe', files: [], blocks: [] },
         apply: async () => ({ rollback: async () => {} }),
@@ -3406,6 +3515,7 @@ test('setup carries the built-in macros it deliberately left alone into its repo
         index: [{ name: 'page-recon', action: 'preserved' }],
         preserved: ['page-recon.js', 'MACROS.md#page-recon'],
       }),
+      installLauncher: async () => ({ action: 'current', path: '/home/test/.local/bin/fast-browser' }),
       prepareRoutingTransition: async () => ({
         nextState: { profile: 'safe', files: [], blocks: [] },
         apply: async () => ({ rollback: async () => {} }),

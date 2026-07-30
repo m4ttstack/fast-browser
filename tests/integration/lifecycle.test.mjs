@@ -76,6 +76,10 @@ test('setup orchestrates lifecycle work in the exact deterministic order', async
     installClaude: record('install-claude', { changed: true }),
     installCodex: record('install-codex', { changed: true }),
     installBuiltinMacros: record('install-builtins'),
+    installLauncher: record('install-launcher', {
+      action: 'installed',
+      path: '/home/test/.local/bin/fast-browser',
+    }),
     pruneSessions: record('prune-sessions', { removedPaths: [], removedBytes: 0 }),
     prepareRoutingTransition: async () => {
       events.push('prepare-routing');
@@ -103,6 +107,7 @@ test('setup orchestrates lifecycle work in the exact deterministic order', async
     'install-claude',
     'install-codex',
     'install-builtins',
+    'install-launcher',
     'prepare-routing',
     'apply-routing',
     'save-config',
@@ -149,6 +154,10 @@ test('setup persists the accepted lock top-level source commit', async () => {
     installClaude: async () => ({ host: 'claude', changed: false, changes: [] }),
     installCodex: async () => ({ host: 'codex', changed: false, changes: [] }),
     installBuiltinMacros: async () => {},
+    installLauncher: async () => ({
+      action: 'installed',
+      path: '/home/test/.local/bin/fast-browser',
+    }),
     prepareRoutingTransition: async () => ({
       nextState: { profile: 'full', files: [], blocks: [] },
       apply: async () => ({ rollback: async () => {} }),
@@ -188,6 +197,10 @@ test('setup carries selected hosts and the detected Codex version into routing',
     installExtension: async () => ({ unpacked: '/tmp/extension' }),
     installCodex: async () => ({ changed: true, changes: ['plugin-installed'] }),
     installBuiltinMacros: async () => {},
+    installLauncher: async () => ({
+      action: 'installed',
+      path: '/home/test/.local/bin/fast-browser',
+    }),
     prepareRoutingTransition: async (input) => {
       routingInput = input;
       return {
@@ -235,6 +248,10 @@ test('setup removes a prior Codex host without probing its unavailable version',
     installExtension: async () => ({ unpacked: '/tmp/extension' }),
     installClaude: async () => ({ changed: false, changes: [] }),
     installBuiltinMacros: async () => {},
+    installLauncher: async () => ({
+      action: 'installed',
+      path: '/home/test/.local/bin/fast-browser',
+    }),
     prepareRoutingTransition: async (input) => {
       routingInput = input;
       return {
@@ -286,6 +303,10 @@ test('a reinstalling setup preserves the configured annotation palette', async (
     installExtension: async () => ({ unpacked: '/tmp/extension' }),
     installClaude: async () => ({ changed: false, changes: [] }),
     installBuiltinMacros: async () => {},
+    installLauncher: async () => ({
+      action: 'installed',
+      path: '/home/test/.local/bin/fast-browser',
+    }),
     prepareRoutingTransition: async () => ({
       nextState: { profile: 'full', files: [], blocks: [] },
       apply: async () => ({ rollback: async () => {} }),
@@ -325,6 +346,10 @@ test('a first-ever setup leaves the annotation palette unchosen', async () => {
     installExtension: async () => ({ unpacked: '/tmp/extension' }),
     installClaude: async () => ({ changed: false, changes: [] }),
     installBuiltinMacros: async () => {},
+    installLauncher: async () => ({
+      action: 'installed',
+      path: '/home/test/.local/bin/fast-browser',
+    }),
     prepareRoutingTransition: async () => ({
       nextState: { profile: 'safe', files: [], blocks: [] },
       apply: async () => ({ rollback: async () => {} }),
@@ -367,6 +392,10 @@ function reinstallingSetup({ current, hosts, profile, saveConfig, pruneSessions 
     installClaude: async () => ({ changed: false, changes: [] }),
     installCodex: async () => ({ changed: false, changes: [] }),
     installBuiltinMacros: async () => {},
+    installLauncher: async () => ({
+      action: 'installed',
+      path: '/home/test/.local/bin/fast-browser',
+    }),
     prepareRoutingTransition: async () => ({
       nextState: { profile, files: [], blocks: [] },
       apply: async () => ({ rollback: async () => {} }),
@@ -566,6 +595,9 @@ test('second matching setup is a true mutation no-op', async () => {
     // an installer reporting nothing installed and nothing refreshed is
     // exactly the "no writes" input that keeps `changed` false.
     installBuiltinMacros: async () => ({ installed: [], refreshed: [], preserved: [] }),
+    // Current for the same reason: an up-to-date shim is not rewritten, which
+    // is what keeps this rerun a genuine no-op with `changed: false`.
+    installLauncher: async () => ({ action: 'current', path: '/home/test/.local/bin/fast-browser' }),
     paths: {},
   });
   assert.deepEqual(events, ['check-platform', 'detect-hosts', 'doctor']);
@@ -594,6 +626,9 @@ test('matching setup is a no-op without a test-only current-state hook', async (
     // nothing refreshed is the input under which this path must still report
     // no mutation and `changed: false`.
     installBuiltinMacros: async () => ({ installed: [], refreshed: [], preserved: [] }),
+    // Current for the same reason: an up-to-date shim is not rewritten, which
+    // is what keeps this rerun a genuine no-op with `changed: false`.
+    installLauncher: async () => ({ action: 'current', path: '/home/test/.local/bin/fast-browser' }),
     paths: {},
   });
   assert.deepEqual(events, []);
@@ -660,6 +695,10 @@ test('setup uses the exact routing receipt when config persistence fails', async
       installExtension: async () => ({ unpacked: '/tmp/extension' }),
       installClaude: async () => ({ host: 'claude', changed: true }),
       installBuiltinMacros: async () => {},
+      installLauncher: async () => ({
+        action: 'installed',
+        path: '/home/test/.local/bin/fast-browser',
+      }),
       prepareRoutingTransition: async () => {
         events.push('routing:prepare');
         return {
@@ -738,6 +777,10 @@ test('post-routing config validation restores exact routing before host cleanup'
     uninstallCodex: async () => events.push('cleanup-codex'),
     uninstallClaude: async () => events.push('cleanup-claude'),
     installBuiltinMacros: async () => {},
+    installLauncher: async () => ({
+      action: 'installed',
+      path: '/home/test/.local/bin/fast-browser',
+    }),
     prepareRoutingTransition: async (input) => {
       const prepared = await prepareRoutingTransition(input);
       return {
@@ -799,6 +842,10 @@ test('setup maps a routing recovery-required apply failure to its fixed recovery
       installExtension: async () => ({ unpacked: '/tmp/extension' }),
       installClaude: async () => ({ host: 'claude', changed: false, changes: [] }),
       installBuiltinMacros: async () => {},
+      installLauncher: async () => ({
+        action: 'installed',
+        path: '/home/test/.local/bin/fast-browser',
+      }),
       prepareRoutingTransition: async () => ({
         nextState: { profile: 'full', files: [], blocks: [] },
         apply: async () => {
@@ -856,6 +903,10 @@ test('setup preserves external routing drift and redacts exact prior receipt sta
       installExtension: async () => ({ unpacked: '/tmp/extension' }),
       installClaude: async () => ({ host: 'claude', changed: false, changes: [] }),
       installBuiltinMacros: async () => {},
+      installLauncher: async () => ({
+        action: 'installed',
+        path: '/home/test/.local/bin/fast-browser',
+      }),
       prepareRoutingTransition: async (options) => {
         preparations += 1;
         return prepareRoutingTransition(options);
@@ -929,6 +980,10 @@ test('setup restores prior routing after config persistence failure', async (t) 
     installExtension: async () => ({ unpacked: '/tmp/extension' }),
     installCodex: async () => ({ host: 'codex', changed: false, changes: [] }),
     installBuiltinMacros: async () => {},
+    installLauncher: async () => ({
+      action: 'installed',
+      path: '/home/test/.local/bin/fast-browser',
+    }),
     getCodexVersion: async () => 'codex-cli 0.145.0',
     saveConfig: async () => {
       throw new Error('injected config persistence failure');
@@ -998,6 +1053,10 @@ test('setup restores the exact prior Codex routing container when an override ap
       installClaude: async () => ({ host: 'claude', changed: false, changes: [] }),
       installCodex: async () => ({ host: 'codex', changed: false, changes: [] }),
       installBuiltinMacros: async () => {},
+      installLauncher: async () => ({
+        action: 'installed',
+        path: '/home/test/.local/bin/fast-browser',
+      }),
       getCodexVersion: async () => 'codex-cli 0.145.0',
       saveConfig: async () => {
         throw new Error('injected config persistence failure');
@@ -1055,6 +1114,10 @@ test('setup rollback preserves prior Codex agent ownership across version drift'
       installExtension: async () => ({ unpacked: '/tmp/extension' }),
       installClaude: async () => ({ host: 'claude', changed: false, changes: [] }),
       installBuiltinMacros: async () => {},
+      installLauncher: async () => ({
+        action: 'installed',
+        path: '/home/test/.local/bin/fast-browser',
+      }),
       getCodexVersion: async () => 'codex-cli 0.145.0',
       saveConfig: async () => {
         throw new Error('injected config persistence failure');
@@ -1140,6 +1203,10 @@ test('post-save retention failure preserves the tracked installation', async () 
         changes: ['plugin-installed'],
       }),
       installBuiltinMacros: async () => {},
+      installLauncher: async () => ({
+        action: 'installed',
+        path: '/home/test/.local/bin/fast-browser',
+      }),
       prepareRoutingTransition: async () => ({
         nextState: { profile: 'full', files: [], blocks: [] },
         apply: async () => ({ rollback: async () => {} }),
