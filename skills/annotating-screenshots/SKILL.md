@@ -47,8 +47,10 @@ elements, and the boxes then describe a layout the PNG does not show.
 
 **Never:**
 
-- Annotate a PNG captured by an earlier call, an earlier turn, or anyone else.
-  Re-run the macro; a fresh capture is cheap and a correlated one is a guess.
+- Annotate a PNG captured by an earlier call or an earlier turn of a live
+  page. Re-run the macro; a fresh capture is cheap and a correlated one is a
+  guess. (A PNG with no live page behind it cannot be re-rendered; that is
+  import mode, below.)
 - Measure with your own `boundingBox()` or `getBoundingClientRect()` call.
   Correct numbers from a second page visit are still the wrong numbers.
 - Type, recompute, or carry over `measured`. Copy `schemaVersion` and
@@ -56,7 +58,8 @@ elements, and the boxes then describe a layout the PNG does not show.
   base image matches the boxes, so hand-writing it passes the check while lying
   to it. Real pages often report differing `inner` and `client` widths (a
   scrollbar), which is exactly what it exists to catch.
-- Estimate coordinates by reading the PNG.
+- Estimate coordinates by reading the PNG, except by the escalation ladder
+  below when the DOM cannot address the target at all.
 
 ## Missed keys
 
@@ -190,6 +193,34 @@ chip is 117 px wide by 28 px tall at `size: 14`, centred across the `below`
 band `space` returned for `estimate`, `[759, 223, 120, 240]`, and 6 px inside
 its top edge, the edge nearest the target. Nothing was read off the image.
 
+## When the DOM cannot address it
+
+Some things on a real page have no selector and never will: a bar inside a
+canvas chart, a row inside a cross-origin iframe, a face inside a photo, a
+closed shadow root, a `::before` badge, one word inside a paragraph. The macro
+tells you when you are in this territory: a resolved key whose element is a
+`canvas`, `iframe`, `img`, `video`, `embed`, or `object` appears in `opaque`
+with its tag. Retrying selectors past that flag is wasted work; no selector
+reaches inside. Escalate one step at a time, and never skip a step:
+
+1. **Measured selector.** The default. Everything above binds.
+2. **Measured container plus fixed arithmetic.** The opaque element's own box
+   IS measured, so express the region as arithmetic on it: the upper-left
+   quadrant of the chart's box, the middle third of the photo. Same rule as
+   chip placement: derived numbers, stated derivation, nothing read off the
+   image.
+3. **Within-capture inspection.** Only when the region cannot be expressed as
+   arithmetic on any measured box (a face somewhere in a photo, a word inside
+   a paragraph): read the capture PNG and place the box by inspection. Keep
+   `base` and the macro's `measured` block exactly as the pipeline produced
+   them, so the capture-swap check still holds. Say in what you deliver that
+   those coordinates were placed by inspection, and read the output PNG with
+   double the care, because no measurement backs them.
+4. **Import mode.** No live page at all. Next section.
+
+Steps 2 and 3 exist for the enumerated cases only. A target the DOM can
+address gets a selector, full stop.
+
 ## Foreign images
 
 A PNG that did not come from `capture-annotated.js` -- a bug screenshot pulled
@@ -201,7 +232,7 @@ as with the macro path), which must be outside `~/.fast-browser/screenshots/`.
 
 ```json
 {
-  "import": "~/Downloads/ticket-4471.png",
+  "import": "/absolute/path/to/ticket-4471.png",
   "out": "ticket-4471-redacted.png",
   "annotations": [
     { "type": "blur", "box": [314, 122, 111, 29], "amount": 15 }
@@ -209,10 +240,14 @@ as with the macro path), which must be outside `~/.fast-browser/screenshots/`.
 }
 ```
 
+A literal `~` is rejected, not expanded; the CLI only accepts a path that is
+already absolute.
+
 Coordinates are read off the image, because there is no live page to measure.
-This is the **only** situation where reading coordinates off the image is
-allowed. Anything you can re-render is a live capture, and every rule above
-still binds it: one call, one truth, and never a hand-authored `measured`. The
+Alongside ladder step 3 above, this is the only place reading coordinates off
+an image is allowed, and the only one with no measured block at all. Anything
+you can re-render is a live capture, and every rule above still binds it: one
+call, one truth, and never a hand-authored `measured`. The
 `blur.amount` rule applies to a foreign image exactly as to a capture, and so
 does step 4: read the output PNG yourself before delivering it.
 

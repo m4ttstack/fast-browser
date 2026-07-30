@@ -64,6 +64,7 @@ async (page, args) => {
 
     const resolved = {};
     const missed = [];
+    const opaque = {};
     for (const key of names) {
       const selector = targets[key];
       const locator = page.locator(selector);
@@ -107,6 +108,17 @@ async (page, args) => {
         continue;
       }
       resolved[key] = rect;
+      // An opaque element's box is measurable but its interior is not: a bar
+      // inside a canvas chart, a row inside a cross-origin iframe, a face in
+      // a photo. No selector can ever reach deeper, so retrying selectors is
+      // wasted work, and the caller has to know that up front to escalate to
+      // container arithmetic or within-capture inspection instead. Reading a
+      // tag name mutates nothing, so the screenshot-then-measure adjacency
+      // holds.
+      const tag = await locator.evaluate((element) => element.tagName.toLowerCase());
+      if (['canvas', 'iframe', 'frame', 'video', 'embed', 'object', 'img'].includes(tag)) {
+        opaque[key] = tag;
+      }
     }
 
     // A label belongs in empty space, and empty space is usually not an
@@ -364,6 +376,7 @@ async (page, args) => {
       schemaVersion: 1, name, png, viewport, resolved, missed,
     };
     if (space) result.space = space;
+    if (Object.keys(opaque).length > 0) result.opaque = opaque;
     return result;
   } catch (error) {
     return { failedStep: 'capture', error: String(error && error.message), url: page.url() };

@@ -47,7 +47,11 @@
   measured evidence, not a substitute for reviewing the annotated output. A
   side with no empty room of useful size is omitted, and a key with no
   usable side at all is absent from `space`; absence is the honest answer,
-  never a license to eyeball a spot. Runs with no Node globals in scope, so
+  never a license to eyeball a spot. A resolved target whose element is a
+  `canvas`, `iframe`, `img`, `video`, `embed`, or `object` is listed in
+  `opaque` with its tag: its box is measured but its interior is beyond any
+  selector, so escalate to arithmetic on the measured box instead of retrying
+  selectors that cannot exist. Runs with no Node globals in scope, so
   it cannot read `$HOME` itself; pass your own absolute home directory as
   `home`.
 - Params: `{ targets: Record<string, string>, out?: string (default "capture"), home: string (your absolute home directory path), space?: boolean (default true; false skips the empty-band measurement) }`

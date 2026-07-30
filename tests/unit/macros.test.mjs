@@ -157,6 +157,11 @@ function fakeCapturePage({
         async boundingBox() {
           return entry && entry.box !== undefined ? entry.box : null;
         },
+        // The macro reads the resolved element's tag to flag opaque interiors;
+        // fixtures declare `tag` per locator, defaulting to a plain container.
+        async evaluate(callback) {
+          return callback({ tagName: (entry?.tag ?? 'div').toUpperCase() });
+        },
       };
     },
     url() {
@@ -716,6 +721,42 @@ test('capture-annotated resolves visible targets and reports every miss reason',
   assert.deepEqual(byKey.duplicate, { key: 'duplicate', reason: 'ambiguous', count: 3 });
   assert.deepEqual(byKey.hidden, { key: 'hidden', reason: 'not-visible' });
   assert.deepEqual(byKey.offscreen, { key: 'offscreen', reason: 'out-of-view' });
+});
+
+// A canvas chart, an iframe, or a photo has a measurable box and an
+// unmeasurable interior; no selector will ever reach deeper. The macro says so
+// up front, per resolved key, so the caller escalates to container arithmetic
+// instead of burning calls on selectors that cannot exist.
+test('capture-annotated flags resolved targets whose interiors no selector can reach', async () => {
+  const macro = await loadCaptureAnnotatedMacro();
+  const page = fakeCapturePage({
+    locators: {
+      '#chart': { count: 1, box: { x: 10, y: 20, width: 300, height: 200 }, tag: 'canvas' },
+      '#frame': { count: 1, box: { x: 10, y: 240, width: 300, height: 200 }, tag: 'iframe' },
+      '#photo': { count: 1, box: { x: 320, y: 20, width: 100, height: 100 }, tag: 'img' },
+      '.title': { count: 1, box: { x: 320, y: 140, width: 100, height: 30 } },
+    },
+  });
+  const result = await macro(page, {
+    targets: {
+      chart: '#chart', frame: '#frame', photo: '#photo', title: '.title',
+    },
+    home: '/Users/test',
+  });
+
+  assert.deepEqual(result.opaque, { chart: 'canvas', frame: 'iframe', photo: 'img' });
+  assert.ok(result.resolved.chart, 'opaque targets still resolve; the flag is additive');
+  assert.ok(result.resolved.title, 'ordinary targets carry no flag');
+});
+
+test('capture-annotated omits opaque entirely when every resolved target is ordinary', async () => {
+  const macro = await loadCaptureAnnotatedMacro();
+  const page = fakeCapturePage({
+    locators: { '.title': { count: 1, box: { x: 10, y: 20, width: 100, height: 30 } } },
+  });
+  const result = await macro(page, { targets: { title: '.title' }, home: '/Users/test' });
+
+  assert.equal(result.opaque, undefined);
 });
 
 test('capture-annotated never reports a resolved box with a zero-or-negative dimension', async () => {

@@ -67,7 +67,9 @@ const PAGE = `data:text/html,${encodeURIComponent(`
 .row{display:flex;justify-content:space-between;padding:9px 20px}.v{font-weight:600}</style>
 <div class="row"><span>Name</span><span class="v" id="nm">Dana Whitfield</span></div>
 <div class="row"><span>Policy</span><span class="v">PA-99-4471-02</span></div>
-<div class="row"><span>Estimate</span><span class="v" id="est">$4,182.60</span></div>`)}`;
+<div class="row"><span>Estimate</span><span class="v" id="est">$4,182.60</span></div>
+<img id="ph" width="24" height="24" alt="claimant"
+  src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7">`)}`;
 
 // A fixture for the space measurement: #open sits in the top-left corner
 // with genuinely empty viewport to its right and below, while #packed is
@@ -254,6 +256,7 @@ test('capture-annotated resolves, reports misses, and annotate rasterises', asyn
     targets: {
       estimate: '#est', // exactly one match
       name: '#nm', // exactly one match
+      photo: '#ph', // resolves, and its interior is beyond any selector
       missing: '#not-here', // no match
       ambiguous: '.v', // three matches
     },
@@ -262,6 +265,12 @@ test('capture-annotated resolves, reports misses, and annotate rasterises', asyn
   assert.ok(measured.resolved.estimate, 'the unambiguous target resolves');
   assert.ok(measured.resolved.name, 'the redaction target resolves');
   assert.equal(measured.resolved.ambiguous, undefined, 'a multi-match never resolves');
+  assert.ok(measured.resolved.photo, 'an opaque target still resolves');
+  assert.deepEqual(
+    measured.opaque,
+    { photo: 'img' },
+    'the img is flagged opaque and the text targets are not',
+  );
 
   const reasons = Object.fromEntries(measured.missed.map((m) => [m.key, m.reason]));
   assert.equal(reasons.missing, 'no-match');
