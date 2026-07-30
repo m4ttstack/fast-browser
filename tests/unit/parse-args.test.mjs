@@ -28,11 +28,16 @@ test('parses a two-host full setup', () => {
   );
 });
 
-test('defaults setup to detected hosts and safe profile', () => {
+// profile defaults to null, not 'safe': an omitted --profile has to reach
+// setup as an omission so setup can keep the configured profile. A 'safe'
+// default at this layer is what downgraded a full-profile machine on a
+// routine rerun, twice in one day, the second time after setup itself had
+// learned to carry.
+test('defaults setup to detected hosts and no profile choice', () => {
   assert.deepEqual(parseArgs(['setup']), {
     command: 'setup',
     hosts: [],
-    profile: 'safe',
+    profile: null,
     source: 'm4ttheweric/mattstack',
     json: false,
     purgeData: false,
