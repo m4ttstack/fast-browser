@@ -148,8 +148,8 @@ test('npm package contains only portable deployable Fast Browser assets', async 
   }
   assert.equal(
     entries.filter((entry) => /\/skills\/[^/]+\/SKILL\.md$/.test(entry)).length,
-    4,
-    'package must contain exactly four real skills',
+    5,
+    'package must contain exactly five real skills',
   );
 
   for (const entry of entries) {

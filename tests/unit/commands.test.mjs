@@ -65,6 +65,7 @@ function validConfig(overrides = {}) {
     runtime: { version: '0.1.0-alpha.1', sha256: 'a'.repeat(64), sourceCommit: 'abc' },
     managed: { files: [], blocks: [] },
     annotation: { palette: null },
+    video: null,
     ...overrides,
   };
 }
@@ -805,6 +806,34 @@ test('doctor fails with the brew remediation when rsvg-convert is absent', async
   assert.match(check.remediation, /brew install librsvg/);
 });
 
+test('doctor passes when ffmpeg is present and names its version', async () => {
+  const report = await doctor(
+    { profile: 'safe' },
+    {
+      checks: passingChecksExcept('gif-renderer'),
+      gifRendererVersion: async () => 'ffmpeg version 8.1.1',
+      paths: unusedPaths,
+    },
+  );
+  const check = report.checks.find(({ id }) => id === 'gif-renderer');
+  assert.equal(check.status, 'pass');
+  assert.match(check.message, /8\.1\.1/);
+});
+
+test('doctor fails with the brew remediation when ffmpeg is absent', async () => {
+  const report = await doctor(
+    { profile: 'safe' },
+    {
+      checks: passingChecksExcept('gif-renderer'),
+      gifRendererVersion: async () => null,
+      paths: unusedPaths,
+    },
+  );
+  const check = report.checks.find(({ id }) => id === 'gif-renderer');
+  assert.equal(check.status, 'fail');
+  assert.match(check.remediation, /brew install ffmpeg/);
+});
+
 function extensionLock(version) {
   return {
     productVersion: '0.1.0-alpha.1',
@@ -1539,6 +1568,114 @@ test('configure --palette --json still skips routing and Codex detection', async
   assert.equal(written.sessions.enabled, false, 'recording must not be re-enabled');
   assert.equal(written.sessions.retentionDays, 90, 'retention must not be reset');
   assert.equal(written.profile, 'full');
+});
+
+// The video flag is the same shape of scalar as the palette: a video-only
+// invocation must not reset any other field, and must not require routing or
+// Codex detection.
+test('configure --video preserves session settings, profile, and palette', async () => {
+  const stored = {
+    ...defaultConfig(),
+    profile: 'full',
+    sessions: { enabled: false, retentionDays: 90 },
+    annotation: { palette: 'teal' },
+  };
+  let written = null;
+  await configure(
+    forceJsonOutput(parseArgs(['configure', '--video', '1280x720'])),
+    {
+      paths: { dataDir: '/tmp/fb', configFile: '/tmp/fb/config.json' },
+      loadConfig: async () => stored,
+      saveConfig: async (_paths, value) => { written = value; },
+      prepareRoutingTransition: async () => assert.fail(
+        'routing must not run for --video alone',
+      ),
+      getCodexVersion: async () => assert.fail('Codex detection must not run for --video'),
+      pruneSessions: async () => ({ removedPaths: [], removedBytes: 0 }),
+    },
+  );
+  assert.deepEqual(written.video, { width: 1280, height: 720 });
+  assert.equal(written.sessions.enabled, false, 'recording must not be re-enabled');
+  assert.equal(written.sessions.retentionDays, 90, 'retention must not be reset');
+  assert.equal(written.profile, 'full');
+  assert.equal(written.annotation.palette, 'teal', 'the palette must not be reset');
+});
+
+test('configure --video off clears only the video setting', async () => {
+  const stored = {
+    ...defaultConfig(),
+    profile: 'full',
+    sessions: { enabled: true, retentionDays: 45 },
+    video: { width: 1280, height: 720 },
+  };
+  let written = null;
+  await configure(
+    forceJsonOutput(parseArgs(['configure', '--video', 'off'])),
+    {
+      paths: { dataDir: '/tmp/fb', configFile: '/tmp/fb/config.json' },
+      loadConfig: async () => stored,
+      saveConfig: async (_paths, value) => { written = value; },
+      prepareRoutingTransition: async () => assert.fail(
+        'routing must not run for --video alone',
+      ),
+      pruneSessions: async () => ({ removedPaths: [], removedBytes: 0 }),
+    },
+  );
+  assert.equal(written.video, null);
+  assert.deepEqual(written.sessions, { enabled: true, retentionDays: 45 });
+});
+
+// An invocation that mentions neither --palette nor --video must carry the
+// stored video size forward: rebuilding it from defaults here would be the
+// exact MAT-90 bug class the palette carry already guards against.
+test('an unrelated configure invocation preserves the stored video size', async () => {
+  const stored = {
+    ...defaultConfig(),
+    profile: 'full',
+    video: { width: 800, height: 600 },
+  };
+  let written = null;
+  await configure(
+    forceJsonOutput(parseArgs(['configure', '--retention-days', '45'])),
+    {
+      paths: { dataDir: '/tmp/fb', configFile: '/tmp/fb/config.json' },
+      loadConfig: async () => stored,
+      saveConfig: async (_paths, value) => { written = value; },
+      prepareRoutingTransition: async () => ({
+        nextState: { profile: 'full', files: [], blocks: [] },
+        apply: async () => ({ rollback: async () => {} }),
+      }),
+      pruneSessions: async () => ({ removedPaths: [], removedBytes: 0 }),
+    },
+  );
+  assert.deepEqual(written.video, { width: 800, height: 600 });
+  assert.equal(written.sessions.retentionDays, 45);
+});
+
+test('configure --palette --video together still skip routing and Codex detection', async () => {
+  const stored = {
+    ...defaultConfig(),
+    profile: 'full',
+    hosts: { claude: false, codex: true },
+  };
+  let written = null;
+  await configure(
+    forceJsonOutput(parseArgs(['configure', '--palette', 'teal', '--video', '800x600'])),
+    {
+      paths: { dataDir: '/tmp/fb', configFile: '/tmp/fb/config.json' },
+      loadConfig: async () => stored,
+      saveConfig: async (_paths, value) => { written = value; },
+      prepareRoutingTransition: async () => assert.fail(
+        'routing must not run for --palette plus --video',
+      ),
+      getCodexVersion: async () => assert.fail(
+        'Codex detection must not run for --palette plus --video',
+      ),
+      pruneSessions: async () => ({ removedPaths: [], removedBytes: 0 }),
+    },
+  );
+  assert.equal(written.annotation.palette, 'teal');
+  assert.deepEqual(written.video, { width: 800, height: 600 });
 });
 
 test('configure validates retention and never records in safe profile', async () => {

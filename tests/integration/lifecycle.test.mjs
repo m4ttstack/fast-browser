@@ -51,6 +51,7 @@ function migrationConfig() {
     runtime: { version: null, sha256: null, sourceCommit: null },
     managed: { files: [], blocks: [] },
     annotation: { palette: null },
+    video: null,
   };
 }
 
@@ -561,6 +562,64 @@ test('a first-ever setup defaults the connection to manual', async () => {
   // Carrying a prior pairing must not become inventing one: with no config to
   // carry forward there is no Keychain token either.
   assert.equal(savedConfig.connection.mode, 'manual');
+});
+
+// Same defect class as the palette and connection carries above: the video
+// capture size is chosen through `configure --video`, setup has no flag for
+// it, and the reinstall branch rebuilds the config from defaultConfig(), so
+// an explicit carry is the only thing keeping recording enabled across a
+// rerun that adds a host or repairs drift.
+test('a reinstalling setup preserves the configured video size', async () => {
+  const current = {
+    ...migrationConfig(),
+    profile: 'full',
+    hosts: { claude: true, codex: false },
+    video: { width: 1280, height: 720 },
+  };
+  let savedConfig;
+  const report = await reinstallingSetup({
+    current,
+    hosts: ['claude', 'codex'],
+    profile: 'full',
+    saveConfig: (config) => { savedConfig = config; },
+  });
+
+  assert.equal(report.changed, true, 'the host set changed, so this is the reinstall branch');
+  assert.deepEqual(savedConfig.video, { width: 1280, height: 720 });
+  assert.deepEqual(report.config.video, { width: 1280, height: 720 });
+});
+
+// Unlike sessions, the video size is not derived from the profile, so even a
+// genuine profile change has no claim on it.
+test('a setup that changes the profile still preserves the video size', async () => {
+  const current = {
+    ...migrationConfig(),
+    profile: 'safe',
+    hosts: { claude: true, codex: false },
+    video: { width: 800, height: 600 },
+  };
+  let savedConfig;
+  const report = await reinstallingSetup({
+    current,
+    hosts: ['claude'],
+    profile: 'full',
+    saveConfig: (config) => { savedConfig = config; },
+  });
+
+  assert.equal(report.changed, true, 'the profile changed, so this is the reinstall branch');
+  assert.deepEqual(savedConfig.video, { width: 800, height: 600 });
+});
+
+test('a first-ever setup leaves video recording off', async () => {
+  let savedConfig;
+  await reinstallingSetup({
+    current: null,
+    hosts: ['claude'],
+    profile: 'full',
+    saveConfig: (config) => { savedConfig = config; },
+  });
+
+  assert.equal(savedConfig.video, null);
 });
 
 test('second matching setup is a true mutation no-op', async () => {

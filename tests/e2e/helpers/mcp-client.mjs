@@ -136,7 +136,9 @@ export function textResult(response) {
   }
 }
 
-export async function startMcpClient({ outputDir, releaseDir } = {}) {
+// `extraArgs` lets a suite opt one launch into additional runtime flags (the
+// video suite passes --save-video) without every other suite inheriting them.
+export async function startMcpClient({ outputDir, releaseDir, extraArgs = [] } = {}) {
   if (!outputDir) throw new Error('outputDir is required');
   const cli = await runtimeCliFor({ outputDir, releaseDir });
   const client = new Client(
@@ -155,6 +157,7 @@ export async function startMcpClient({ outputDir, releaseDir } = {}) {
       '--snapshot-mode=none',
       '--timeout-settle=200',
       `--output-dir=${outputDir}`,
+      ...extraArgs,
     ],
     cwd: outputDir,
     stderr: 'pipe',

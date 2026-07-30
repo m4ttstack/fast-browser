@@ -20,6 +20,10 @@ test('parses a two-host full setup', () => {
       runtimeLock: null,
       palette: null,
       config: null,
+      video: null,
+      out: null,
+      fps: null,
+      width: null,
     },
   );
 });
@@ -40,6 +44,10 @@ test('defaults setup to detected hosts and safe profile', () => {
     runtimeLock: null,
     palette: null,
     config: null,
+    video: null,
+    out: null,
+    fps: null,
+    width: null,
   });
 });
 
@@ -129,6 +137,84 @@ test('--palette is accepted for configure and validated', () => {
   assert.equal(parseArgs(['configure', '--palette', 'teal']).palette, 'teal');
   assert.throws(() => parseArgs(['configure', '--palette', 'burgundy']), UsageError);
   assert.throws(() => parseArgs(['setup', '--palette', 'teal']), UsageError);
+});
+
+test('--video is accepted for configure and parsed strictly', () => {
+  assert.deepEqual(
+    parseArgs(['configure', '--video', '1280x720']).video,
+    { width: 1280, height: 720 },
+  );
+  assert.deepEqual(
+    parseArgs(['configure', '--video', '320x240']).video,
+    { width: 320, height: 240 },
+  );
+  assert.deepEqual(
+    parseArgs(['configure', '--video', '3840x2160']).video,
+    { width: 3840, height: 2160 },
+  );
+  assert.equal(parseArgs(['configure', '--video', 'off']).video, 'off');
+  for (const value of [
+    'on',
+    '1280',
+    '1280x',
+    'x720',
+    '1280x720x2',
+    '1280 x 720',
+    '319x240', // below the width floor
+    '3841x2160', // above the width ceiling
+    '320x239', // below the height floor
+    '320x2161', // above the height ceiling
+    '01280x720', // leading zero is not a plain decimal integer
+    '1280x-720',
+    '1.5x720',
+    '0x0',
+  ]) {
+    assert.throws(() => parseArgs(['configure', '--video', value]), UsageError, value);
+  }
+  assert.throws(() => parseArgs(['setup', '--video', '1280x720']), UsageError);
+});
+
+test('an invalid --video value is named by flag, never echoed', () => {
+  assert.throws(
+    () => parseArgs(['configure', '--video', 'sk-do-not-print-this-secret']),
+    (error) => error instanceof UsageError
+      && !error.message.includes('sk-do-not-print-this-secret')
+      && /--video/.test(error.message),
+  );
+});
+
+test('gif takes exactly one positional video name with bounded options', () => {
+  const request = parseArgs(['gif', 'flow.webm', '--out', 'flow.gif', '--fps', '12', '--width', '800']);
+  assert.equal(request.command, 'gif');
+  assert.equal(request.video, 'flow.webm');
+  assert.equal(request.out, 'flow.gif');
+  assert.equal(request.fps, 12);
+  assert.equal(request.width, 800);
+
+  assert.throws(() => parseArgs(['gif']), UsageError);
+  assert.throws(() => parseArgs(['gif', 'a.webm', 'b.webm']), UsageError);
+  assert.throws(() => parseArgs(['gif', '--nope']), UsageError);
+  for (const argv of [
+    ['gif', 'flow.webm', '--fps', '0'],
+    ['gif', 'flow.webm', '--fps', '31'],
+    ['gif', 'flow.webm', '--fps', 'fast'],
+    ['gif', 'flow.webm', '--width', '99'],
+    ['gif', 'flow.webm', '--width', '1201'],
+    ['gif', 'flow.webm', '--width', '800px'],
+  ]) {
+    assert.throws(() => parseArgs(argv), UsageError, argv.join(' '));
+  }
+  assert.throws(() => parseArgs(['annotate', 'a.json', '--fps', '8']), UsageError);
+  assert.throws(() => parseArgs(['configure', '--out', 'x.gif']), UsageError);
+});
+
+test('a duplicated gif video name never echoes the name', () => {
+  assert.throws(
+    () => parseArgs(['gif', '/Users/secret/x.webm', '/Users/secret/x.webm']),
+    (error) => error instanceof UsageError
+      && !error.message.includes('/Users/secret')
+      && /exactly one video name/.test(error.message),
+  );
 });
 
 test('annotate takes exactly one positional config path', () => {

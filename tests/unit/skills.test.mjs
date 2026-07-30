@@ -8,7 +8,13 @@ import { OFFERED_PALETTES } from '../../lib/annotate/palette.mjs';
 
 const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const repositoryRoot = path.resolve(pluginRoot, '../..');
-const skillNames = ['fast-browsing', 'browser-macros', 'mine-macros', 'annotating-screenshots'];
+const skillNames = [
+  'fast-browsing',
+  'browser-macros',
+  'mine-macros',
+  'annotating-screenshots',
+  'capturing-flows',
+];
 
 const deployTextExtensions = new Set([
   '.json',
@@ -233,6 +239,42 @@ test('the annotation skill states the rules the baseline runs violated', async (
   assert.match(text, /configure --palette/);
   assert.match(text, /it is not a failure/);
   assert.match(text, /uninstall --purge-data/);
+});
+
+// Each assertion pins one instruction an agent would otherwise get wrong from
+// first principles: what recording covers (the relay-attached tabs Fast
+// Browser drives, nothing beyond them), that a webm is only complete once its
+// tab or session closes cleanly, and that a recording has no redaction pass,
+// so PII forces a re-record or a fall back to annotated stills. Losing any of
+// these lines ships confident, wrong motion evidence.
+test('the capturing-flows skill states recording scope, finalization, and the PII rule', async () => {
+  const text = await readFile(
+    path.join(pluginRoot, 'skills/capturing-flows/SKILL.md'),
+    'utf8',
+  );
+
+  assert.match(text, /configure --video/);
+  assert.match(text, /--video off/);
+  // The scope, stated to match the fast-browsing boundaries: recording covers
+  // the relay-attached real-Chrome tabs Fast Browser controls, and promises
+  // no other browser to record in.
+  assert.match(text, /extension relay/);
+  assert.match(text, /tabs Fast Browser controls/);
+  assert.match(text, /no separate isolated browser/);
+  assert.doesNotMatch(text, /managed session/);
+  // One flow per tab, finalized by closing, collected from the ledgerless
+  // videos directory, converted by the real CLI.
+  assert.match(text, /one flow per tab/i);
+  assert.match(text, /when the tab or the session closes/);
+  assert.match(text, /~\/\.fast-browser\/videos\//);
+  assert.match(text, /fast-browser gif/);
+  assert.match(text, /brew install ffmpeg/);
+  // The PII rule: no blur pass exists for motion, so the choices are a
+  // cleaner re-record or annotated stills, said plainly.
+  assert.match(text, /cannot carry `annotate`'s redactions/);
+  assert.match(text, /re-record a cleaner flow/);
+  assert.match(text, /annotated stills/);
+  assert.match(text, /never deliver motion evidence\s+containing PII/);
 });
 
 test('skills and delegated browser guidance use authoritative live ledgers', async () => {

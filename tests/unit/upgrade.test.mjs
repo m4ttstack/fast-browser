@@ -146,6 +146,25 @@ test('isExplainedByLockUpgrade is true for a genuine upgrade even when the optio
   );
 });
 
+// gif-renderer is the same kind of optional capability as annotate-renderer:
+// ffmpeg is never installed by setup, so its absence is a permanent resting
+// state that must neither block a genuine upgrade nor read as drift.
+test('isExplainedByLockUpgrade is true for a genuine upgrade even when the optional gif renderer also fails', async () => {
+  const paths = await tempPaths('fast-browser-upgrade-unit-gif-renderer-');
+  const oldLock = lockFor('0.1.0-alpha.1', '0.2.1');
+  const newLock = lockFor('0.1.0-alpha.5', '0.2.2');
+  await writeRuntimeInstall(paths, oldLock);
+  await writeExtensionInstall(paths, oldLock);
+  const report = doctorReport([
+    'runtime-checksum', 'extension-artifact', 'mcp-handshake', 'tool-contract', 'extension-installed',
+    'annotate-renderer', 'gif-renderer',
+  ]);
+  assert.equal(
+    await isExplainedByLockUpgrade({ paths, lock: newLock, doctorReport: report }),
+    true,
+  );
+});
+
 test('isExplainedByLockUpgrade is false when the extension bytes no longer match their own marker', async () => {
   const paths = await tempPaths('fast-browser-upgrade-unit-tamper-');
   const oldLock = lockFor('0.1.0-alpha.1', '0.2.1');

@@ -228,20 +228,20 @@ test('bundled lock pins the intended candidate identity and immutable artifact U
 
   assert.deepEqual(lock, {
     schemaVersion: 1,
-    productVersion: '0.1.0-alpha.7',
-    sourceCommit: '7af0ff16ddb30f46adccc1f837eba6a738e40c2a',
+    productVersion: '0.1.0-alpha.8',
+    sourceCommit: 'c714013f4bde551e3540e4f69f0a2525479d47f4',
     protocolVersion: 2,
     runtime: {
       url: 'https://github.com/m4ttheweric/playwright/releases/download/'
-        + 'fast-browser-v0.1.0-alpha.7/fast-browser-mcp-0.1.0-alpha.7.tar.gz',
-      file: 'fast-browser-mcp-0.1.0-alpha.7.tar.gz',
-      sha256: 'fa9fe1fda148d9e2604591fa8d31482e25252ab19f30e945b6b5fa2679c2eea7',
+        + 'fast-browser-v0.1.0-alpha.8/fast-browser-mcp-0.1.0-alpha.8.tar.gz',
+      file: 'fast-browser-mcp-0.1.0-alpha.8.tar.gz',
+      sha256: '11a7a0d79580fdd69ecbf62db2ffc2155b0d70921880c36594057e5f194e8f13',
       node: '>=20',
     },
     extension: {
       url: 'https://github.com/m4ttheweric/playwright/releases/download/'
-        + 'fast-browser-v0.1.0-alpha.7/fast-browser-extension-0.1.0-alpha.7.zip',
-      file: 'fast-browser-extension-0.1.0-alpha.7.zip',
+        + 'fast-browser-v0.1.0-alpha.8/fast-browser-extension-0.1.0-alpha.8.zip',
+      file: 'fast-browser-extension-0.1.0-alpha.8.zip',
       sha256: '764beb8d2adca7b50a34a648a98005bfbc845d253fb43d6ef90ad54e52b23ad5',
       id: 'bjlfojdaaanoliidngocnbcalhpfmlie',
       version: '0.2.4',
@@ -298,6 +298,29 @@ test('builds exact safe and full runtime argument snapshots', () => {
     ...base,
     '--save-session',
   ]);
+});
+
+// Video is orthogonal to the profile: it rides on either arg set, and its
+// absence (the default) adds nothing. The runtime ignores the flag for
+// attached extension-relay browsers, so passing it alongside --extension is
+// deliberate and harmless.
+test('runtimeArgs appends --save-video exactly when a video size is configured', () => {
+  const paths = launcherPaths('/synthetic-home');
+  const lock = fixtureLock();
+  const video = { width: 1280, height: 720 };
+
+  assert.deepEqual(
+    runtimeArgs({ config: { ...launcherConfig('safe'), video }, paths, lock }),
+    [...runtimeArgs({ config: launcherConfig('safe'), paths, lock }), '--save-video=1280x720'],
+  );
+  assert.deepEqual(
+    runtimeArgs({ config: { ...launcherConfig('full'), video }, paths, lock }),
+    [...runtimeArgs({ config: launcherConfig('full'), paths, lock }), '--save-video=1280x720'],
+  );
+  assert.deepEqual(
+    runtimeArgs({ config: { ...launcherConfig('safe'), video: null }, paths, lock }),
+    runtimeArgs({ config: launcherConfig('safe'), paths, lock }),
+  );
 });
 
 async function installedLauncher() {

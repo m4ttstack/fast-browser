@@ -820,7 +820,7 @@ test('a pending extension reload does not excuse a genuinely failing check', asy
 // one adapter this test deliberately makes report absent) mirrors a real
 // machine that has never run `brew install librsvg`. Annotation is
 // optional and not installed by setup, so this must never look like drift.
-test('setup treats a real, fully composed doctor report as unchanged when only the optional annotation renderer is missing', async () => {
+test('setup treats a real, fully composed doctor report as unchanged when only the optional capability renderers are missing', async () => {
   const lock = lockFor('0.1.0-alpha.5', '0.2.2');
   const paths = await fixtureHome('fast-browser-annotate-renderer-optional-');
   await writeRuntimeInstall(paths, lock);
@@ -869,8 +869,10 @@ test('setup treats a real, fully composed doctor report as unchanged when only t
         loadedAt: 1_700_000_000_000,
       }],
       verifyExtensionIsLoadedContent: async () => true,
-      // The one adapter this test deliberately fails: no librsvg installed.
+      // The adapters this test deliberately fails: no librsvg and no ffmpeg
+      // installed, the resting state for the optional capabilities.
       rendererVersion: async () => null,
+      gifRendererVersion: async () => null,
       openMcpTransport: async () => ({
         request: async (message) => (
           message.method === 'initialize'
@@ -885,8 +887,9 @@ test('setup treats a real, fully composed doctor report as unchanged when only t
 
   assert.equal(report.changed, false);
   const failing = report.doctor.checks.filter((check) => check.status === 'fail');
-  assert.deepEqual(failing.map((check) => check.id), ['annotate-renderer']);
+  assert.deepEqual(failing.map((check) => check.id), ['annotate-renderer', 'gif-renderer']);
   assert.match(failing[0].remediation, /brew install librsvg/);
+  assert.match(failing[1].remediation, /brew install ffmpeg/);
 });
 
 // A successful rollback returned undefined, so the CLI threw while rendering

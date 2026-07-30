@@ -32,6 +32,7 @@ test('safe config contains no secret and disables recording', () => {
     runtime: { version: null, sha256: null, sourceCommit: null },
     managed: { files: [], blocks: [] },
     annotation: { palette: null },
+    video: null,
   });
 });
 
@@ -56,6 +57,7 @@ test('parsing returns a clean supported config without unknown keys', () => {
     runtime: { version: '1.2.3', sha256: 'abc123', sourceCommit: 'deadbeef' },
     managed: { files: ['a'], blocks: ['b'] },
     annotation: { palette: null },
+    video: null,
   });
 });
 
@@ -194,4 +196,37 @@ test('a stored palette round-trips and an invalid one is refused', () => {
     () => parseConfig({ ...defaultConfig(), annotation: { palette: 'burgundy' } }),
     /annotation.palette/,
   );
+});
+
+test('video recording defaults to off so a session never records unasked', () => {
+  assert.equal(defaultConfig().video, null);
+});
+
+test('an existing v1 config without a video field still parses as off', () => {
+  const legacy = defaultConfig();
+  delete legacy.video;
+  assert.equal(parseConfig(legacy).video, null);
+});
+
+test('a stored video size round-trips and an invalid one is refused', () => {
+  const stored = { ...defaultConfig(), video: { width: 1280, height: 720 } };
+  assert.deepEqual(parseConfig(stored).video, { width: 1280, height: 720 });
+
+  for (const video of [
+    'on',
+    ['1280', '720'],
+    { width: '1280', height: 720 },
+    { width: 1280.5, height: 720 },
+    { width: 319, height: 720 },
+    { width: 3841, height: 720 },
+    { width: 1280, height: 239 },
+    { width: 1280, height: 2161 },
+    { width: 1280 },
+  ]) {
+    assert.throws(
+      () => parseConfig({ ...defaultConfig(), video }),
+      /video/,
+      JSON.stringify(video),
+    );
+  }
 });

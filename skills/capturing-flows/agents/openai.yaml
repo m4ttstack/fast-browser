@@ -1,0 +1,4 @@
+interface:
+  display_name: "Capturing Flows"
+  short_description: "Record driven browser sessions and deliver them as GIFs."
+  default_prompt: "Use $capturing-flows to record this flow and deliver it as a GIF."
