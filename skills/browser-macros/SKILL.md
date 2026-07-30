@@ -11,8 +11,12 @@ Use indexed Playwright macros instead of re-deriving known browser flows.
 
 1. Read `~/.fast-browser/macros/MACROS.md`.
 2. Match the task to an entry's description and target.
-3. Call `browser_run_code_unsafe` with the entry's `filename` and `args`
-   exactly. Do not open the script and do not substitute inline `code`.
+3. Call `browser_run_code_unsafe` with `filename` set to the entry's `Script:`
+   path as an absolute path, your home directory written out in full, and the
+   entry's `args` exactly. The runtime expands nothing: a bare or `~` name
+   resolves against the browser server's own working directory and is refused
+   by its containment check (`ENOENT` or "outside allowed roots"). Do not open
+   the script and do not substitute inline `code`.
 4. Return the macro's distilled result.
 
 If the macro fails, use its `{ failedStep, error, url }` result to retry
@@ -62,7 +66,7 @@ or successful verification.
 
 | Result | Next action |
 |---|---|
-| Exact index match | Run filename plus args |
+| Exact index match | Run its script path (home written out in full) plus args |
 | Unfamiliar page | `page-affordances`, not `browser_snapshot` |
 | Control missing from the digest | Read `skipped`, then snapshot |
 | Success | Return the distilled value |

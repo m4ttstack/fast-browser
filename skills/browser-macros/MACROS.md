@@ -1,5 +1,11 @@
 # Macro Index
 
+Every `Script:` path below is written with `~` for brevity, but the runtime
+expands nothing: pass `filename` as the absolute path with your home directory
+written out in full. A bare or `~` name resolves against the browser server's
+own working directory and is then refused by its allowed-roots containment
+check (`ENOENT` or "outside allowed roots").
+
 ## page-recon
 
 - Description: Return compact reconnaissance of the current page: URL, title,
@@ -51,9 +57,10 @@
   `canvas`, `iframe`, `img`, `video`, `embed`, or `object` is listed in
   `opaque` with its tag: its box is measured but its interior is beyond any
   selector, so escalate to arithmetic on the measured box instead of retrying
-  selectors that cannot exist. Runs with no Node globals in scope, so
-  it cannot read `$HOME` itself; pass your own absolute home directory as
-  `home`.
+  selectors that cannot exist. Runs without the Node host globals that could
+  reach the filesystem or the environment (`console` exists; `process` and
+  `require` do not), so it cannot read `$HOME` itself; pass your own absolute
+  home directory as `home`.
 - Params: `{ targets: Record<string, string>, out?: string (default "capture"), home: string (your absolute home directory path), space?: boolean (default true; false skips the empty-band measurement) }`
 - Target: Current page (site-agnostic)
 - Script: `~/.fast-browser/macros/capture-annotated.js`

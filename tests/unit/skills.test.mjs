@@ -132,6 +132,15 @@ test('macro index exposes only the portable built-in macros', async () => {
   assert.match(text, /measured evidence, not a substitute for reviewing/);
   assert.match(text, /~\/\.fast-browser\/macros\/capture-annotated\.js/);
   assert.equal((text.match(/Status: built-in/g) || []).length, 3);
+
+  // The Script paths above are written with `~`, which the runtime does not
+  // expand: a bare or tilde filename resolves against the browser server's
+  // own cwd and is then refused by its allowed-roots check. The index has to
+  // say so itself, because it is the first (sometimes only) document an agent
+  // reads before calling a macro; the annotation skill learned this live and
+  // page-recon kept documenting the broken form for two more releases.
+  assert.match(text, /written out in full/);
+  assert.match(text, /outside allowed roots/);
 });
 
 // Each assertion here pins one instruction that a baseline run without the
@@ -275,6 +284,23 @@ test('the capturing-flows skill states recording scope, finalization, and the PI
   assert.match(text, /re-record a cleaner flow/);
   assert.match(text, /annotated stills/);
   assert.match(text, /never deliver motion evidence\s+containing PII/);
+});
+
+// The invocation form is pinned against what the runtime actually accepts,
+// not against the docs' own internal consistency: the runtime resolves a
+// relative filename against its own cwd and refuses paths outside its allowed
+// roots (established live, see tests/e2e/annotate.test.mjs's file-level
+// comment), so the skill must demand the absolute written-out path and name
+// the refusal an agent will see if it forgets.
+test('browser-macros documents the invocation form the runtime accepts', async () => {
+  const text = await readFile(
+    path.join(pluginRoot, 'skills/browser-macros/SKILL.md'),
+    'utf8',
+  );
+
+  assert.match(text, /absolute path, your home directory written out in full/);
+  assert.match(text, /outside allowed roots/);
+  assert.doesNotMatch(text, /with the entry's `filename` and `args`\s+exactly/);
 });
 
 test('skills and delegated browser guidance use authoritative live ledgers', async () => {
