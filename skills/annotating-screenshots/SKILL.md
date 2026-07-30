@@ -169,6 +169,32 @@ Every number above is derived. The two boxes are the resolved `estimate` and
 chip is 184 px wide by 44 px tall and centred in the resolved `band`
 `[40, 460, 820, 70]`. Nothing was read off the image.
 
+## Foreign images
+
+A PNG that did not come from `capture-annotated.js` -- a bug screenshot pulled
+off a ticket, an image somebody handed you -- has no macro return to copy from,
+so the pipeline above cannot produce it. Use import mode: replace `base` and
+`measured` with `import`, the image's absolute path (`~` written out in full,
+as with the macro path), which must be outside `~/.fast-browser/screenshots/`.
+`out` is still a name in that directory, never a path.
+
+```json
+{
+  "import": "~/Downloads/ticket-4471.png",
+  "out": "ticket-4471-redacted.png",
+  "annotations": [
+    { "type": "blur", "box": [314, 122, 111, 29], "amount": 15 }
+  ]
+}
+```
+
+Coordinates are read off the image, because there is no live page to measure.
+This is the **only** situation where reading coordinates off the image is
+allowed. Anything you can re-render is a live capture, and every rule above
+still binds it: one call, one truth, and never a hand-authored `measured`. The
+`blur.amount` rule applies to a foreign image exactly as to a capture, and so
+does step 4: read the output PNG yourself before delivering it.
+
 ## First annotation on a machine
 
 `annotate` refuses to draw with no palette configured. Offer these ten, then run
