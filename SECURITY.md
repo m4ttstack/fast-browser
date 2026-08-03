@@ -47,7 +47,7 @@ purge data when it is no longer required.
 ## Reporting a vulnerability
 
 This repository's available reporting mechanism is GitHub Issues:
-https://github.com/m4ttheweric/mattstack/issues/new
+https://github.com/m4ttstack/fast-browser/issues/new
 
 Open a minimal issue describing the affected Fast Browser version, impact, and
 safe reproduction outline. Do not include tokens, credentials, private page

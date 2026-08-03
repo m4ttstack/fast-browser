@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/m4ttheweric/mattstack/main/plugins/fast-browser/assets/logo-128.png" width="96" height="96" alt="Fast Browser">
+  <img src="https://raw.githubusercontent.com/m4ttstack/fast-browser/main/assets/logo-128.png" width="96" height="96" alt="Fast Browser">
 </p>
 
 <h1 align="center">Fast Browser</h1>
@@ -301,6 +301,8 @@ Keychain Access if it is no longer needed.
 
 ## Security and third-party code
 
-Read [SECURITY.md](./SECURITY.md) before using Fast Browser with authenticated
+Fast Browser itself is [MIT licensed](./LICENSE); the Playwright-derived
+runtime and extension artifacts it installs remain Apache-2.0. Read
+[SECURITY.md](./SECURITY.md) before using Fast Browser with authenticated
 sites. Third-party source, license, commit, artifacts, and checksums are listed
 in [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md).
