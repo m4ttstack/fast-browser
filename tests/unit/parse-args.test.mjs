@@ -38,7 +38,7 @@ test('defaults setup to detected hosts and no profile choice', () => {
     command: 'setup',
     hosts: [],
     profile: null,
-    source: 'm4ttheweric/mattstack',
+    source: 'm4ttstack/fast-browser',
     json: false,
     purgeData: false,
     dryRun: false,

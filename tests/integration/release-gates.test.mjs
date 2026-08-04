@@ -8,7 +8,7 @@ import { promisify } from 'node:util';
 
 const execFile = promisify(execFileCallback);
 const pluginRoot = fileURLToPath(new URL('../../', import.meta.url));
-const repoRoot = path.resolve(pluginRoot, '../..');
+const repoRoot = pluginRoot;
 
 async function json(relative, root = pluginRoot) {
   return JSON.parse(await readFile(path.join(root, relative), 'utf8'));

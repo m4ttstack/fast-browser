@@ -8,8 +8,8 @@ import { installClaude, uninstallClaude } from '../../lib/hosts/claude.mjs';
 import { installCodex, uninstallCodex } from '../../lib/hosts/codex.mjs';
 
 const pluginRoot = path.resolve(import.meta.dirname, '../..');
-const source = path.resolve(pluginRoot, '../..');
-const gitSource = 'mattstack/mattstack';
+const source = pluginRoot;
+const gitSource = 'm4ttstack/fast-browser';
 const pluginVersion = JSON.parse(
   await readFile(path.join(pluginRoot, 'package.json'), 'utf8'),
 ).version;
@@ -84,7 +84,7 @@ function codexPlugins(version = pluginVersion, marketplaceSource = source) {
       enabled: true,
       source: {
         source: 'local',
-        path: `${source}/plugins/fast-browser`,
+        path: source,
       },
       marketplaceSource: {
         sourceType: marketplaceSource === source ? 'local' : 'git',
@@ -108,7 +108,7 @@ test('Claude preflights and uses the exact fresh-install mutation commands', asy
   const installed = await installClaude({ source: gitSource, run });
 
   assert.deepEqual(calls.slice(2), [
-    ['claude', ['plugin', 'marketplace', 'add', gitSource, '--scope', 'user', '--sparse', '.claude-plugin', 'plugins/fast-browser']],
+    ['claude', ['plugin', 'marketplace', 'add', gitSource, '--scope', 'user']],
     ['claude', ['plugin', 'install', 'fast-browser@mattstack', '--scope', 'user']],
   ]);
   assert.deepEqual(installed, {
@@ -129,7 +129,7 @@ test('Codex preflights and uses the exact fresh-install mutation commands', asyn
   const installed = await installCodex({ source: gitSource, run });
 
   assert.deepEqual(calls.slice(2), [
-    ['codex', ['plugin', 'marketplace', 'add', gitSource, '--sparse', '.agents/plugins', '--sparse', 'plugins/fast-browser', '--json']],
+    ['codex', ['plugin', 'marketplace', 'add', gitSource, '--json']],
     ['codex', ['plugin', 'add', 'fast-browser@mattstack', '--json']],
   ]);
   assert.deepEqual(installed, {
@@ -435,7 +435,7 @@ test('normalizes relative local sources before commands', async () => {
 });
 
 test('relative local input is idempotent against canonical host paths', async () => {
-  const relativeSource = path.relative(process.cwd(), source);
+  const relativeSource = path.relative(process.cwd(), source) || '.';
   const claude = scriptedRunner([
     { stdout: claudeInstalledCurrent },
     { stdout: claudeMarketplace },
