@@ -7,7 +7,6 @@ import { fileURLToPath } from 'node:url';
 import { OFFERED_PALETTES } from '../../lib/annotate/palette.mjs';
 
 const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const repositoryRoot = path.resolve(pluginRoot, '../..');
 const skillNames = [
   'fast-browsing',
   'browser-macros',
@@ -74,24 +73,6 @@ test('skill frontmatter contains only portable discovery fields', async () => {
     assert.deepEqual(fields, ['name', 'description'], `${name} frontmatter fields`);
     assert.match(match[1], new RegExp(`^name: ${name}$`, 'm'));
     assert.match(match[1], /^description: Use when\b.+$/m);
-  }
-});
-
-test('old skill locations are repository-relative transition links to real packaged files', async () => {
-  for (const name of skillNames) {
-    const oldDirectory = path.join(repositoryRoot, 'skills', 'browser', name);
-    const packagedDirectory = path.join(pluginRoot, 'skills', name);
-
-    assert.equal((await lstat(oldDirectory)).isSymbolicLink(), true, name);
-    const target = await readlink(oldDirectory);
-    assert.equal(path.isAbsolute(target), false, `${name} link is relative`);
-    assert.equal(
-      path.resolve(path.dirname(oldDirectory), target),
-      packagedDirectory,
-      `${name} link target`,
-    );
-    assert.equal((await lstat(packagedDirectory)).isSymbolicLink(), false, name);
-    assert.equal((await lstat(path.join(packagedDirectory, 'SKILL.md'))).isFile(), true, name);
   }
 });
 

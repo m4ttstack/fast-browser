@@ -9,7 +9,7 @@ import { installClaude, uninstallClaude } from '../../lib/hosts/claude.mjs';
 import { installCodex, uninstallCodex } from '../../lib/hosts/codex.mjs';
 
 const pluginRoot = path.resolve(import.meta.dirname, '../..');
-const repositoryRoot = path.resolve(pluginRoot, '../..');
+const repositoryRoot = pluginRoot;
 // Read from the manifest rather than pinned: a literal version here turns
 // every release bump into an unrelated failure and asserts nothing the
 // manifest does not already state.

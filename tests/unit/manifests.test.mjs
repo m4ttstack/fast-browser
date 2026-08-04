@@ -5,7 +5,7 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 const pluginRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
-const repositoryRoot = resolve(pluginRoot, '../..');
+const repositoryRoot = pluginRoot;
 
 async function readJson(path) {
   return JSON.parse(await readFile(path, 'utf8'));
@@ -46,9 +46,9 @@ test('publishes host-compatible bundled MCP contracts', async () => {
       args: ['${PLUGIN_ROOT}/bin/fast-browser-mcp.mjs'],
     },
   });
-  assert.equal(claudeMarketplace.plugins[0].source, './plugins/fast-browser');
+  assert.equal(claudeMarketplace.plugins[0].source, '.');
   assert.deepEqual(codexMarketplace.plugins[0].source, {
     source: 'local',
-    path: './plugins/fast-browser',
+    path: '.',
   });
 });

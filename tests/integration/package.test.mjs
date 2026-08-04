@@ -16,7 +16,6 @@ import { gunzipSync } from 'node:zlib';
 
 const execFileAsync = promisify(execFile);
 const pluginRoot = fileURLToPath(new URL('../..', import.meta.url));
-const repositoryRoot = fileURLToPath(new URL('../../../..', import.meta.url));
 
 const requiredEntries = [
   'package/.claude-plugin/plugin.json',
@@ -250,20 +249,6 @@ test('npm package contains only portable deployable Fast Browser assets', async 
   const logo = normalizedReadme.match(/<img src="([^"]*logo[^"]*)"/)?.[1];
   assert.ok(logo, 'the README shows the logo');
   assert.match(logo, /^https:\/\/raw\.githubusercontent\.com\//, 'logo URL must be absolute');
-
-  const rootReadme = await readFile(path.join(repositoryRoot, 'README.md'), 'utf8');
-  const normalizedRootReadme = rootReadme.replace(/\s+/g, ' ');
-  // The pinned release is published, so the README must no longer tell users
-  // a local artifact bundle is the only way in.
-  // The package is published, so the repo landing page must lead with the
-  // real install command instead of describing it as unavailable.
-  assert.match(normalizedRootReadme, /npx @mattstack\/fast-browser setup --host both/);
-  assert.doesNotMatch(normalizedRootReadme, /not an installable candidate/i);
-  assert.doesNotMatch(normalizedRootReadme, /not published to npm/i);
-  assert.match(
-    normalizedRootReadme,
-    /--runtime-lock \/absolute\/path\/to\/fast-browser-release-[0-9a-z.-]+\.json/,
-  );
 
   // Derived from the lock, never pinned literally. These assertions used to
   // name alpha.5 and its source commit, so after the lock moved to alpha.7
