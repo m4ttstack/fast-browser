@@ -16,16 +16,15 @@ wrong" bugs cannot be fixed here.
 | skills, agents, macros, routing rules | here |
 | which runtime version is installed | here, `runtime-lock.json` |
 
-The fork is `m4ttheweric/playwright`, checked out at
-`~/Documents/GitHub/playwright`. Browser-driving code is mostly
-`packages/extension/src/` and `packages/playwright/src/mcp/`.
+The fork is `m4ttheweric/playwright`, normally cloned as a sibling of this repo.
+Browser-driving code is mostly `packages/extension/src/` and
+`packages/playwright/src/mcp/`.
 
 ### Fork branch: use `fast-browser-runtime`
 
 All Fast Browser work, including the packaging and release tooling, is on the
-`fast-browser-runtime` branch. There is a worktree for it at
-`~/Documents/GitHub/playwright/.worktrees/fast-browser-runtime`, usually parked
-on the commit the current lock names.
+`fast-browser-runtime` branch. The fork usually keeps a worktree for it under
+`.worktrees/fast-browser-runtime`, parked on the commit the current lock names.
 
 `main` and `multi-connection-extension` are **behind** that branch and have none
 of the release tooling. Landing a fix there produces a runtime that cannot be
@@ -106,5 +105,5 @@ manually at `chrome://extensions` or `doctor` keeps failing `extension-loaded`.
 
 Never run `claude`/`codex plugin remove` before `fast-browser uninstall`.
 Removing the host plugin first strips the start marker but leaves the
-`[mcp_servers.fast_browser]` table in `~/.codex/config.toml`, and the dangling
+`[mcp_servers.fast_browser]` table in Codex's `config.toml`, and the dangling
 marker makes every `fast-browser` command throw at parse time.
