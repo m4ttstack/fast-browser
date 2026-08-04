@@ -6,7 +6,7 @@ that license: Playwright is licensed under the Apache License 2.0.
 
 - Playwright license: https://github.com/microsoft/playwright/blob/main/LICENSE
 - Source repository: https://github.com/m4ttheweric/playwright
-- Source commit: `5763ccf80cbbd8fbde69d0445caac6b0692eb9bf`
+- Source commit: `1c3747d9a82d2c0ccfb4918e077106067218b6b2`
 
 The MIT license covers this plugin's own source. The runtime and Chrome
 extension artifacts it downloads remain Apache-2.0 works of the Playwright
@@ -17,17 +17,17 @@ project and its contributors.
 The URLs in `runtime-lock.json` are immutable release coordinates: a specific
 tag, never `latest`, so the bytes behind them cannot change without the lock
 changing. The artifacts are built from that commit of the fork; publishing the
-`fast-browser-v0.1.0-alpha.8` tag and its release assets is part of cutting
+`fast-browser-v0.1.0-alpha.9` tag and its release assets is part of cutting
 the release this lock belongs to, and the installer verifies both checksums
 after download regardless.
 
-- Runtime: `fast-browser-mcp-0.1.0-alpha.8.tar.gz`
-  SHA-256 `709c6cab42247063de86e151b56624afad592f23faccb3384ad220a2fd7f4ac2`
-  https://github.com/m4ttheweric/playwright/releases/download/fast-browser-v0.1.0-alpha.8/fast-browser-mcp-0.1.0-alpha.8.tar.gz
-- Chrome extension: `fast-browser-extension-0.1.0-alpha.8.zip`
-  SHA-256 `764beb8d2adca7b50a34a648a98005bfbc845d253fb43d6ef90ad54e52b23ad5`
-  https://github.com/m4ttheweric/playwright/releases/download/fast-browser-v0.1.0-alpha.8/fast-browser-extension-0.1.0-alpha.8.zip
-  Extension ID `bjlfojdaaanoliidngocnbcalhpfmlie`, version `0.2.4`
+- Runtime: `fast-browser-mcp-0.1.0-alpha.9.tar.gz`
+  SHA-256 `152cc0d0730caeba2a1da66baf6685ade4b2e22fa73a9088b0ae6e405f5225ad`
+  https://github.com/m4ttheweric/playwright/releases/download/fast-browser-v0.1.0-alpha.9/fast-browser-mcp-0.1.0-alpha.9.tar.gz
+- Chrome extension: `fast-browser-extension-0.1.0-alpha.9.zip`
+  SHA-256 `cc529a4374b8d7ce1936ab037fd8d78290dd7801805be5143f87315ac999ecba`
+  https://github.com/m4ttheweric/playwright/releases/download/fast-browser-v0.1.0-alpha.9/fast-browser-extension-0.1.0-alpha.9.zip
+  Extension ID `bjlfojdaaanoliidngocnbcalhpfmlie`, version `0.2.5`
 
 Every value above is reproduced from the committed runtime lock, so the notice
 can be checked against the installer contract. A release-gate test asserts they
@@ -35,7 +35,7 @@ still agree; hand-editing either one alone fails that gate rather than silently
 publishing stale provenance.
 
 An unpublished local build can still be installed with a URL-free
-`fast-browser-release-0.1.0-alpha.8.json` beside those exact two files, passed
+`fast-browser-release-0.1.0-alpha.9.json` beside those exact two files, passed
 via `--runtime-lock`. That local manifest and the locked hashes provide the
 same provenance without reaching the network.
 

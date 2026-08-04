@@ -8,7 +8,7 @@
       "name": "fast-browser",
       "source": ".",
       "description": "macOS and Chrome alpha browser automation for Claude Code and Codex",
-      "version": "0.1.0-alpha.9"
+      "version": "0.1.0-alpha.10"
     }
   ]
 }
