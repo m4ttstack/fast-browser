@@ -1,6 +1,6 @@
 {
   "name": "fast-browser",
-  "version": "0.1.0-alpha.8",
+  "version": "0.1.0-alpha.9",
   "description": "Fast Playwright browser automation for Claude Code and Codex",
   "author": {
     "name": "Matthew Goodwin"
@@ -13,13 +13,17 @@
     "longDescription": "Fast Browser provides Playwright browser automation for Claude Code and Codex.",
     "developerName": "Matthew Goodwin",
     "category": "Productivity",
-    "capabilities": ["Browser automation"],
+    "capabilities": [
+      "Browser automation"
+    ],
     "defaultPrompt": "Help me automate a browser task with Fast Browser."
   },
   "mcpServers": {
     "fast_browser": {
       "command": "node",
-      "args": ["${PLUGIN_ROOT}/bin/fast-browser-mcp.mjs"]
+      "args": [
+        "${PLUGIN_ROOT}/bin/fast-browser-mcp.mjs"
+      ]
     }
   }
 }
