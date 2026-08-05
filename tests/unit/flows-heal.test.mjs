@@ -270,7 +270,13 @@ test('proposeHeal falls back to role+name synthesis when the winning candidate h
 
   const decision = proposeHeal({ flow, payload });
 
-  assert.deepEqual(decision.locator, { kind: 'role', selector: 'internal:role=button[name="Place order"i]' });
+  // Deliberately 'other', not 'role' -- the plan's literally pinned kind
+  // for a role+name fallback is a silent no-op against the flow-runner's
+  // dedupe/resolution (see heal.mjs's DEVIATION doc comment; controller
+  // ruling, Task 5 review round 1). 'other' takes the runner's verbatim
+  // `page.locator(selector)` branch, so the synthesized selector string is
+  // the one actually probed.
+  assert.deepEqual(decision.locator, { kind: 'other', selector: 'internal:role=button[name="Place order"i]' });
 });
 
 test('proposeHeal escapes embedded quotes in a synthesized testid selector', () => {
@@ -296,9 +302,78 @@ test('proposeHeal escapes embedded quotes in a synthesized role+name selector', 
 
   const decision = proposeHeal({ flow, payload });
 
+  assert.equal(decision.locator.kind, 'other');
   assert.equal(
     decision.locator.selector,
     'internal:role=button[name="Place \\"order\\" now"i]',
+  );
+});
+
+test("an applyHeal'd role+name fallback locator resolves through the runner's verbatim page.locator branch, distinct from the step's original role-kind alternate", () => {
+  // Mirrors builtins/macros/flow-runner.js's `candidateKey` (:126-130) and
+  // `candidateLocator` (:114-118) just enough to prove a heal actually gets
+  // PROBED by the runner rather than silently deduped/ignored away -- the
+  // gap that let the kind:'role' regression through review round 1. A
+  // `kind: 'role'` candidate is keyed and resolved purely from
+  // `target.role`/`target.name`, IGNORING its own `selector` entirely --
+  // exactly why an appended `kind: 'role'` heal with the same role/name as
+  // the step's existing captured locator would be a no-op (same dedupe
+  // key, same getByRole() call, its own selector string never read).
+  // `kind: 'other'` (what this module actually synthesizes for a role+name
+  // fallback) always resolves via `page.locator(candidate.selector)`
+  // verbatim, so it is the only kind that can never collide this way.
+  const candidateKey = (target, candidateEntry) => (
+    candidateEntry.kind === 'role' && target.role && target.name
+      ? `role:${target.role}:${target.name}`
+      : `${candidateEntry.kind}:${candidateEntry.selector}`
+  );
+  const candidateLocator = (target, candidateEntry, page) => (
+    candidateEntry.kind === 'role' && target.role && target.name
+      ? page.getByRole(target.role, { name: target.name })
+      : page.locator(candidateEntry.selector)
+  );
+
+  const flow = baseFlow({ steps: [
+    { op: 'goto', url: '/checkout' },
+    {
+      op: 'click',
+      target: baseTarget({
+        description: 'Place order',
+        name: 'Place order',
+        role: 'button',
+        locators: [{ kind: 'role', selector: 'internal:role=button[name="Place order"i]' }],
+      }),
+    },
+  ] });
+  const candidates = [candidate({ role: 'button', name: 'Place order', text: '' })];
+  const payload = payloadFor(flow, 1, candidates);
+
+  const decision = proposeHeal({ flow, payload });
+  assert.ok(decision, 'test setup: this scenario should clear the acceptance rule');
+  assert.equal(decision.locator.kind, 'other');
+
+  const healed = applyHeal(flow, decision);
+  const target = healed.steps[1].target;
+  const [originalEntry, appendedEntry] = target.locators;
+
+  assert.notEqual(
+    candidateKey(target, originalEntry),
+    candidateKey(target, appendedEntry),
+    "the appended heal must not dedupe away against the step's original locator",
+  );
+
+  const page = {
+    getByRole: (role, opts) => ({ via: 'getByRole', role, name: opts.name }),
+    locator: (selector) => ({ via: 'page.locator', selector }),
+  };
+  assert.deepEqual(
+    candidateLocator(target, originalEntry, page),
+    { via: 'getByRole', role: 'button', name: 'Place order' },
+  );
+  assert.deepEqual(
+    candidateLocator(target, appendedEntry, page),
+    { via: 'page.locator', selector: appendedEntry.selector },
+    'a heal must reach the verbatim page.locator branch, not be silently ignored',
   );
 });
 
