@@ -120,8 +120,16 @@ test('macro index exposes only the portable built-in macros', async () => {
   // both invocation shapes and both return shapes without reading the macro
   // source.
   assert.match(text, /flow: <artifact object>, args: \{ <argName>: <string>/);
-  assert.match(text, /ok: true, result: \{ <extract keys> \} \| \{ completed: true \}/);
-  assert.match(text, /failedStep: <step index or 'args'>, error, url,\s+stepsCompleted, locatorFallbacks/);
+  assert.match(text, /ok:\s+true, result: \{ <extract keys> \} \| \{ completed: true \}/);
+  // Fix round 1, controller ruling: a returned failure object is a
+  // successful tool call, so failure has to fail the CALL -- pin both the
+  // stated reasoning and the exact thrown-error contract an agent parses.
+  assert.match(text, /tool call itself errors rather than returning a value/);
+  assert.match(text, /`FLOW_RUNNER_FAILURE: `/);
+  assert.match(
+    text,
+    /failedStep: <step index or 'args'>, error, url, stepsCompleted,\s+locatorFallbacks \}`; parse that shape back out of the error text/,
+  );
   assert.match(text, /~\/\.fast-browser\/macros\/flow-runner\.js/);
   assert.equal((text.match(/Status: built-in/g) || []).length, 4);
 

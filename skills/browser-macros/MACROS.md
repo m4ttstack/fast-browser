@@ -73,10 +73,12 @@ check (`ENOENT` or "outside allowed roots").
   than half-running a flow it cannot finish, resolves each step's target by
   walking its locator candidates in order and recording which candidate won
   as a fallback, and never retries a step internally -- a step that throws is
-  reported as a structured failure immediately rather than run again. `wait`
-  steps are capped at 5s, a post-action network-settle wait is capped at 5s,
-  a flow is capped at 60 steps and 20 `extract` steps, and every extracted
-  value is bounded to 4KB so a big page can never blow up the return payload.
+  reported as a structured failure immediately rather than run again. A
+  post-action network-settle wait never fails an action that already
+  completed. `wait` steps are capped at 5s, a post-action network-settle
+  wait is capped at 5s, a flow is capped at 60 steps and 20 `extract` steps,
+  and every extracted value and every supplied argument value is bounded to
+  4KB so a big page or a hostile arg can never blow up the return payload.
   If the current page's origin does not match the flow's own origin, the
   macro navigates there first before running any step.
 - Params: `{ flow: <artifact object>, args: { <argName>: <string>, ... } }`.
@@ -84,11 +86,17 @@ check (`ENOENT` or "outside allowed roots").
   `steps`, ...) embedded whole, not a path -- this macro has no filesystem
   access to look one up. `args` supplies a string value for every argument
   the flow declares as `required`; a required argument missing from `args`
-  fails before any page interaction. Returns one of two shapes:
-  - Success: `{ ok: true, result: { <extract keys> } | { completed: true },
-    stepsRun, locatorFallbacks: [{ step, usedKind, usedIndex }], ms }`.
-  - Failure: `{ failedStep: <step index or 'args'>, error, url,
-    stepsCompleted, locatorFallbacks }`.
+  fails before any page interaction. On success the tool call returns `{ ok:
+  true, result: { <extract keys> } | { completed: true }, stepsRun,
+  locatorFallbacks: [{ step, usedKind, usedIndex, part? }], ms }`. On
+  failure the tool call itself errors rather than returning a value -- a
+  successful return always reads as a successful replay to anything scoring
+  flow health, so a failure has to fail the call, not merely describe one --
+  and the thrown error's message is the literal prefix
+  `FLOW_RUNNER_FAILURE: ` followed by the JSON-serialized failure shape `{
+  failedStep: <step index or 'args'>, error, url, stepsCompleted,
+  locatorFallbacks }`; parse that shape back out of the error text after the
+  prefix.
 - Target: Any page; site-specific per invocation, driven entirely by
   `flow.origin`
 - Script: `~/.fast-browser/macros/flow-runner.js`
