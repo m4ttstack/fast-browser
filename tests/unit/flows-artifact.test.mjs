@@ -421,11 +421,22 @@ test('rejects a drag step missing the destination target', () => {
   assert.throws(() => parseFlow(flow), FlowError);
 });
 
-test('accepts an upload step with a non-empty files list', () => {
+test('accepts an upload step with a target and a non-empty files list', () => {
   const flow = baseFlow({
     steps: [...baseFlow().steps, { op: 'upload', target: target(), files: ['/tmp/a.png'] }],
   });
-  assert.deepEqual(parseFlow(flow).steps.at(-1).files, ['/tmp/a.png']);
+  const step = parseFlow(flow).steps.at(-1);
+  assert.deepEqual(step.target, target());
+  assert.deepEqual(step.files, ['/tmp/a.png']);
+});
+
+test('accepts an upload step with no target, since no capture path ever resolves one for this op', () => {
+  const flow = baseFlow({
+    steps: [...baseFlow().steps, { op: 'upload', files: ['/tmp/a.png'] }],
+  });
+  const step = parseFlow(flow).steps.at(-1);
+  assert.equal(Object.hasOwn(step, 'target'), false);
+  assert.deepEqual(step.files, ['/tmp/a.png']);
 });
 
 test('rejects an upload step with an empty files list', () => {
@@ -476,4 +487,26 @@ test('rejects provenance with unknown keys', () => {
     () => parseFlow(flow),
     (error) => error instanceof FlowError && /provenance\.extra/.test(error.message),
   );
+});
+
+test('rejects a "__proto__" arg key instead of silently dropping it via prototype-pollution assignment', () => {
+  // JSON.parse (unlike an object literal or bracket assignment) always
+  // produces a genuine own key here -- this is exactly the shape a
+  // malicious or corrupted flow file delivers on the wire, not an
+  // already-corrupted prototype.
+  const polluted = JSON.parse(
+    '{"customer":{"type":"string","required":true},"__proto__":{"type":"string","required":true}}',
+  );
+  assert.equal(Object.getPrototypeOf(polluted), Object.prototype);
+  assert.deepEqual(Object.keys(polluted).sort(), ['__proto__', 'customer']);
+
+  const flow = baseFlow({ args: polluted });
+  assert.throws(
+    () => parseFlow(flow),
+    (error) => error instanceof FlowError && /args\.__proto__/.test(error.message),
+  );
+
+  // No global corruption as a side effect of the rejected attempt: a
+  // fresh plain object still inherits the real Object.prototype.
+  assert.equal(Object.getPrototypeOf({}), Object.prototype);
 });
