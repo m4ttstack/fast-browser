@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {
-  mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile,
+  chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile,
 } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -492,7 +492,7 @@ test('a corrupt flows-state.json is treated as empty and never throws; a fresh v
   assert.deepEqual(onDisk, { schemaVersion: 1, processed: { 'trace-8000': { lines: 2, provenanceLines: 2 } } });
 });
 
-test('a flows-state.json with the wrong schemaVersion is treated as empty; the stale entry never survives into the rewritten file', async (t) => {
+test('a flows-state.json with the wrong schemaVersion is treated as empty; a poisoned cursor for a REAL session does not survive the gate', async (t) => {
   const paths = await tempPaths(t);
   await writeSession(paths, 8100, {
     meta: baseMeta(),
@@ -502,14 +502,24 @@ test('a flows-state.json with the wrong schemaVersion is treated as empty; the s
     ],
   });
   await mkdir(paths.dataDir, { recursive: true });
-  await writeFile(paths.flowsStateFile, JSON.stringify({ schemaVersion: 99, processed: { foo: { lines: 5 } } }));
+  // N2 (fix round 2): the poisoned cursor is seeded under the REAL session
+  // basename (trace-8100), not an unrelated key -- `lines: 99` is past the
+  // actual 2-record file, which would suppress compilation entirely if
+  // this state were trusted. A well-typed { lines: 99 } would otherwise
+  // pass per-entry validation on its own shape merits, so this is the
+  // assertion that actually depends on the schemaVersion gate firing (the
+  // prior fixture used an unrelated 'foo' key, which could never fail
+  // this way even if the gate were silently removed).
+  await writeFile(
+    paths.flowsStateFile,
+    JSON.stringify({ schemaVersion: 99, processed: { 'trace-8100': { lines: 99, provenanceLines: 99 } } }),
+  );
 
   const result = await sweep({ paths });
   assert.deepEqual(result.compiled, [{ name: 'view-details', tier: 'ready' }]);
-  assert.equal('foo' in result.cursor, false);
+  assert.deepEqual(result.cursor, { 'trace-8100': { lines: 2, provenanceLines: 2 } });
 
   const onDisk = await readState(paths);
-  assert.equal('foo' in onDisk.processed, false); // F4: the stale key must not survive a gate that actually fired
   assert.deepEqual(onDisk.processed, { 'trace-8100': { lines: 2, provenanceLines: 2 } });
 });
 
@@ -723,4 +733,61 @@ test('a state entry for a trace dir that no longer exists is pruned from the per
   assert.deepEqual(second.cursor, {});
   const onDisk = await readState(paths);
   assert.deepEqual(onDisk.processed, {});
+});
+
+// --- N1 (fix round 2, Important): a read fault must not be mistaken for
+// an empty session ---
+
+test('a session whose actions.jsonl becomes unreadable is left completely untouched: cursor unchanged, reported as unreadable, no re-counted replay once readable again', async (t) => {
+  const paths = await tempPaths(t);
+  await writeSession(paths, 14000, {
+    meta: baseMeta(),
+    records: [
+      record({ seq: 1, tool: 'browser_navigate', params: { url: 'https://shop.example/cart' } }),
+      record({ seq: 2, targets: [traceTarget({ name: 'View details' })], mutating: false }),
+    ],
+  });
+  const first = await sweep({ paths });
+  const [{ name }] = first.compiled;
+  const stored = await readFlow(paths.flowsDir, 'view-details.flow.json');
+
+  // Establish a counted replay (cursor n) before the fault, per the
+  // regression scenario: a re-count on recovery would show up here.
+  await appendRecords(paths, 14000, [
+    record({
+      seq: 3,
+      tool: 'browser_run_code_unsafe',
+      params: { filename: 'flow-runner.js', args: { flow: { id: stored.id, name } } },
+    }),
+  ]);
+  const second = await sweep({ paths });
+  assert.deepEqual(second.updated, [{ name, successRuns: 1, failStreak: 0 }]);
+  const cursorBeforeFault = second.cursor['trace-14000'];
+  assert.deepEqual(cursorBeforeFault, { lines: 3, provenanceLines: 3 });
+
+  const actionsFile = path.join(paths.dataDir, 'trace-14000', 'actions.jsonl');
+  await chmod(actionsFile, 0o000);
+  t.after(() => chmod(actionsFile, 0o600).catch(() => {})); // safety net for the outer tmpdir rm
+
+  const third = await sweep({ paths });
+  assert.deepEqual(third.compiled, []);
+  assert.deepEqual(third.updated, []);
+  assert.deepEqual(
+    third.skippedBySession,
+    { 'trace-14000': [{ reason: 'unreadable', seqRange: [null, null] }] },
+  );
+  assert.deepEqual(third.cursor['trace-14000'], cursorBeforeFault); // cursor unchanged on disk
+
+  const stateWhileFaulted = await readState(paths);
+  assert.deepEqual(stateWhileFaulted.processed['trace-14000'], cursorBeforeFault);
+
+  await chmod(actionsFile, 0o600);
+  const fourth = await sweep({ paths });
+  assert.deepEqual(fourth.compiled, []); // no fresh compile duplicate
+  assert.deepEqual(fourth.updated, []); // no re-count
+  assert.deepEqual(fourth.cursor['trace-14000'], cursorBeforeFault);
+
+  const finalFlow = await readFlow(paths.flowsDir, 'view-details.flow.json');
+  assert.equal(finalFlow.provenance.successRuns, 1); // still just the one real application
+  assert.deepEqual(await listFlowFiles(paths.flowsDir), ['view-details.flow.json']);
 });

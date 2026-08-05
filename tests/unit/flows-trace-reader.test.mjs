@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import {
+  chmod, mkdir, mkdtemp, rm, writeFile,
+} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -79,8 +81,9 @@ test('listTraceSessions never throws for a missing data directory', async () => 
 });
 
 test('readTraceRecords parses the session-basic fixture into six records with zero skipped', async () => {
-  const { records, skipped } = await readTraceRecords(basicDir);
+  const { records, skipped, readable } = await readTraceRecords(basicDir);
 
+  assert.equal(readable, true);
   assert.equal(records.length, 6);
   assert.equal(skipped, 0);
 
@@ -122,8 +125,9 @@ test('readTraceRecords parses the session-basic fixture into six records with ze
 });
 
 test('readTraceRecords counts hostile lines in the session-truncated fixture without throwing', async () => {
-  const { records, skipped } = await readTraceRecords(truncatedDir);
+  const { records, skipped, readable } = await readTraceRecords(truncatedDir);
 
+  assert.equal(readable, true); // the file itself read fine -- its CONTENT is hostile, not the read
   assert.equal(records.length, 2);
   assert.equal(skipped, 2);
 
@@ -142,14 +146,37 @@ test('readTraceRecords counts hostile lines in the session-truncated fixture wit
   assert.deepEqual(cleanedScript, { items: [], truncated: true });
 });
 
-test('readTraceRecords never throws when actions.jsonl is missing', async (t) => {
+test('readTraceRecords never throws when actions.jsonl is missing, and reports readable: false', async (t) => {
   const dataDir = await tempDataDir();
   t.after(() => rm(dataDir, { recursive: true, force: true }));
   const sessionDir = path.join(dataDir, 'trace-9999999999999');
   await mkdir(sessionDir);
 
   const result = await readTraceRecords(sessionDir);
-  assert.deepEqual(result, { records: [], skipped: 0 });
+  assert.deepEqual(result, { records: [], skipped: 0, readable: false });
+});
+
+test('readTraceRecords never throws when actions.jsonl exists but is unreadable (permissions), and reports readable: false', async (t) => {
+  const dataDir = await tempDataDir();
+  t.after(async () => {
+    // Restore write/read perms before recursive rm -- an rm that has to
+    // descend into a 000-mode file's parent can otherwise fail cleanup.
+    await chmod(path.join(dataDir, 'trace-8888888888888', 'actions.jsonl'), 0o600).catch(() => {});
+    await rm(dataDir, { recursive: true, force: true });
+  });
+  const sessionDir = path.join(dataDir, 'trace-8888888888888');
+  await mkdir(sessionDir);
+  const actionsFile = path.join(sessionDir, 'actions.jsonl');
+  await writeFile(actionsFile, '{"v":1,"seq":1,"tool":"browser_navigate"}\n');
+  await chmod(actionsFile, 0o000);
+
+  const result = await readTraceRecords(sessionDir);
+  // Distinguished from the missing-file case above ONLY by NOT being a
+  // parse-hostile empty read: both report readable: false, records: [],
+  // skipped: 0 -- the point is that a caller can never tell "unreadable"
+  // apart from "genuinely empty" via records/skipped alone, which is
+  // exactly why `readable` exists.
+  assert.deepEqual(result, { records: [], skipped: 0, readable: false });
 });
 
 test('isTruncationMarker recognizes every marker shape and rejects ordinary data', () => {
