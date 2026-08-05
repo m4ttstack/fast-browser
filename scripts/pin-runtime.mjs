@@ -102,9 +102,17 @@ async function main() {
     ];
 
     // Anything below that still mentions the previous release after rewriting
-    // means a value was missed.
+    // means a value was missed -- unless the new release carries that exact
+    // value forward on purpose. A release that changes nothing in
+    // packages/extension re-ships a byte-identical archive, so the extension
+    // sha256 is the same string before and after and finding it afterwards
+    // proves nothing was missed. Only values the pin actually changes can go
+    // stale, so only those are asserted on.
+    const carriedForward = new Set([lock.sourceCommit, lock.runtime.sha256, lock.extension.sha256,
+      lock.runtime.file, lock.extension.file, `fast-browser-v${v.to}`]);
     const stale = [old.sourceCommit, old.runtime.sha256, old.extension.sha256,
-      old.runtime.file, old.extension.file, `fast-browser-v${v.from}`];
+      old.runtime.file, old.extension.file, `fast-browser-v${v.from}`]
+        .filter(value => !carriedForward.has(value));
 
     const edits = [
       await rewrite('THIRD_PARTY_NOTICES.md',
