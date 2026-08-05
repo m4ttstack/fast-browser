@@ -4,6 +4,7 @@ import {
 } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { Readable } from 'node:stream';
 import test from 'node:test';
 
 import { sites } from '../../lib/commands/sites.mjs';
@@ -242,9 +243,12 @@ test('digest reads the payload from stdin, stores it, and echoes saved/pattern/s
   );
 
   assert.equal(written.origin, 'https://shop.example');
+  // The stored `url` is the SANITIZED form (origin + pathname only, fix
+  // round 1 I1), not an echo of the raw input -- note the host case is
+  // also normalized, since it comes from the canonical `origin`.
   assert.deepEqual(written.record, {
     schemaVersion: 1,
-    url: 'https://Shop.Example/cart',
+    url: 'https://shop.example/cart',
     pattern: '/cart',
     savedAt: '2026-08-05T12:00:00.000Z',
     ttlHours: 72,
@@ -280,6 +284,52 @@ test('digest rejects a stdin payload over MAX_DIGEST_BYTES without writing', asy
         paths: { sitesDir: '/h/sites', dataDir: '/h' },
         readStdin: fakeStdin(oversized),
         writeDigest: async () => { throw new Error('must not write an oversized digest'); },
+      },
+    ),
+    (error) => error.name === 'LifecycleError' && /bytes/i.test(error.message),
+  );
+});
+
+// Fix round 1, M8: pin the DEFAULT streaming stdin reader itself (not a
+// fake `readStdin`) against a real `Readable`, exactly at the
+// MAX_DIGEST_BYTES boundary and one byte past it. `payloadOfSize` builds
+// `JSON.stringify({ filler: 'x'.repeat(n) })` whose total byte length is
+// exactly `13 + n` (the fixed `{"filler":"` / `"}` wrapper is 13 ASCII
+// bytes), so the caller can hit an exact byte target; the payload is split
+// across three chunks so the real stream genuinely exercises multi-chunk
+// accumulation, not a single `for await` iteration.
+function payloadOfSize(totalBytes) {
+  const filler = 'x'.repeat(totalBytes - 13);
+  const raw = JSON.stringify({ filler });
+  assert.equal(Buffer.byteLength(raw, 'utf8'), totalBytes);
+  const third = Math.floor(raw.length / 3);
+  return [raw.slice(0, third), raw.slice(third, third * 2), raw.slice(third * 2)];
+}
+
+test('[real stream] the default stdin reader accepts exactly MAX_DIGEST_BYTES and rejects one byte more', async () => {
+  const atBound = Readable.from(payloadOfSize(MAX_DIGEST_BYTES));
+  let written;
+  const report = await sites(
+    { sub: 'digest', url: 'https://example.com/cart', json: true },
+    {
+      paths: { sitesDir: '/h/sites', dataDir: '/h' },
+      input: atBound,
+      writeDigest: async (pathsArg, origin, record) => { written = record; },
+      now: () => new Date('2026-08-05T12:00:00.000Z'),
+      assertConfined: async () => {},
+    },
+  );
+  assert.equal(report.saved, true);
+  assert.equal(written.digest.filler.length, MAX_DIGEST_BYTES - 13);
+
+  const overBound = Readable.from(payloadOfSize(MAX_DIGEST_BYTES + 1));
+  await assert.rejects(
+    sites(
+      { sub: 'digest', url: 'https://example.com/cart', json: false },
+      {
+        paths: { sitesDir: '/h/sites', dataDir: '/h' },
+        input: overBound,
+        writeDigest: async () => { throw new Error('must not write past the bound'); },
       },
     ),
     (error) => error.name === 'LifecycleError' && /bytes/i.test(error.message),
@@ -350,6 +400,41 @@ test('[real fs] digest writes a real digest record that readDigest can read back
   assert.equal(read.ttlHours, 48);
   assert.equal(read.stale, false);
   assert.deepEqual(read.digest, { affordances: ['button:Place order'] });
+});
+
+// Fix round 1, I1: userinfo/query/fragment must never reach disk. The
+// stored `url` field is sanitized down to `origin + pathname` only --
+// verified here against the ACTUAL BYTES on disk (`readFile`), not just
+// the parsed-back record, so a leak that only showed up in raw JSON
+// formatting (whitespace, escaping) couldn't hide from this assertion.
+test('[real fs] digest stores a sanitized url, stripping userinfo/query/fragment from the file bytes', async (t) => {
+  const paths = await tempPaths(t);
+  const hostile = 'https://user:hunter2@shop.example/cart?token=SECRET123#frag';
+
+  const report = await sites(
+    { sub: 'digest', url: hostile, json: true },
+    {
+      paths,
+      readStdin: fakeStdin(JSON.stringify({ affordances: ['button:Place order'] })),
+      now: () => new Date('2026-08-05T12:00:00.000Z'),
+    },
+  );
+  assert.equal(report.pattern, '/cart');
+
+  const digestFilePath = path.join(
+    paths.sitesDir,
+    originDirName('https://shop.example'),
+    'digests',
+    `${patternSlug('/cart')}.json`,
+  );
+  const raw = await readFile(digestFilePath, 'utf8');
+  assert.doesNotMatch(raw, /hunter2/);
+  assert.doesNotMatch(raw, /SECRET123/);
+  assert.doesNotMatch(raw, /frag/);
+  assert.match(raw, /"url": "https:\/\/shop\.example\/cart"/);
+
+  const read = await readDigest(paths, 'https://shop.example', '/cart');
+  assert.equal(read.url, 'https://shop.example/cart');
 });
 
 test('[real fs] digest refuses a symlink planted at the digest file path, leaving it untouched', async (t) => {
@@ -473,6 +558,124 @@ test('quirk add includes description and urlPattern when given', async () => {
   );
   assert.equal(written.quirks[0].target.description, 'Accept all cookies');
   assert.equal(written.quirks[0].urlPattern, '/cart');
+});
+
+// Fix round 1, I3: `--url-pattern` must start with `/` and stay within a
+// length bound; the error names the requirement, never echoes the value.
+test('quirk add rejects a url-pattern that is not a path, or is too long, without writing', async () => {
+  const base = {
+    sub: 'quirk', verb: 'add', name: 'cookie-banner', origin: 'https://example.com', selector: '#accept', description: null,
+  };
+  for (const bad of ['https://evil.example/absolute', 'cart', `/${'x'.repeat(200)}`]) {
+    await assert.rejects(
+      sites(
+        { ...base, urlPattern: bad, json: false },
+        {
+          paths: { sitesDir: '/h/sites', dataDir: '/h' },
+          readSite: async () => { throw new Error('must not read the store'); },
+          writeQuirks: async () => { throw new Error('must not write'); },
+        },
+      ),
+      (error) => error.name === 'LifecycleError'
+        && !error.message.includes(bad)
+        && /url-pattern/i.test(error.message),
+    );
+  }
+});
+
+test('quirk add accepts a url-pattern at exactly the 200-character bound and round-trips it', async () => {
+  const atBound = `/${'x'.repeat(199)}`;
+  assert.equal(atBound.length, 200);
+  let written;
+  await sites(
+    {
+      sub: 'quirk', verb: 'add', name: 'cookie-banner', origin: 'https://example.com', selector: '#accept', description: null, urlPattern: atBound, json: true,
+    },
+    {
+      paths: { sitesDir: '/h/sites', dataDir: '/h' },
+      readSite: async () => ({ quirks: { quirks: [] } }),
+      writeQuirks: async (pathsArg, origin, quirks) => { written = quirks; },
+      now: () => new Date('2026-08-05T12:00:00.000Z'),
+      assertConfined: async () => {},
+    },
+  );
+  assert.equal(written.quirks[0].urlPattern, atBound);
+});
+
+// Fix round 1, M4: selector and description are bounded at the command
+// layer (defense in depth -- parse-args already rejects an empty
+// --selector, but a caller invoking `sites()` directly, bypassing the
+// CLI parser, must still be refused).
+test('quirk add rejects an empty or over-length selector without writing', async () => {
+  for (const bad of ['', 'x'.repeat(501)]) {
+    await assert.rejects(
+      sites(
+        {
+          sub: 'quirk', verb: 'add', name: 'cookie-banner', origin: 'https://example.com', selector: bad, description: null, urlPattern: null, json: false,
+        },
+        {
+          paths: { sitesDir: '/h/sites', dataDir: '/h' },
+          readSite: async () => { throw new Error('must not read the store'); },
+          writeQuirks: async () => { throw new Error('must not write'); },
+        },
+      ),
+      (error) => error.name === 'LifecycleError' && /selector/i.test(error.message),
+    );
+  }
+});
+
+test('quirk add rejects an over-length description without writing', async () => {
+  await assert.rejects(
+    sites(
+      {
+        sub: 'quirk', verb: 'add', name: 'cookie-banner', origin: 'https://example.com', selector: '#accept', description: 'x'.repeat(501), urlPattern: null, json: false,
+      },
+      {
+        paths: { sitesDir: '/h/sites', dataDir: '/h' },
+        readSite: async () => { throw new Error('must not read the store'); },
+        writeQuirks: async () => { throw new Error('must not write'); },
+      },
+    ),
+    (error) => error.name === 'LifecycleError' && /description/i.test(error.message),
+  );
+});
+
+test('quirk add accepts a selector/description at exactly the 500-character bound', async () => {
+  const atBound = 'x'.repeat(500);
+  let written;
+  await sites(
+    {
+      sub: 'quirk', verb: 'add', name: 'cookie-banner', origin: 'https://example.com', selector: atBound, description: atBound, urlPattern: null, json: true,
+    },
+    {
+      paths: { sitesDir: '/h/sites', dataDir: '/h' },
+      readSite: async () => ({ quirks: { quirks: [] } }),
+      writeQuirks: async (pathsArg, origin, quirks) => { written = quirks; },
+      now: () => new Date('2026-08-05T12:00:00.000Z'),
+      assertConfined: async () => {},
+    },
+  );
+  assert.equal(written.quirks[0].target.locators[0].selector, atBound);
+  assert.equal(written.quirks[0].target.description, atBound);
+});
+
+// Fix round 1 nit: an empty --description is "not given", not an error --
+// the key is omitted entirely rather than stored as an empty string.
+test('quirk add omits the description key entirely when --description is an empty string', async () => {
+  let written;
+  await sites(
+    {
+      sub: 'quirk', verb: 'add', name: 'cookie-banner', origin: 'https://example.com', selector: '#accept', description: '', urlPattern: null, json: true,
+    },
+    {
+      paths: { sitesDir: '/h/sites', dataDir: '/h' },
+      readSite: async () => ({ quirks: { quirks: [] } }),
+      writeQuirks: async (pathsArg, origin, quirks) => { written = quirks; },
+      now: () => new Date('2026-08-05T12:00:00.000Z'),
+      assertConfined: async () => {},
+    },
+  );
+  assert.equal('description' in written.quirks[0].target, false);
 });
 
 test('quirk list returns the origin quirks verbatim', async () => {

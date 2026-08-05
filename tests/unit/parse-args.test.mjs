@@ -329,7 +329,12 @@ test('flows find requires --intent; other subcommands do not', () => {
   assert.doesNotThrow(() => parseArgs(['flows', 'compile']));
 });
 
-test('--intent, --origin, and --url are allowlisted to flows only', () => {
+// Fix round 1, M10: this title used to say "allowlisted to flows only",
+// which stopped being accurate the moment --origin/--url were extended to
+// sites too (see the dedicated 'allowlisted to both flows and sites' test
+// below) -- --intent is still flows-only, but --origin/--url here are only
+// being checked against commands that get NEITHER, not against sites.
+test('--intent is flows-only; --origin and --url are rejected by commands outside flows and sites', () => {
   assert.throws(() => parseArgs(['setup', '--intent', 'x']), UsageError);
   assert.throws(() => parseArgs(['configure', '--origin', 'https://example.com']), UsageError);
   assert.throws(() => parseArgs(['doctor', '--url', '/x']), UsageError);

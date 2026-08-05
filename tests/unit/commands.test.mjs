@@ -4219,6 +4219,38 @@ test('CLI main renders sites affordances listing each mined target, and the dige
   assert.match(outputNotFound, /Mined inventory: none yet\./);
 });
 
+// Fix round 1, I2: `savedAt` was the one human-printed field that bypassed
+// stripControlChars. store.mjs's own on-disk validation for this field is
+// just `!Number.isNaN(Date.parse(raw))` (its `isoString` helper) -- and
+// V8's date parser accepts and silently ignores a trailing parenthesized
+// comment on the `toString()`-style date format (the format `new
+// Date().toString()` itself produces), so a `savedAt` carrying a raw ESC
+// byte inside such a comment still parses successfully. This value is
+// deliberately NOT `.toISOString()` shaped -- proving the point requires a
+// shape `Date.parse` accepts despite the trailing junk.
+test('CLI main strips control characters from an affordances savedAt value that Date.parse still accepts', async () => {
+  const haunted = 'Wed Aug 05 2026 00:00:00 GMT+0000 (\x1b[31mFAKE\x1b[0m)';
+  assert.equal(Number.isNaN(Date.parse(haunted)), false, 'fixture must itself be Date.parse-valid');
+  const report = {
+    command: 'sites',
+    sub: 'affordances',
+    found: true,
+    stale: false,
+    savedAt: haunted,
+    pattern: '/cart',
+    digest: {},
+    inventory: [],
+  };
+  const writes = [];
+  await main(
+    { command: 'sites', json: false },
+    { commands: { sites: async () => report }, write: (text) => writes.push(text) },
+  );
+  const output = writes.join('');
+  assert.doesNotMatch(output, /\x1b/);
+  assert.match(output, /FAKE/);
+});
+
 // The brief's own pinned scenario: a mined target NAME is page-derived free
 // text (an accessible name an agent never validated), so an ESC byte
 // planted in it must be stripped before `sites affordances`'s human arm
