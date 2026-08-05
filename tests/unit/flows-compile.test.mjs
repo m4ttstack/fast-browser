@@ -342,6 +342,30 @@ test('browser_wait_for with only text/textGone is an observation: no step, segme
   assert.deepEqual(result.flows[0].steps.map((s) => s.op), ['goto', 'click']);
 });
 
+test('fix-round-2 N3: browser_wait_for with a present but non-finite-number time (e.g. a string) is invalid, never silently dropped', () => {
+  const records = [
+    record({ seq: 1, tool: 'browser_navigate', params: { url: 'https://example.com/app' } }),
+    record({ seq: 2, tool: 'browser_wait_for', params: { time: '2' } }),
+  ];
+  const result = compileSession({ records, meta });
+  assert.deepEqual(result.flows, []);
+  assert.deepEqual(result.report.skipped, [
+    { reason: 'invalid: browser_wait_for has a non-finite params.time', seqRange: [1, 2] },
+  ]);
+});
+
+test('fix-round-2 N3: browser_wait_for with time absent entirely (only text/textGone) still stays a plain observation, not invalid', () => {
+  const records = [
+    record({ seq: 1, tool: 'browser_navigate', params: { url: 'https://example.com/app' } }),
+    record({ seq: 2, tool: 'browser_wait_for', params: { textGone: 'Spinner' } }),
+    record({ seq: 3, targets: [traceTarget({ name: 'Ok' })] }),
+  ];
+  const result = compileSession({ records, meta });
+  assert.equal(result.flows.length, 1);
+  assert.deepEqual(result.report.skipped, []);
+  assert.deepEqual(result.flows[0].steps.map((s) => s.op), ['goto', 'click']);
+});
+
 test('a segment made only of observation-only waits clears the action-record threshold but produces zero steps, and is reported too-short', () => {
   const records = [
     record({ seq: 1, tool: 'browser_wait_for', params: { text: 'Loaded' } }),
@@ -490,7 +514,7 @@ test('a goto URL with no matching lifted literal is left untouched in both the s
   assert.equal(flow.steps[0].url, '/checkout/gold');
 });
 
-test('a goto URL query value matching an already-lifted fill literal is tokenized (fix-round-1 F3), other query pairs untouched', () => {
+test('a goto URL query value matching an already-lifted fill literal is tokenized in the step url; urlPattern stays path-only (fix-round-2 N1)', () => {
   const records = [
     record({
       seq: 1, tool: 'browser_navigate', params: { url: 'https://example.com/search?q=SAVE10&sort=asc' },
@@ -501,7 +525,9 @@ test('a goto URL query value matching an already-lifted fill literal is tokenize
   ];
   const result = compileSession({ records, meta });
   const flow = result.flows[0];
-  assert.equal(flow.urlPattern, '/search?q=:couponCode&sort=asc');
+  // urlPattern is for retrieval matching (Task 6, path-only convention) --
+  // the tokenized query lives only in the step's own replay url.
+  assert.equal(flow.urlPattern, '/search');
   assert.equal(flow.steps[0].url, '/search?q={couponCode}&sort=asc');
   assert.deepEqual(flow.args, { couponCode: { type: 'string', required: true } });
 });
@@ -517,8 +543,20 @@ test('a lifted literal that is a prefix of an unrelated, longer query value is n
   ];
   const result = compileSession({ records, meta });
   const flow = result.flows[0];
-  assert.equal(flow.urlPattern, '/search?q=:couponCode&code=SAVE100');
+  assert.equal(flow.urlPattern, '/search');
   assert.equal(flow.steps[0].url, '/search?q={couponCode}&code=SAVE100');
+});
+
+test('fix-round-2 N1: a query-bearing nav with no click names from the path root only, urlPattern excludes the query entirely', () => {
+  const records = [
+    record({ seq: 1, tool: 'browser_navigate', params: { url: 'https://example.com/search?q=widgets' } }),
+    record({ seq: 2, tool: 'browser_press_key', params: { key: 'Enter' } }),
+  ];
+  const result = compileSession({ records, meta });
+  const flow = result.flows[0];
+  assert.equal(flow.name, 'search'); // tier-2 path-root fallback, not 'search?q=:query'-derived
+  assert.equal(flow.urlPattern, '/search');
+  assert.equal(flow.steps[0].url, '/search?q=widgets');
 });
 
 test('browser_file_upload paths are always lifted into sequential file/file2/... args, never baked as literal paths', () => {
@@ -716,6 +754,17 @@ test('fix-round-1 F1: a record with a missing seq compiles to a skip, not a cras
   const result = compileSession({ records, meta });
   assert.deepEqual(result.flows, []);
   assert.match(result.report.skipped[0].reason, /^invalid:/);
+  // Fix-round-2 N2: a non-finite seq renders as `null` in seqRange, not a
+  // bare JS `undefined` sitting in the array.
+  assert.deepEqual(result.report.skipped[0].seqRange, [null, null]);
+});
+
+test('fix-round-2 N2: a missing seq on a naturally-too-short segment also renders seqRange as [null, null]', () => {
+  const records = [
+    record({ seq: undefined, tool: 'browser_navigate', params: { url: 'https://example.com/app' } }),
+  ];
+  const result = compileSession({ records, meta });
+  assert.deepEqual(result.report.skipped, [{ reason: 'too-short', seqRange: [null, null] }]);
 });
 
 test('fix-round-1 "ADOPTED F8": a browser_navigate with missing params.url skips the segment as invalid, never fabricates goto /', () => {
