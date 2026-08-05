@@ -101,7 +101,7 @@ test('session-basic compiles to exactly one mutating flow with lifted args, toke
   assert.deepEqual(flow.steps[4], {
     op: 'js',
     sha256: '7df3adde491b71e6f010dc825dbe3a2c74e25f8e4e9b8e2c105dc87327bac85e',
-    args: { timeoutMs: 5000 },
+    args: { timeoutMs: '<REDACTED: captured value not stored>' }, // I2: keys kept, values redacted
   });
 
   assert.deepEqual(flow.provenance.seqRange, [1, 5]);
@@ -146,7 +146,7 @@ test('the read-only fixture (nav + GET-only click + run_code) compiles to a read
   assert.deepEqual(flow.steps[1].waitAfter, { networkSettled: true }); // waits.awaitedRequests: 1
   assert.equal(flow.steps[2].op, 'js');
   assert.match(flow.steps[2].sha256, /^[0-9a-f]{64}$/);
-  assert.deepEqual(flow.steps[2].args, { timeoutMs: 5000 });
+  assert.deepEqual(flow.steps[2].args, { timeoutMs: '<REDACTED: captured value not stored>' }); // I2
 
   assert.deepEqual(result.report.skipped, []);
 });
@@ -404,6 +404,52 @@ test('browser_press_key compiles a press step with no target key at all (keyboar
   assert.equal(Object.hasOwn(press, 'target'), false);
 });
 
+// --- final whole-branch review, I1: browser_press_key is telemetry-blind
+// for every key except plain 'Enter' -- the runtime only routes an Enter
+// press through its network-observation wait, so any other key's own
+// `record.mutating`/`network` always read false/[] by construction. A press
+// key other than exactly 'Enter' must therefore be treated as
+// mutating-by-identity regardless of what its own record says. ---
+
+test('I1: a press key other than plain Enter is treated as mutating-by-identity even though its own record is telemetry-blind (mutating: false, network: [])', () => {
+  const records = [
+    record({ seq: 1, tool: 'browser_navigate', params: { url: 'https://example.com/app' } }),
+    record({ seq: 2, tool: 'browser_press_key', params: { key: 'e' } }),
+  ];
+  const result = compileSession({ records, meta });
+  assert.equal(result.flows[0].sideEffects, 'mutating');
+});
+
+test('I1: a plain Enter press with mutating: false and GET-only network stays read-only -- its own telemetry is trustworthy', () => {
+  const records = [
+    record({ seq: 1, tool: 'browser_navigate', params: { url: 'https://example.com/app' } }),
+    record({
+      seq: 2,
+      tool: 'browser_press_key',
+      params: { key: 'Enter' },
+      mutating: false,
+      network: [{ method: 'GET', url: 'https://example.com/api/search' }],
+    }),
+  ];
+  const result = compileSession({ records, meta });
+  assert.equal(result.flows[0].sideEffects, 'read-only');
+});
+
+test('I1: a plain Enter press with mutating: true (a network-observed POST) is mutating -- its structural flag still passes through', () => {
+  const records = [
+    record({ seq: 1, tool: 'browser_navigate', params: { url: 'https://example.com/app' } }),
+    record({
+      seq: 2,
+      tool: 'browser_press_key',
+      params: { key: 'Enter' },
+      mutating: true,
+      network: [{ method: 'POST', url: 'https://example.com/api/submit' }],
+    }),
+  ];
+  const result = compileSession({ records, meta });
+  assert.equal(result.flows[0].sideEffects, 'mutating');
+});
+
 test('literals shorter than 2 characters and the checkbox boolean strings "true"/"false" are not lifted', () => {
   const records = [
     record({ seq: 1, tool: 'browser_navigate', params: { url: 'https://example.com/app' } }),
@@ -434,6 +480,48 @@ test('fix-round-1 "ADOPTED F7": a fill literal with no nameable target is still 
   assert.equal(flow.steps.find((s) => s.op === 'fill').value, '{value}');
   // the raw captured literal must not appear anywhere in the compiled flow
   assert.equal(JSON.stringify(flow).includes('SecretPass123'), false);
+});
+
+// --- final whole-branch review, I2: buildJsStep must never copy
+// record.script.args verbatim into the artifact -- these are password-class
+// captured values with zero replay utility (the flow-runner refuses every
+// js step in v1), so a raw echo leaks a captured secret to disk (every
+// compiled flow is persisted) and to the terminal (every `flows find`
+// invocation echoes it). ---
+
+test('I2: a js-step script arg value is redacted; the raw captured secret never appears anywhere in the serialized flow', () => {
+  const records = [
+    record({ seq: 1, tool: 'browser_navigate', params: { url: 'https://example.com/app' } }),
+    record({
+      seq: 2,
+      tool: 'browser_run_code_unsafe',
+      script: { sha256: 'a'.repeat(64), args: { password: 'hunter2', username: 'alice' } },
+    }),
+  ];
+  const result = compileSession({ records, meta });
+  const flow = result.flows[0];
+  const js = flow.steps.find((s) => s.op === 'js');
+  // keys survive (shape stays legible); every value is the placeholder
+  assert.deepEqual(js.args, {
+    password: '<REDACTED: captured value not stored>',
+    username: '<REDACTED: captured value not stored>',
+  });
+  assert.equal(JSON.stringify(flow).includes('hunter2'), false);
+  assert.equal(JSON.stringify(flow).includes('alice'), false);
+});
+
+test('I2: a non-object script.args redacts to null rather than being fabricated as {} -- parseFlow rejects it, so the segment skips as invalid', () => {
+  const records = [
+    record({ seq: 1, tool: 'browser_navigate', params: { url: 'https://example.com/app' } }),
+    record({
+      seq: 2,
+      tool: 'browser_run_code_unsafe',
+      script: { sha256: 'b'.repeat(64), args: ['positional', 'secret'] },
+    }),
+  ];
+  const result = compileSession({ records, meta });
+  assert.deepEqual(result.flows, []);
+  assert.match(result.report.skipped[0].reason, /^invalid:/);
 });
 
 test('two positional-fallback lifts in the same flow get value and value2', () => {

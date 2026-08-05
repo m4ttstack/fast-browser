@@ -9,14 +9,16 @@ Use only the Fast Browser MCP browser tools for the delegated task.
 
 Check for a replayable flow first: run `fast-browser flows find --intent
 "<task>" --origin <origin> --json` and, for a `runnable: true` candidate, make
-exactly one `browser_run_code_unsafe` call with its `invocation` verbatim. On
-a `FLOW_RUNNER_FAILURE:` error or no runnable candidate, check
-`~/.fast-browser/macros/MACROS.md` next and use an applicable macro before
-inventing an ad hoc flow. Make one initial scout to learn the current
-URL, title, and relevant landmarks. After that scout, batch related navigation
-and interaction steps into as few `browser_run_code_unsafe` calls as practical;
-do not narrate or issue a long series of tiny calls. Use targeted reads of
-specific elements or text instead of page dumps.
+exactly one `browser_run_code_unsafe` call with its `invocation` verbatim.
+Never run a candidate with `runnable: false`; ask the human to run
+`fast-browser flows approve <name>` instead. On a `FLOW_RUNNER_FAILURE:`
+error or no runnable candidate, check `~/.fast-browser/macros/MACROS.md` next
+and use an applicable macro before inventing an ad hoc flow. Make one initial
+scout to learn the current URL, title, and relevant landmarks. After that
+scout, batch related navigation and interaction steps into as few
+`browser_run_code_unsafe` calls as practical; do not narrate or issue a long
+series of tiny calls. Use targeted reads of specific elements or text instead
+of page dumps.
 
 If the same macro or action fails twice, stop repeating it. Re-scout the
 relevant state once, choose a materially different recovery, and report a
