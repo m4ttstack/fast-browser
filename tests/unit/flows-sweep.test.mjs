@@ -9,6 +9,7 @@ import test from 'node:test';
 import { flowId } from '../../lib/flows/artifact.mjs';
 import { resolvePaths } from '../../lib/core/paths.mjs';
 import { sweep } from '../../lib/flows/sweep.mjs';
+import { originDirName } from '../../lib/sites/store.mjs';
 
 // --- fixture builders (mirrors flows-compile.test.mjs's `record()`/
 // `traceTarget()` helper style, but written to real actions.jsonl files in
@@ -119,6 +120,80 @@ function twoTierRecords() {
       seq: 4, targets: [traceTarget({ name: 'Place order' })], mutating: true,
     }),
   ];
+}
+
+// --- site memory fixtures (WS2b Task 4) ---
+//
+// Unlike `twoTierRecords()` above (whose `urlBefore`/`urlAfter` are left at
+// `record()`'s own default on every record -- irrelevant to `compileSession`,
+// which derives origin/segmentation from a goto step's `params.url`, not
+// these fields), the graph/inventory miners key entirely off `urlBefore`/
+// `urlAfter`. These fixtures set both explicitly so mining has real
+// navigation/target signal to work with.
+
+// One origin: an entry navigation (from outside shop.example) followed by a
+// same-origin navigation-by-click. Mines to 2 graph edges (entry -> /cart,
+// /cart -> /product/:id) and 1 inventory target (View details on /cart).
+function siteMiningRecords() {
+  return [
+    record({
+      seq: 1,
+      tool: 'browser_navigate',
+      params: { url: 'https://shop.example/cart' },
+      urlBefore: 'about:blank',
+      urlAfter: 'https://shop.example/cart',
+    }),
+    record({
+      seq: 2,
+      targets: [traceTarget({ name: 'View details' })],
+      mutating: false,
+      urlBefore: 'https://shop.example/cart',
+      urlAfter: 'https://shop.example/product/42',
+    }),
+  ];
+}
+
+// Two origins in one session (mirrors `twoTierRecords()`'s read-only/
+// mutating split, but with real urlBefore/urlAfter progression): shop.example
+// (nav + same-page click, so only the nav yields a graph edge) and
+// checkout.example (cross-origin nav + same-page mutating click).
+function multiOriginSiteRecords() {
+  return [
+    record({
+      seq: 1,
+      tool: 'browser_navigate',
+      params: { url: 'https://shop.example/cart' },
+      urlBefore: 'about:blank',
+      urlAfter: 'https://shop.example/cart',
+    }),
+    record({
+      seq: 2,
+      targets: [traceTarget({ name: 'View details' })],
+      mutating: false,
+      urlBefore: 'https://shop.example/cart',
+      urlAfter: 'https://shop.example/cart',
+    }),
+    record({
+      seq: 3,
+      tool: 'browser_navigate',
+      params: { url: 'https://checkout.example/pay' },
+      urlBefore: 'https://shop.example/cart',
+      urlAfter: 'https://checkout.example/pay',
+    }),
+    record({
+      seq: 4,
+      targets: [traceTarget({ name: 'Place order' })],
+      mutating: true,
+      urlBefore: 'https://checkout.example/pay',
+      urlAfter: 'https://checkout.example/pay',
+    }),
+  ];
+}
+
+async function readSiteFile(paths, origin, fileName) {
+  return JSON.parse(
+    await readFile(path.join(paths.sitesDir, originDirName(origin), fileName), 'utf8'),
+  );
 }
 
 // --- fresh sweep ---
@@ -790,4 +865,165 @@ test('a session whose actions.jsonl becomes unreadable is left completely untouc
   const finalFlow = await readFlow(paths.flowsDir, 'view-details.flow.json');
   assert.equal(finalFlow.provenance.successRuns, 1); // still just the one real application
   assert.deepEqual(await listFlowFiles(paths.flowsDir), ['view-details.flow.json']);
+});
+
+// --- site memory mining (WS2b plan, Task 4) ---
+
+test('a completed session mines graph edges and inventory targets into the correctly encoded origin dir, reported in sites', async (t) => {
+  const paths = await tempPaths(t);
+  await writeSession(paths, 20000, { meta: baseMeta(), records: siteMiningRecords() });
+
+  const result = await sweep({ paths });
+
+  assert.deepEqual(result.sites.origins, ['https://shop.example']);
+  assert.equal(result.sites.edges, 2);
+  assert.equal(result.sites.targets, 1);
+  assert.equal(result.sites.evicted, 0);
+  assert.deepEqual(result.sites.errors, []);
+
+  // Origin dir is the store's own encoding -- not something this module
+  // reinvents.
+  const originDir = path.join(paths.sitesDir, originDirName('https://shop.example'));
+  assert.equal((await stat(originDir)).isDirectory(), true);
+
+  const graph = await readSiteFile(paths, 'https://shop.example', 'graph.json');
+  assert.equal(graph.edges.length, 2);
+  assert.deepEqual(
+    graph.edges.map((e) => [e.from, e.to, e.action.tool, e.action.targetName ?? null]).sort(),
+    [
+      [null, '/cart', 'browser_navigate', null],
+      ['/cart', '/product/:id', 'browser_click', 'View details'],
+    ].sort(),
+  );
+
+  const inventory = await readSiteFile(paths, 'https://shop.example', 'inventory.json');
+  assert.deepEqual(Object.keys(inventory.patterns), ['/cart']);
+  assert.equal(inventory.patterns['/cart'].targets.length, 1);
+  assert.equal(inventory.patterns['/cart'].targets[0].name, 'View details');
+
+  // Flows still compile normally alongside mining -- mining is additive,
+  // never a substitute for compilation.
+  assert.deepEqual(result.compiled, [{ name: 'view-details', tier: 'ready' }]);
+});
+
+test('a second sweep with no new lines mines nothing further: sites reports zeros, on-disk edge/target counts are unchanged (CONTRACT: sites.origins lists only origins written THIS sweep call)', async (t) => {
+  const paths = await tempPaths(t);
+  await writeSession(paths, 21000, { meta: baseMeta(), records: siteMiningRecords() });
+
+  const first = await sweep({ paths });
+  assert.equal(first.sites.edges, 2);
+
+  const second = await sweep({ paths });
+  assert.deepEqual(second.sites, {
+    origins: [], edges: 0, targets: 0, evicted: 0, errors: [],
+  });
+
+  const graph = await readSiteFile(paths, 'https://shop.example', 'graph.json');
+  assert.equal(graph.edges.length, 2);
+  assert.deepEqual(graph.edges.map((e) => e.count), [1, 1]); // not double-counted
+
+  const inventory = await readSiteFile(paths, 'https://shop.example', 'inventory.json');
+  assert.equal(inventory.patterns['/cart'].targets[0].count, 1);
+});
+
+test('a live session (no meta.endedAt) mines nothing: no sites dir is created at all', async (t) => {
+  const paths = await tempPaths(t);
+  await writeSession(paths, 22000, {
+    meta: baseMeta({ endedAt: undefined }),
+    records: siteMiningRecords(),
+  });
+
+  const result = await sweep({ paths });
+
+  assert.deepEqual(result.sites, {
+    origins: [], edges: 0, targets: 0, evicted: 0, errors: [],
+  });
+  await assert.rejects(() => stat(paths.sitesDir), { code: 'ENOENT' });
+});
+
+test('a completed session whose new records are ALL replays mines nothing: sites reports zeros, no sites dir', async (t) => {
+  const paths = await tempPaths(t);
+  await writeSession(paths, 23000, {
+    meta: baseMeta(),
+    records: [
+      record({
+        seq: 1,
+        tool: 'browser_run_code_unsafe',
+        params: { filename: 'flow-runner.js', args: { flow: { id: 'a'.repeat(64), name: 'ghost' } } },
+        urlBefore: 'https://shop.example/cart',
+        urlAfter: 'https://shop.example/product/42',
+      }),
+    ],
+  });
+
+  const result = await sweep({ paths });
+
+  assert.deepEqual(result.sites, {
+    origins: [], edges: 0, targets: 0, evicted: 0, errors: [],
+  });
+  await assert.rejects(() => stat(paths.sitesDir), { code: 'ENOENT' });
+});
+
+test('a sites store write failure is caught per-origin and reported in sites.errors; flows still compile and the cursor still advances', async (t) => {
+  const paths = await tempPaths(t);
+  await writeSession(paths, 24000, { meta: baseMeta(), records: siteMiningRecords() });
+
+  // Sabotage the PARENT sites dir (not a specific origin subdir, which
+  // doesn't exist yet): `ensurePrivateDirectory` re-chmods any dir it's
+  // handed to 0o700, so a read-only ORIGIN dir would just get repaired in
+  // place. A read-only PARENT blocks `mkdir` of the new origin subdir
+  // itself, which is a real, uncorrectable failure (mirrors
+  // tests/unit/macros.test.mjs's `chmod(paths.macrosDir, 0o500)` pattern).
+  await mkdir(paths.sitesDir, { recursive: true });
+  await chmod(paths.sitesDir, 0o500);
+  t.after(() => chmod(paths.sitesDir, 0o700).catch(() => {}));
+
+  let result;
+  try {
+    result = await sweep({ paths });
+  } finally {
+    await chmod(paths.sitesDir, 0o700);
+  }
+
+  assert.equal(result.sites.errors.length, 1);
+  assert.equal(result.sites.errors[0].origin, 'https://shop.example');
+  assert.equal(typeof result.sites.errors[0].error, 'string');
+  assert.deepEqual(result.sites.origins, []);
+  assert.equal(result.sites.edges, 0);
+  assert.equal(result.sites.targets, 0);
+
+  // Flows compile regardless -- a sites store fault never fails the flow
+  // sweep.
+  assert.deepEqual(result.compiled, [{ name: 'view-details', tier: 'ready' }]);
+  assert.deepEqual(result.cursor, { 'trace-24000': { lines: 2, provenanceLines: 2 } });
+});
+
+test('a multi-origin session mines both origins into their own dirs, aggregated into one sites report', async (t) => {
+  const paths = await tempPaths(t);
+  await writeSession(paths, 25000, { meta: baseMeta(), records: multiOriginSiteRecords() });
+
+  const result = await sweep({ paths });
+
+  assert.deepEqual(
+    result.sites.origins.slice().sort(),
+    ['https://checkout.example', 'https://shop.example'],
+  );
+  assert.equal(result.sites.edges, 2); // one entry edge per origin
+  assert.equal(result.sites.targets, 2); // one target per origin
+  assert.deepEqual(result.sites.errors, []);
+
+  const shopDir = path.join(paths.sitesDir, originDirName('https://shop.example'));
+  const checkoutDir = path.join(paths.sitesDir, originDirName('https://checkout.example'));
+  assert.equal((await stat(shopDir)).isDirectory(), true);
+  assert.equal((await stat(checkoutDir)).isDirectory(), true);
+
+  const shopGraph = await readSiteFile(paths, 'https://shop.example', 'graph.json');
+  assert.equal(shopGraph.edges.length, 1);
+  const checkoutGraph = await readSiteFile(paths, 'https://checkout.example', 'graph.json');
+  assert.equal(checkoutGraph.edges.length, 1);
+
+  const shopInventory = await readSiteFile(paths, 'https://shop.example', 'inventory.json');
+  assert.equal(shopInventory.patterns['/cart'].targets[0].name, 'View details');
+  const checkoutInventory = await readSiteFile(paths, 'https://checkout.example', 'inventory.json');
+  assert.equal(checkoutInventory.patterns['/pay'].targets[0].name, 'Place order');
 });
