@@ -23,6 +23,7 @@ import {
 import { flows } from '../../lib/commands/flows.mjs';
 import { migrate } from '../../lib/commands/migrate.mjs';
 import { setup } from '../../lib/commands/setup.mjs';
+import { stripControlChars } from '../../lib/commands/shared.mjs';
 import { sites } from '../../lib/commands/sites.mjs';
 import { uninstall } from '../../lib/commands/uninstall.mjs';
 import {
@@ -4015,6 +4016,25 @@ test('CLI main strips the extended control/bidi character set from a find descri
   assert.match(output, /\u00a0/);
   assert.match(output, /\u{1F600}/u);
   assert.match(output, /\u6f22/);
+});
+
+// MAT-138 debt sweep, item 2: the denylist grows again to cover a second
+// family of invisible/reordering characters in the same threat class as the
+// fix-round-2 additions above -- U+200E LRM / U+200F RLM (bidi
+// directionality marks: narrower than the LRE/RLE/RLO overrides already
+// stripped, but still capable of nudging how following text renders),
+// U+FEFF ZERO WIDTH NO-BREAK SPACE (the BOM character, invisible mid-string
+// exactly like the already-stripped U+200B ZWSP), and U+00AD SOFT HYPHEN
+// (invisible unless a line break lands on it, and even then renders a
+// hyphen the source string never contained). Exercised directly against
+// `stripControlChars` rather than through the CLI, since this is pinning
+// the function's own denylist, not a caller's plumbing. Every non-ASCII
+// character below is a `\uXXXX` escape, deliberately, never a literal --
+// several ARE the exact invisible bytes under test, so writing them
+// literally would make this file unreviewable in a diff.
+test('stripControlChars removes LRM, RLM, ZWNBSP, and soft hyphen, preserving tab/newline/emoji/CJK/NBSP', () => {
+  const dirty = 'a\u200eb\u200fc\ufeffd\u00ade\tf\ng\u00a0h\u{1F600}i\u6f22j';
+  assert.equal(stripControlChars(dirty), 'abcde\tf\ng\u00a0h\u{1F600}i\u6f22j');
 });
 
 test('CLI main renders flows list as a short readable block', async () => {

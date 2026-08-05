@@ -11,6 +11,14 @@ import vm from 'node:vm';
 // from the source text and from loading it as a bare expression, the same
 // way tests/unit/macros.test.mjs's `loadMacro`/`loadMacroWithoutNodeGlobals`
 // load every other built-in.
+//
+// The `/retry/i` assertion below (in the "never retries a step internally"
+// test) matches against the whole source text, comments included, and that
+// is deliberate: it exists to catch a regression toward attempt-and-retry
+// behavior, and a comment saying "retry" is exactly as strong a signal of
+// that regression as code would be -- allowing the word in a comment would
+// leave the canary able to be silenced by moving the vocabulary into prose
+// instead of actually removing the behavior.
 
 const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const macroPath = path.join(pluginRoot, 'builtins/macros/flow-runner.js');

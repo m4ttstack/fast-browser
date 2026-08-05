@@ -96,7 +96,11 @@ check (`ENOENT` or "outside allowed roots").
   `FLOW_RUNNER_FAILURE: ` followed by the JSON-serialized failure shape `{
   failedStep: <step index or 'args'>, error, url, stepsCompleted,
   locatorFallbacks }`; parse that shape back out of the error text after the
-  prefix.
+  prefix. `stepsRun` always equals `steps.length`, including a step 0 the
+  main replay loop itself never ran: when step 0 is a `goto`, the
+  precondition above performs that exact navigation and the loop starts at
+  step 1, but `stepsRun` still counts step 0 since the precondition
+  performed it on the loop's behalf.
 - Target: Any page; site-specific per invocation, driven entirely by
   `flow.origin`
 - Script: `~/.fast-browser/macros/flow-runner.js`
