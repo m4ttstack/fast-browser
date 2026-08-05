@@ -403,8 +403,10 @@ test('[real fs] digest writes a real digest record that readDigest can read back
 });
 
 // Fix round 1, I1: userinfo/query/fragment must never reach disk. The
-// stored `url` field is sanitized down to `origin + pathname` only --
-// verified here against the ACTUAL BYTES on disk (`readFile`), not just
+// stored `url` field is sanitized down to `origin + pattern` -- for a
+// route with no id-shaped segment (like `/cart` here) that collapses to
+// nothing, so it reads the same as `origin + pathname` would have.
+// Verified here against the ACTUAL BYTES on disk (`readFile`), not just
 // the parsed-back record, so a leak that only showed up in raw JSON
 // formatting (whitespace, escaping) couldn't hide from this assertion.
 test('[real fs] digest stores a sanitized url, stripping userinfo/query/fragment from the file bytes', async (t) => {
@@ -435,6 +437,42 @@ test('[real fs] digest stores a sanitized url, stripping userinfo/query/fragment
 
   const read = await readDigest(paths, 'https://shop.example', '/cart');
   assert.equal(read.url, 'https://shop.example/cart');
+});
+
+// A path-borne token is a second leak vector the fix above didn't
+// originally cover: the query/fragment/userinfo were stripped, but the
+// pathname itself was still stored RAW, so `/reset/<24-char-token>` put
+// the token in the file bytes verbatim even though the sibling `pattern`
+// field already collapsed it to `/reset/:id`. Storing `origin + pattern`
+// instead of `origin + pathname` closes that gap; this test proves it at
+// the byte level the same way the sanitization test above does.
+test('[real fs] digest stores a token-bearing path collapsed to its pattern, keeping the token out of the file bytes', async (t) => {
+  const paths = await tempPaths(t);
+  const token = 'aB3fG7kL9mN2pQ5rS8tU1vW4';
+  const hostile = `https://shop.example/reset/${token}`;
+
+  const report = await sites(
+    { sub: 'digest', url: hostile, json: true },
+    {
+      paths,
+      readStdin: fakeStdin(JSON.stringify({ affordances: ['input:New password'] })),
+      now: () => new Date('2026-08-05T12:00:00.000Z'),
+    },
+  );
+  assert.equal(report.pattern, '/reset/:id');
+
+  const digestFilePath = path.join(
+    paths.sitesDir,
+    originDirName('https://shop.example'),
+    'digests',
+    `${patternSlug('/reset/:id')}.json`,
+  );
+  const raw = await readFile(digestFilePath, 'utf8');
+  assert.doesNotMatch(raw, new RegExp(token));
+  assert.match(raw, /"url": "https:\/\/shop\.example\/reset\/:id"/);
+
+  const read = await readDigest(paths, 'https://shop.example', '/reset/:id');
+  assert.equal(read.url, 'https://shop.example/reset/:id');
 });
 
 test('[real fs] digest refuses a symlink planted at the digest file path, leaving it untouched', async (t) => {

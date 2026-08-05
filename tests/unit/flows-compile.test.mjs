@@ -1278,6 +1278,56 @@ test('fix-round-1 "ADOPTED F8": an empty-string fill value is not degenerate (a 
 
 // --- remaining test gaps: the `origin` fallback option, browser_hover ---
 
+// The no-navigate fallback (`resolveOriginAndPattern`, no `browser_navigate`
+// record in the segment at all) used to build `urlPattern` from the first
+// record's raw `urlBefore`/`urlAfter` pathname -- bypassing Task 7's
+// sensitive-value lifting entirely, since that lifting only ran inside
+// `tokenizePath`/`buildGotoStep` on the goto path. A segment that happens
+// to START on a token-bearing URL with no navigate of its own (e.g. the
+// user was already on a password-reset link when the capture began) would
+// therefore bake the token into `urlPattern` verbatim. This routes the
+// fallback pathname through the SAME `tokenizePath` the goto path uses.
+test('a no-navigate segment starting on a token-bearing URL collapses the token out of urlPattern and out of the flow bytes', () => {
+  const token = 'aB3fG7kL9mN2pQ5rS8tU1vW4'; // 24 chars, high-entropy per isHighEntropyValue
+  const url = `https://example.com/reset/${token}`;
+  const records = [
+    record({
+      seq: 1, urlBefore: url, urlAfter: url, targets: [traceTarget({ name: 'Confirm' })],
+    }),
+    record({
+      seq: 2, urlBefore: url, urlAfter: url, targets: [traceTarget({ name: 'Cancel' })],
+    }),
+  ];
+  const result = compileSession({ records, meta });
+  assert.equal(result.flows.length, 1);
+  const flow = result.flows[0];
+  assert.equal(flow.origin, 'https://example.com');
+  assert.equal(flow.urlPattern, '/reset/:value');
+  assert.deepEqual(flow.args, { value: { type: 'string', required: true } });
+  assert.equal(JSON.stringify(flow).includes(token), false);
+});
+
+// Regression guard for the fix above: an ORDINARY no-navigate segment (no
+// sensitive segment in the fallback pathname) must keep its literal
+// pattern -- the new tokenizePath call must be a no-op here, same as it is
+// on the goto path for non-sensitive segments.
+test('a no-navigate segment starting on an ordinary URL ("/dashboard") keeps its literal urlPattern', () => {
+  const records = [
+    record({
+      seq: 1, urlBefore: 'https://example.com/dashboard', urlAfter: 'https://example.com/dashboard', targets: [traceTarget({ name: 'Open' })],
+    }),
+    record({
+      seq: 2, urlBefore: 'https://example.com/dashboard', urlAfter: 'https://example.com/dashboard', targets: [traceTarget({ name: 'Close' })],
+    }),
+  ];
+  const result = compileSession({ records, meta });
+  assert.equal(result.flows.length, 1);
+  const flow = result.flows[0];
+  assert.equal(flow.origin, 'https://example.com');
+  assert.equal(flow.urlPattern, '/dashboard');
+  assert.deepEqual(flow.args, {});
+});
+
 test('the origin option seeds the flow origin when a segment has no navigate and no resolvable urlBefore/urlAfter', () => {
   const records = [
     record({
