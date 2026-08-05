@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "clientName": "claude-code",
+  "cwd": "/Users/example/demo-project",
+  "runtimeVersion": "1.62.0-next",
+  "productVersion": "0.1.0-alpha.10",
+  "protocolVersion": 2,
+  "startedAt": "2026-08-05T00:00:00.000Z",
+  "endedAt": "2026-08-05T00:05:00.000Z"
+}
