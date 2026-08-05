@@ -18,6 +18,11 @@ const fixturesDir = path.resolve(
 );
 const basicDir = path.join(fixturesDir, 'trace-1754350000000');
 const truncatedDir = path.join(fixturesDir, 'trace-1754350100000');
+// Added by Task 4 (compiler): a read-only session (nav + GET-only click +
+// an extract-style run_code_unsafe) the compiler's tests compile against
+// directly. It's a third TRACE.md-shaped golden fixture, so it's also
+// listed here.
+const readOnlyDir = path.join(fixturesDir, 'trace-1754350200000');
 
 async function tempDataDir() {
   return mkdtemp(path.join(os.tmpdir(), 'fast-browser-trace-reader-'));
@@ -26,10 +31,14 @@ async function tempDataDir() {
 test('listTraceSessions lists the golden fixtures ascending by epochMs with parsed meta', async () => {
   const sessions = await listTraceSessions(fixturesDir);
 
-  assert.equal(sessions.length, 2);
-  assert.deepEqual(sessions.map((session) => session.epochMs), [1754350000000, 1754350100000]);
+  assert.equal(sessions.length, 3);
+  assert.deepEqual(
+    sessions.map((session) => session.epochMs),
+    [1754350000000, 1754350100000, 1754350200000],
+  );
   assert.equal(sessions[0].dir, basicDir);
   assert.equal(sessions[1].dir, truncatedDir);
+  assert.equal(sessions[2].dir, readOnlyDir);
   for (const session of sessions) {
     assert.equal(session.meta.schemaVersion, 1);
     assert.equal(session.meta.productVersion, '0.1.0-alpha.10');
