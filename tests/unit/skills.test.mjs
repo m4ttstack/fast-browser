@@ -25,12 +25,15 @@ const deployTextExtensions = new Set([
   '.yml',
 ]);
 
+// Never part of the npm package: dependency, VCS, and gitignored scratch dirs.
+const unpackagedDirectories = new Set(['node_modules', '.git', '.superpowers', '.worktrees']);
+
 async function packagedTextFiles(directory, relative = '') {
   const files = [];
   for (const entry of await readdir(path.join(directory, relative), { withFileTypes: true })) {
     const child = path.join(relative, entry.name);
     if (entry.isDirectory()) {
-      if (entry.name === 'tests') continue;
+      if (entry.name === 'tests' || unpackagedDirectories.has(entry.name)) continue;
       files.push(...await packagedTextFiles(directory, child));
     } else if (entry.isFile() && deployTextExtensions.has(path.extname(entry.name))) {
       files.push(child);
