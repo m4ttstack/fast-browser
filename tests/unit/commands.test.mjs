@@ -23,6 +23,8 @@ import {
 import { flows } from '../../lib/commands/flows.mjs';
 import { migrate } from '../../lib/commands/migrate.mjs';
 import { setup } from '../../lib/commands/setup.mjs';
+import { stripControlChars } from '../../lib/commands/shared.mjs';
+import { sites } from '../../lib/commands/sites.mjs';
 import { uninstall } from '../../lib/commands/uninstall.mjs';
 import {
   DOCTOR_CHECK_IDS,
@@ -54,6 +56,7 @@ test('exports dependency-injected lifecycle command functions', () => {
   assert.equal(typeof migrate, 'function');
   assert.equal(typeof uninstall, 'function');
   assert.equal(typeof flows, 'function');
+  assert.equal(typeof sites, 'function');
 });
 
 function validConfig(overrides = {}) {
@@ -4015,6 +4018,25 @@ test('CLI main strips the extended control/bidi character set from a find descri
   assert.match(output, /\u6f22/);
 });
 
+// MAT-138 debt sweep, item 2: the denylist grows again to cover a second
+// family of invisible/reordering characters in the same threat class as the
+// fix-round-2 additions above -- U+200E LRM / U+200F RLM (bidi
+// directionality marks: narrower than the LRE/RLE/RLO overrides already
+// stripped, but still capable of nudging how following text renders),
+// U+FEFF ZERO WIDTH NO-BREAK SPACE (the BOM character, invisible mid-string
+// exactly like the already-stripped U+200B ZWSP), and U+00AD SOFT HYPHEN
+// (invisible unless a line break lands on it, and even then renders a
+// hyphen the source string never contained). Exercised directly against
+// `stripControlChars` rather than through the CLI, since this is pinning
+// the function's own denylist, not a caller's plumbing. Every non-ASCII
+// character below is a `\uXXXX` escape, deliberately, never a literal --
+// several ARE the exact invisible bytes under test, so writing them
+// literally would make this file unreviewable in a diff.
+test('stripControlChars removes LRM, RLM, ZWNBSP, and soft hyphen, preserving tab/newline/emoji/CJK/NBSP', () => {
+  const dirty = 'a\u200eb\u200fc\ufeffd\u00ade\tf\ng\u00a0h\u{1F600}i\u6f22j';
+  assert.equal(stripControlChars(dirty), 'abcde\tf\ng\u00a0h\u{1F600}i\u6f22j');
+});
+
 test('CLI main renders flows list as a short readable block', async () => {
   const report = {
     command: 'flows',
@@ -4048,7 +4070,35 @@ test('CLI main renders flows list as a short readable block', async () => {
   assert.match(output, /pending/);
 });
 
-test('CLI main renders flows compile with distinct skip reasons summarized, not lumped', async () => {
+test('CLI main renders flows compile with no skips as just the summary line', async () => {
+  const report = {
+    command: 'flows',
+    sub: 'compile',
+    compiled: [{ name: 'log-in', tier: 'ready' }],
+    updated: [],
+    sessionsProcessed: 1,
+    cursor: {},
+    skippedBySession: {},
+    replaysSeen: 0,
+  };
+  const writes = [];
+  await main(
+    { command: 'flows', json: false },
+    { commands: { flows: async () => report }, write: (text) => writes.push(text) },
+  );
+  assert.equal(
+    writes.join(''),
+    'Compiled 1 new flow(s); updated 0; sessions processed: 1; replays seen: 0.\n',
+  );
+});
+
+// Task 8 (folded MAT-136 debt #3): the exact grouped rendering, pinned line
+// by line. One session of each reason class -- 'unreadable' (called out
+// loudly, by name, ahead of everything else), two DIAGNOSABLE reasons
+// ('invalid: ...' and 'unsupported: ...') listed individually with their
+// own session and seqRange, and two routine 'too-short' skips in the SAME
+// session rolled up into one per-session count rather than two lines.
+test('CLI main renders flows compile grouped by skip-reason class: unreadable called out, invalid/unsupported listed individually, too-short/error-truncated counted per session', async () => {
   const report = {
     command: 'flows',
     sub: 'compile',
@@ -4058,7 +4108,12 @@ test('CLI main renders flows compile with distinct skip reasons summarized, not 
     cursor: {},
     skippedBySession: {
       'trace-1': [{ reason: 'unreadable', seqRange: [null, null] }],
-      'trace-2': [{ reason: 'invalid: too short', seqRange: [0, 1] }],
+      'trace-2': [
+        { reason: 'invalid: too short', seqRange: [0, 1] },
+        { reason: 'too-short', seqRange: [2, 2] },
+        { reason: 'too-short', seqRange: [3, 3] },
+      ],
+      'trace-3': [{ reason: 'unsupported: browser_tabs', seqRange: [5, 5] }],
     },
     replaysSeen: 3,
   };
@@ -4067,10 +4122,47 @@ test('CLI main renders flows compile with distinct skip reasons summarized, not 
     { command: 'flows', json: false },
     { commands: { flows: async () => report }, write: (text) => writes.push(text) },
   );
+  assert.equal(
+    writes.join(''),
+    [
+      'Compiled 1 new flow(s); updated 0; sessions processed: 2; replays seen: 3.',
+      'Skipped 5 segment(s) across 3 session(s).',
+      'UNREADABLE -- needs attention: trace-1',
+      'invalid: too short (trace-2, seq 0-1)',
+      'unsupported: browser_tabs (trace-3, seq 5-5)',
+      '2 too-short/error-truncated skip(s) in trace-2',
+      'Rerun with --json for full details.',
+      '',
+    ].join('\n'),
+  );
+});
+
+// error-truncated skips (an error record cutting a segment short) count
+// alongside too-short in the same per-session rollup, not a fourth bucket.
+test('CLI main renders flows compile counting too-short and error-truncated together in one per-session rollup', async () => {
+  const report = {
+    command: 'flows',
+    sub: 'compile',
+    compiled: [],
+    updated: [],
+    sessionsProcessed: 1,
+    cursor: {},
+    skippedBySession: {
+      'trace-9': [
+        { reason: 'error-truncated', seqRange: [1, 1] },
+        { reason: 'too-short', seqRange: [2, 2] },
+      ],
+    },
+    replaysSeen: 0,
+  };
+  const writes = [];
+  await main(
+    { command: 'flows', json: false },
+    { commands: { flows: async () => report }, write: (text) => writes.push(text) },
+  );
   const output = writes.join('');
-  assert.match(output, /Compiled 1/);
-  assert.match(output, /replays seen: 3/i);
-  assert.match(output, /Skipped 2/);
+  assert.match(output, /2 too-short\/error-truncated skip\(s\) in trace-9/);
+  assert.doesNotMatch(output, /error-truncated \(trace-9/); // never listed individually
 });
 
 test('CLI main renders flows approve and reject confirmations as one-liners', async () => {
@@ -4101,4 +4193,280 @@ test('CLI main renders flows approve and reject confirmations as one-liners', as
     },
   );
   assert.equal(writesReject.join(''), 'Rejected place-order; recorded in the rejected-flows ledger.\n');
+});
+
+// --- sites ---
+
+test('CLI help mentions the sites command and its subcommands', async () => {
+  const writes = [];
+  const commands = new Proxy({}, { get: () => () => assert.fail('command invoked') });
+  await main({ help: true }, { commands, write: (text) => writes.push(text) });
+  const output = writes.join('');
+  assert.match(output, /\bsites\b/);
+  assert.match(output, /sites subcommands: show\|affordances\|digest\|quirk/);
+});
+
+test('CLI main dispatches to the sites command and renders JSON', async () => {
+  const report = {
+    command: 'sites', sub: 'show', origin: 'https://example.com', edges: [], patterns: [], quirks: [], digests: [],
+  };
+  const writes = [];
+  const exitCode = await main(
+    { command: 'sites', json: true },
+    {
+      commands: {
+        sites: async (request) => {
+          assert.equal(request.command, 'sites');
+          return report;
+        },
+      },
+      write: (text) => writes.push(text),
+    },
+  );
+  assert.equal(exitCode, 0);
+  assert.deepEqual(JSON.parse(writes.join('')), report);
+});
+
+test('CLI main renders sites show as a short route table with target counts and quirk/digest tallies', async () => {
+  const report = {
+    command: 'sites',
+    sub: 'show',
+    origin: 'https://example.com',
+    edges: [],
+    patterns: [
+      { pattern: '/cart', targets: [{ role: 'button', name: 'Place order' }], lastSeenAt: '2026-08-05T00:00:00.000Z' },
+      { pattern: '/orders/:id', targets: [], lastSeenAt: '2026-08-05T00:00:00.000Z' },
+    ],
+    quirks: [{ name: 'cookie-banner' }],
+    digests: [
+      { pattern: '/cart', savedAt: '2026-08-05T00:00:00.000Z', ttlHours: 72, stale: false },
+      { pattern: '/orders/:id', savedAt: '2026-01-01T00:00:00.000Z', ttlHours: 72, stale: true },
+    ],
+  };
+  const writes = [];
+  await main(
+    { command: 'sites', json: false },
+    { commands: { sites: async () => report }, write: (text) => writes.push(text) },
+  );
+  const output = writes.join('');
+  assert.match(output, /https:\/\/example\.com/);
+  assert.match(output, /\/cart.*1 target/);
+  assert.match(output, /\/orders\/:id.*0 targets/);
+  assert.match(output, /Quirks: 1/);
+  assert.match(output, /Digests: 2 \(1 stale\)/);
+});
+
+test('CLI main renders sites show with "No mined routes yet." when patterns is empty', async () => {
+  const report = {
+    command: 'sites', sub: 'show', origin: 'https://example.com', edges: [], patterns: [], quirks: [], digests: [],
+  };
+  const writes = [];
+  await main(
+    { command: 'sites', json: false },
+    { commands: { sites: async () => report }, write: (text) => writes.push(text) },
+  );
+  assert.match(writes.join(''), /No mined routes yet\./);
+});
+
+test('CLI main renders sites affordances listing each mined target, and the digest freshness', async () => {
+  const found = {
+    command: 'sites',
+    sub: 'affordances',
+    found: true,
+    stale: false,
+    savedAt: '2026-08-05T00:00:00.000Z',
+    pattern: '/cart',
+    digest: { affordances: ['button:Place order'] },
+    inventory: [{ role: 'button', name: 'Place order' }],
+  };
+  const writes = [];
+  await main(
+    { command: 'sites', json: false },
+    { commands: { sites: async () => found }, write: (text) => writes.push(text) },
+  );
+  const output = writes.join('');
+  assert.match(output, /\/cart/);
+  assert.match(output, /saved 2026-08-05T00:00:00\.000Z/);
+  assert.match(output, /button Place order/);
+
+  const notFound = {
+    command: 'sites',
+    sub: 'affordances',
+    found: false,
+    stale: null,
+    savedAt: null,
+    pattern: '/cart',
+    digest: null,
+    inventory: [],
+  };
+  const writesNotFound = [];
+  await main(
+    { command: 'sites', json: false },
+    { commands: { sites: async () => notFound }, write: (text) => writesNotFound.push(text) },
+  );
+  const outputNotFound = writesNotFound.join('');
+  assert.match(outputNotFound, /none saved yet/i);
+  assert.match(outputNotFound, /Mined inventory: none yet\./);
+});
+
+// Fix round 1, I2: `savedAt` was the one human-printed field that bypassed
+// stripControlChars. store.mjs's own on-disk validation for this field is
+// just `!Number.isNaN(Date.parse(raw))` (its `isoString` helper) -- and
+// V8's date parser accepts and silently ignores a trailing parenthesized
+// comment on the `toString()`-style date format (the format `new
+// Date().toString()` itself produces), so a `savedAt` carrying a raw ESC
+// byte inside such a comment still parses successfully. This value is
+// deliberately NOT `.toISOString()` shaped -- proving the point requires a
+// shape `Date.parse` accepts despite the trailing junk.
+test('CLI main strips control characters from an affordances savedAt value that Date.parse still accepts', async () => {
+  const haunted = 'Wed Aug 05 2026 00:00:00 GMT+0000 (\x1b[31mFAKE\x1b[0m)';
+  assert.equal(Number.isNaN(Date.parse(haunted)), false, 'fixture must itself be Date.parse-valid');
+  const report = {
+    command: 'sites',
+    sub: 'affordances',
+    found: true,
+    stale: false,
+    savedAt: haunted,
+    pattern: '/cart',
+    digest: {},
+    inventory: [],
+  };
+  const writes = [];
+  await main(
+    { command: 'sites', json: false },
+    { commands: { sites: async () => report }, write: (text) => writes.push(text) },
+  );
+  const output = writes.join('');
+  assert.doesNotMatch(output, /\x1b/);
+  assert.match(output, /FAKE/);
+});
+
+// The brief's own pinned scenario: a mined target NAME is page-derived free
+// text (an accessible name an agent never validated), so an ESC byte
+// planted in it must be stripped before `sites affordances`'s human arm
+// ever prints it -- exactly like flows find's candidate description.
+test('CLI main strips control characters from an affordances target name before printing', async () => {
+  const report = {
+    command: 'sites',
+    sub: 'affordances',
+    found: false,
+    stale: null,
+    savedAt: null,
+    pattern: '/cart',
+    digest: null,
+    inventory: [{ role: 'button', name: 'Place order\x1b[31mFAKE ERROR\x1b[0m' }],
+  };
+  const writes = [];
+  await main(
+    { command: 'sites', json: false },
+    { commands: { sites: async () => report }, write: (text) => writes.push(text) },
+  );
+  const output = writes.join('');
+  assert.doesNotMatch(output, /\x1b/);
+  assert.match(output, /FAKE ERROR/);
+});
+
+test('CLI main renders sites digest confirmation as a one-liner', async () => {
+  const writes = [];
+  await main(
+    { command: 'sites', json: false },
+    {
+      commands: {
+        sites: async () => ({
+          command: 'sites', sub: 'digest', saved: true, pattern: '/cart', stale: false,
+        }),
+      },
+      write: (text) => writes.push(text),
+    },
+  );
+  assert.equal(writes.join(''), 'Saved digest for /cart.\n');
+});
+
+test('CLI main renders sites quirk add/remove confirmations and a list block', async () => {
+  const writesAdd = [];
+  await main(
+    { command: 'sites', json: false },
+    {
+      commands: {
+        sites: async () => ({
+          command: 'sites',
+          sub: 'quirk',
+          verb: 'add',
+          origin: 'https://example.com',
+          name: 'cookie-banner',
+          quirk: { name: 'cookie-banner' },
+        }),
+      },
+      write: (text) => writesAdd.push(text),
+    },
+  );
+  assert.equal(writesAdd.join(''), 'Added quirk cookie-banner for https://example.com.\n');
+
+  const writesRemove = [];
+  await main(
+    { command: 'sites', json: false },
+    {
+      commands: {
+        sites: async () => ({
+          command: 'sites', sub: 'quirk', verb: 'remove', origin: 'https://example.com', name: 'cookie-banner', removed: true,
+        }),
+      },
+      write: (text) => writesRemove.push(text),
+    },
+  );
+  assert.equal(writesRemove.join(''), 'Removed quirk cookie-banner.\n');
+
+  const writesList = [];
+  await main(
+    { command: 'sites', json: false },
+    {
+      commands: {
+        sites: async () => ({
+          command: 'sites',
+          sub: 'quirk',
+          verb: 'list',
+          origin: 'https://example.com',
+          quirks: [{ name: 'cookie-banner', target: { description: 'Accept all cookies', locators: [{ kind: 'css', selector: '#accept' }] } }],
+        }),
+      },
+      write: (text) => writesList.push(text),
+    },
+  );
+  assert.match(writesList.join(''), /cookie-banner - Accept all cookies/);
+
+  const writesEmptyList = [];
+  await main(
+    { command: 'sites', json: false },
+    {
+      commands: {
+        sites: async () => ({
+          command: 'sites', sub: 'quirk', verb: 'list', origin: 'https://example.com', quirks: [],
+        }),
+      },
+      write: (text) => writesEmptyList.push(text),
+    },
+  );
+  assert.equal(writesEmptyList.join(''), 'No quirks recorded yet.\n');
+});
+
+test('CLI main strips control characters from a quirk list detail line before printing', async () => {
+  const writes = [];
+  await main(
+    { command: 'sites', json: false },
+    {
+      commands: {
+        sites: async () => ({
+          command: 'sites',
+          sub: 'quirk',
+          verb: 'list',
+          origin: 'https://example.com',
+          quirks: [{ name: 'cookie-banner', target: { description: 'Accept\x1b[31mFAKE\x1b[0m cookies', locators: [] } }],
+        }),
+      },
+      write: (text) => writes.push(text),
+    },
+  );
+  const output = writes.join('');
+  assert.doesNotMatch(output, /\x1b/);
+  assert.match(output, /FAKE/);
 });

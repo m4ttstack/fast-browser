@@ -526,6 +526,51 @@ test('approve refuses when the pending flow changes between the prompt and the r
   assert.deepEqual(moved, []);
 });
 
+// MAT-138 debt sweep, item 1: the recheck above happened to catch that
+// scenario only because the fixture also changed `id`. The stored `id`
+// FIELD is itself just data read back out of the swapped file -- nothing
+// forces it to change when the file's content does (a hand-edited or
+// maliciously crafted pending file can swap steps/description/args while
+// leaving the original `id` string untouched). Comparing stored-id-to-
+// stored-id therefore misses exactly the swap the recheck exists to catch.
+// This fixture keeps `id` IDENTICAL across both reads and changes only
+// `description`; the recheck must compare the recomputed content hash
+// (`flowId`) of what was just re-read against the content hash of what was
+// shown at the prompt, not the two files' own `id` fields.
+test('approve refuses when pending content changes but the stored id field is left unchanged', async () => {
+  const staleId = 'a'.repeat(64);
+  const original = validFlow({ name: 'log-in', description: 'Original.', id: staleId });
+  const swapped = validFlow({ name: 'log-in', description: 'Swapped!', id: staleId });
+  let pendingReadCount = 0;
+  const moved = [];
+
+  await assert.rejects(
+    flows(
+      { sub: 'approve', name: 'log-in', json: false },
+      {
+        paths: { flowsPendingDir: '/h/pending', flowsDir: '/h/flows', dataDir: '/h' },
+        interactive: true,
+        readFlowFile: async (filePath) => {
+          if (filePath === '/h/flows/log-in.flow.json') {
+            const error = new Error('nope');
+            error.code = 'ENOENT';
+            throw error;
+          }
+          pendingReadCount += 1;
+          return JSON.stringify(pendingReadCount === 1 ? original : swapped);
+        },
+        pathExists: async () => false,
+        print: () => {},
+        confirmApprove: async () => true,
+        moveFlow: async (from, to) => moved.push([from, to]),
+      },
+    ),
+    (error) => error.name === 'LifecycleError' && /changed since approval prompt/i.test(error.message),
+  );
+  assert.equal(pendingReadCount, 2);
+  assert.deepEqual(moved, []);
+});
+
 test('approve strips control characters from arg names before printing them', async () => {
   const pendingFlow = validFlow({
     name: 'log-in',

@@ -100,6 +100,21 @@ function reversedKeyOrder(value) {
   return Object.fromEntries(Object.entries(value).reverse());
 }
 
+// MAT-139 hardening: `canonicalize` (this module) already recurses into
+// every nested level when computing `flowId` -- a target's own `locators`
+// entries, a step's `waitAfter`, drag's `to` -- so this reorders those same
+// depths rather than stopping at the target's own top-level keys, closing
+// the gap between what the helper exercised and what `canonicalize` actually
+// covers.
+function reorderTargetDeep(targetValue) {
+  if (!targetValue) return targetValue;
+  const reordered = reversedKeyOrder(targetValue);
+  if (Array.isArray(targetValue.locators)) {
+    reordered.locators = targetValue.locators.map((locator) => reversedKeyOrder(locator));
+  }
+  return reordered;
+}
+
 function reorderDeep(flow) {
   return {
     ...reversedKeyOrder(flow),
@@ -109,11 +124,43 @@ function reorderDeep(flow) {
     result: reversedKeyOrder(flow.result),
     steps: flow.steps.map((step) => {
       const reordered = reversedKeyOrder(step);
-      if (step.target) reordered.target = reversedKeyOrder(step.target);
+      if (step.target) reordered.target = reorderTargetDeep(step.target);
+      // Drag's destination target -- distinct from `target` (the drag
+      // source) -- reordered the same way rather than left untouched.
+      if (step.to) reordered.to = reorderTargetDeep(step.to);
+      if (step.waitAfter) reordered.waitAfter = reversedKeyOrder(step.waitAfter);
       return reordered;
     }),
     provenance: reversedKeyOrder(flow.provenance),
   };
+}
+
+// A flow whose steps exercise every shape `reorderDeep` above now reaches:
+// a multi-key locator (`{kind, selector}`), a `waitAfter` object, and a
+// drag step's `to` target -- `baseFlow`'s own steps are left alone since
+// dozens of other tests in this file index into them by position
+// (`steps[2]`, `steps.at(-1)`, ...) and inserting a step would shift those.
+function flowWithDragStep(overrides = {}) {
+  return baseFlow({
+    steps: [
+      ...baseFlow().steps,
+      {
+        op: 'drag',
+        target: target({
+          locators: [{ kind: 'role', selector: 'internal:role=listitem[name="Item"i]' }],
+        }),
+        to: target({
+          locators: [{ kind: 'css', selector: '.drop-zone' }],
+          description: 'Drop zone',
+          role: undefined,
+          name: undefined,
+        }),
+        waitAfter: { networkSettled: true },
+        mutating: true,
+      },
+    ],
+    ...overrides,
+  });
 }
 
 test('parseFlow accepts a well-formed flow and round-trips through serializeFlow', () => {
@@ -131,7 +178,7 @@ test('parseFlow discards nothing from a well-formed flow', () => {
 });
 
 test('flowId is stable under key reordering at every level', () => {
-  const original = parseFlow(baseFlow());
+  const original = parseFlow(flowWithDragStep());
   const reordered = reorderDeep(original);
   assert.deepEqual(reordered, original);
   assert.equal(flowId(reordered), flowId(original));
@@ -419,6 +466,35 @@ test('accepts a drag step with source and destination targets', () => {
 test('rejects a drag step missing the destination target', () => {
   const flow = baseFlow({ steps: [...baseFlow().steps, { op: 'drag', target: target() }] });
   assert.throws(() => parseFlow(flow), FlowError);
+});
+
+// MAT-139: `waitAfter`/`mutating` are only ever attached via
+// `withInteractionExtras`, which click/hover/fill/select/press/drag/upload
+// each call -- goto, expect, extract, wait, and js never do, because none
+// of them describes an interaction the trace's `mutating` flag or a
+// post-action settle wait applies to. `rejectUnknownKeys` already enforces
+// this per op (each op's own allowed-keys list simply omits both fields),
+// but nothing pinned it until now.
+test('rejects waitAfter/mutating on ops that have no per-step interaction extras', () => {
+  const baseStepByOp = {
+    goto: { op: 'goto', url: '/checkout/{plan}' },
+    expect: { op: 'expect', target: target(), state: 'visible' },
+    extract: { op: 'extract', target: target(), as: 'result' },
+    wait: { op: 'wait', value: 100 },
+    js: { op: 'js', sha256: null, args: {} },
+  };
+  const extraValueByKey = { waitAfter: { networkSettled: true }, mutating: true };
+
+  for (const [op, step] of Object.entries(baseStepByOp)) {
+    for (const [extraKey, extraValue] of Object.entries(extraValueByKey)) {
+      const broken = baseFlow({ steps: [{ ...step, [extraKey]: extraValue }] });
+      assert.throws(
+        () => parseFlow(broken),
+        (error) => error instanceof FlowError && new RegExp(`steps\\[0\\]\\.${extraKey}`).test(error.message),
+        `${op}.${extraKey}`,
+      );
+    }
+  }
 });
 
 test('accepts an upload step with a target and a non-empty files list', () => {

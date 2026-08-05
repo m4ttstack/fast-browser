@@ -43,3 +43,8 @@ test('resolvePaths exposes flow directories under the data dir', () => {
   assert.equal(paths.flowsPendingDir, path.join('/home/u', '.fast-browser', 'flows-pending'));
   assert.equal(paths.flowsStateFile, path.join('/home/u', '.fast-browser', 'flows-state.json'));
 });
+
+test('resolvePaths exposes sitesDir under the data dir', () => {
+  const paths = resolvePaths({ homeDir: '/home/u', pluginRoot: '/p' });
+  assert.equal(paths.sitesDir, path.join('/home/u', '.fast-browser', 'sites'));
+});

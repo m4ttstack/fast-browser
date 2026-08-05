@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { watch } from 'node:fs';
 import {
   copyFile,
   mkdir,
@@ -93,27 +92,50 @@ test('extracts the verified archive snapshot if the source changes afterward', a
   const outputDir = path.join(root, 'output');
   await mkdir(outputDir);
   const { releaseDir, archive } = await copyAcceptedRelease(root);
-  let mutationStarted = false;
-  let resolveMutation;
-  let rejectMutation;
-  const mutation = new Promise((resolve, reject) => {
-    resolveMutation = resolve;
-    rejectMutation = reject;
-  });
-  const watcher = watch(outputDir, (_event, filename) => {
-    if (mutationStarted || !filename?.startsWith('.runtime-archive-')) return;
-    mutationStarted = true;
-    writeFile(archive, 'changed after validation').then(resolveMutation, rejectMutation);
-  });
   t.after(async () => {
-    watcher.close();
     await rm(root, { recursive: true, force: true });
   });
 
+  // MAT-140: this used to watch outputDir with fs.watch and mutate the
+  // source archive from the watch callback. On this platform fs.watch
+  // delivers no events at all for a plain create-then-unlink of a file in a
+  // freshly created tmpdir directory (confirmed directly: a bare
+  // writeFile+rm with no runtime involved produced zero callback
+  // invocations), so the callback never ran and the 200ms race against
+  // `delay` always lost. The validated archive copy is provably observable
+  // by other means -- readdir sees it for ~150ms in practice before
+  // extraction+cleanup remove it -- so poll for it instead of waiting on an
+  // event source that doesn't fire here. The poll is bounded so a genuine
+  // regression (the copy never appearing) still fails the assertion below
+  // instead of hanging.
+  let mutated = false;
+  const pollForArchiveThenMutateSource = async () => {
+    const deadline = Date.now() + 5_000;
+    while (Date.now() < deadline) {
+      const names = await readdir(outputDir).catch(() => []);
+      if (names.some((name) => name.startsWith('.runtime-archive-'))) {
+        await writeFile(archive, 'changed after validation');
+        mutated = true;
+        return;
+      }
+      await delay(3);
+    }
+  };
+  const poller = pollForArchiveThenMutateSource();
+  // If client startup itself fails, the poller must not keep racing the
+  // t.after teardown of outputDir with an unhandled writeFile rejection.
+  poller.catch(() => {});
+  t.after(() => poller);
+
   const browser = await startMcpClient({ outputDir, releaseDir });
   t.after(browser.close);
+  await poller;
 
-  assert.equal(await Promise.race([mutation.then(() => true), delay(200, false)]), true);
+  assert.equal(
+    mutated,
+    true,
+    `no .runtime-archive-* copy appeared in ${outputDir} within 5s of client startup`,
+  );
   assert.equal(
     (await readdir(outputDir)).some((name) => name.startsWith('.runtime-archive-')),
     false,

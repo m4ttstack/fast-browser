@@ -638,9 +638,14 @@ test('a goto URL query value matching an already-lifted fill literal is tokenize
 });
 
 test('a lifted literal that is a prefix of an unrelated, longer query value is not partially replaced', () => {
+  // MAT-136 task 7: the unrelated param uses key "ref" rather than "code"
+  // here -- "code" is now a sensitive query key (SENSITIVE_QUERY_KEY) and
+  // would legitimately lift "SAVE100" on its own, which would defeat this
+  // test's actual point (substring-safety of the pre-existing lifted-
+  // literal match, unrelated to the new sensitivity feature).
   const records = [
     record({
-      seq: 1, tool: 'browser_navigate', params: { url: 'https://example.com/search?q=SAVE10&code=SAVE100' },
+      seq: 1, tool: 'browser_navigate', params: { url: 'https://example.com/search?q=SAVE10&ref=SAVE100' },
     }),
     record({
       seq: 2, tool: 'browser_type', params: { text: 'SAVE10' }, targets: [traceTarget({ name: 'Coupon code' })],
@@ -649,7 +654,7 @@ test('a lifted literal that is a prefix of an unrelated, longer query value is n
   const result = compileSession({ records, meta });
   const flow = result.flows[0];
   assert.equal(flow.urlPattern, '/search');
-  assert.equal(flow.steps[0].url, '/search?q={couponCode}&code=SAVE100');
+  assert.equal(flow.steps[0].url, '/search?q={couponCode}&ref=SAVE100');
 });
 
 test('fix-round-2 N1: a query-bearing nav with no click names from the path root only, urlPattern excludes the query entirely', () => {
@@ -662,6 +667,350 @@ test('fix-round-2 N1: a query-bearing nav with no click names from the path root
   assert.equal(flow.name, 'search'); // tier-2 path-root fallback, not 'search?q=:query'-derived
   assert.equal(flow.urlPattern, '/search');
   assert.equal(flow.steps[0].url, '/search?q=widgets');
+});
+
+// --- MAT-136 folded debt (Task 7): sensitive goto URL values (never seen
+// in a fill/select) lift into required args instead of baking verbatim
+// into the compiled artifact -- see the module-level Task 7 note in
+// compile.mjs above `SENSITIVE_QUERY_KEY` for the full rule. ---
+
+test('MAT-136 task 7: a sensitive query key ("token") lifts its never-filled value into a required arg; name still derives from the clean path root (N1 guard)', () => {
+  const records = [
+    record({
+      seq: 1,
+      tool: 'browser_navigate',
+      params: { url: 'https://example.com/reset?token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9' },
+    }),
+    record({ seq: 2, tool: 'browser_press_key', params: { key: 'Enter' } }),
+  ];
+  const result = compileSession({ records, meta });
+  const flow = result.flows[0];
+  // N1 guard: a sensitive query lift must never contaminate urlPattern or
+  // tier-2 naming -- the flow still names from the clean path root, and
+  // urlPattern stays path-only, exactly as an ordinary (non-sensitive)
+  // query-bearing nav does today.
+  assert.equal(flow.name, 'reset');
+  assert.equal(flow.urlPattern, '/reset');
+  assert.equal(flow.steps[0].url, '/reset?token={token}');
+  assert.deepEqual(flow.args, { token: { type: 'string', required: true } });
+  assert.equal(JSON.stringify(flow).includes('eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9'), false);
+});
+
+test('MAT-136 task 7: a high-entropy path segment lifts into a positional-fallback arg (no query key to name from)', () => {
+  const records = [
+    record({ seq: 1, tool: 'browser_navigate', params: { url: 'https://example.com/magic/dGhpc2lzYXNlY3JldDEyMw' } }),
+    record({ seq: 2, tool: 'browser_press_key', params: { key: 'Enter' } }),
+  ];
+  const result = compileSession({ records, meta });
+  const flow = result.flows[0];
+  assert.equal(flow.urlPattern, '/magic/:value');
+  assert.equal(flow.steps[0].url, '/magic/{value}');
+  assert.deepEqual(flow.args, { value: { type: 'string', required: true } });
+  assert.equal(JSON.stringify(flow).includes('dGhpc2lzYXNlY3JldDEyMw'), false);
+});
+
+test('MAT-136 task 7: a short numeric path segment ("/orders/42") is not sensitive and is left untouched', () => {
+  const records = [
+    record({ seq: 1, tool: 'browser_navigate', params: { url: 'https://example.com/orders/42' } }),
+    record({ seq: 2, tool: 'browser_press_key', params: { key: 'Enter' } }),
+  ];
+  const result = compileSession({ records, meta });
+  const flow = result.flows[0];
+  assert.equal(flow.urlPattern, '/orders/42');
+  assert.equal(flow.steps[0].url, '/orders/42');
+  assert.deepEqual(flow.args, {});
+});
+
+test('MAT-136 task 7: an ordinary query value under a non-sensitive key ("q") is left untouched', () => {
+  const records = [
+    record({ seq: 1, tool: 'browser_navigate', params: { url: 'https://example.com/search?q=widgets' } }),
+    record({ seq: 2, tool: 'browser_press_key', params: { key: 'Enter' } }),
+  ];
+  const result = compileSession({ records, meta });
+  const flow = result.flows[0];
+  assert.equal(flow.steps[0].url, '/search?q=widgets');
+  assert.deepEqual(flow.args, {});
+});
+
+test('MAT-136 task 7: a sensitive query key with a SHORT value ("?code=abc123") still lifts -- the key rule alone is sufficient', () => {
+  const records = [
+    record({ seq: 1, tool: 'browser_navigate', params: { url: 'https://example.com/verify?code=abc123' } }),
+    record({ seq: 2, tool: 'browser_press_key', params: { key: 'Enter' } }),
+  ];
+  const result = compileSession({ records, meta });
+  const flow = result.flows[0];
+  assert.equal(flow.steps[0].url, '/verify?code={code}');
+  assert.deepEqual(flow.args, { code: { type: 'string', required: true } });
+});
+
+test('MAT-136 task 7: a value already lifted from a fill reuses that arg name in a goto URL rather than re-lifting under the query-key/positional name', () => {
+  const records = [
+    record({
+      seq: 1,
+      tool: 'browser_navigate',
+      params: { url: 'https://example.com/confirm?token=abcDEF1234567890ghijK' },
+    }),
+    record({
+      seq: 2,
+      tool: 'browser_type',
+      params: { text: 'abcDEF1234567890ghijK' },
+      targets: [traceTarget({ name: 'Confirmation code' })],
+    }),
+  ];
+  const result = compileSession({ records, meta });
+  const flow = result.flows[0];
+  assert.deepEqual(flow.args, { confirmationCode: { type: 'string', required: true } });
+  assert.equal(flow.steps[0].url, '/confirm?token={confirmationCode}');
+});
+
+// --- MAT-136 task 7, fix round 1: F1 (fragment lifting), F2 (key-branch
+// eligibility guard), F3 (hyphenated-slug false positives), F5 (entropy
+// boundary pins) ---
+
+test('MAT-136 task 7 fix round 1, F1: an OAuth-implicit-grant redirect (#access_token=... in the fragment) lifts the token instead of baking it verbatim into the step url and description', () => {
+  const accessToken = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U';
+  const records = [
+    record({
+      seq: 1,
+      tool: 'browser_navigate',
+      params: { url: `https://example.com/callback#access_token=${accessToken}&token_type=Bearer&expires_in=3600` },
+    }),
+    record({ seq: 2, tool: 'browser_press_key', params: { key: 'Enter' } }),
+  ];
+  const result = compileSession({ records, meta });
+  const flow = result.flows[0];
+  // "access_token" is not an exact SENSITIVE_QUERY_KEY match, so this
+  // lifts purely on the value's own entropy; "token_type"/"expires_in"
+  // stay literal (neither a sensitive key nor a high-entropy value).
+  assert.deepEqual(flow.args, { accessToken: { type: 'string', required: true } });
+  assert.equal(flow.steps[0].url, '/callback#access_token={accessToken}&token_type=Bearer&expires_in=3600');
+  assert.ok(flow.description.includes('navigates to /callback#access_token={accessToken}'));
+  assert.equal(JSON.stringify(flow).includes(accessToken), false);
+});
+
+test('MAT-136 task 7 fix round 1, F1: a value already lifted from the query is reused for an identical value in the fragment -- ONE deduped arg, both occurrences substituted', () => {
+  const records = [
+    record({
+      seq: 1,
+      tool: 'browser_navigate',
+      params: { url: 'https://example.com/confirm?token=abcDEF1234567890ghijK#t=abcDEF1234567890ghijK' },
+    }),
+    record({ seq: 2, tool: 'browser_press_key', params: { key: 'Enter' } }),
+  ];
+  const result = compileSession({ records, meta });
+  const flow = result.flows[0];
+  assert.deepEqual(flow.args, { token: { type: 'string', required: true } });
+  assert.equal(flow.steps[0].url, '/confirm?token={token}#t={token}');
+});
+
+test('MAT-136 task 7 fix round 1, F1: a bare (non key=value) high-entropy fragment value lifts as a positional-fallback arg', () => {
+  const records = [
+    record({ seq: 1, tool: 'browser_navigate', params: { url: 'https://example.com/app#dGhpc2lzYXNlY3JldDEyMw' } }),
+    record({ seq: 2, tool: 'browser_press_key', params: { key: 'Enter' } }),
+  ];
+  const result = compileSession({ records, meta });
+  const flow = result.flows[0];
+  assert.deepEqual(flow.args, { value: { type: 'string', required: true } });
+  assert.equal(flow.steps[0].url, '/app#{value}');
+});
+
+test('MAT-136 task 7 round-2 S4: an empty-key fragment pair ("#=<token>") lifts the value, mirroring the query tokenizer\'s "?=<token>" handling', () => {
+  const secret = 'abcDEF1234567890ghijK';
+  const records = [
+    record({ seq: 1, tool: 'browser_navigate', params: { url: `https://example.com/cb#=${secret}` } }),
+    record({ seq: 2, tool: 'browser_press_key', params: { key: 'Enter' } }),
+  ];
+  const result = compileSession({ records, meta });
+  const flow = result.flows[0];
+  assert.deepEqual(flow.args, { value: { type: 'string', required: true } });
+  assert.equal(flow.steps[0].url, '/cb#={value}');
+  assert.equal(JSON.stringify(flow).includes(secret), false);
+});
+
+test('MAT-136 task 7 fix round 1, F1: a plain in-page anchor ("#overview") stays literal -- no special-case anchor detection needed', () => {
+  const records = [
+    record({ seq: 1, tool: 'browser_navigate', params: { url: 'https://example.com/docs#overview' } }),
+    record({ seq: 2, tool: 'browser_press_key', params: { key: 'Enter' } }),
+  ];
+  const result = compileSession({ records, meta });
+  const flow = result.flows[0];
+  assert.equal(flow.steps[0].url, '/docs#overview');
+  assert.deepEqual(flow.args, {});
+});
+
+test('MAT-136 task 7 fix round 1, F2: a too-short value under a sensitive query key does not lift, and so cannot cross-contaminate a later, unrelated URL with the same short literal', () => {
+  const records = [
+    record({ seq: 1, tool: 'browser_navigate', params: { url: 'https://example.com/verify?code=a' } }),
+    record({ seq: 2, tool: 'browser_navigate', params: { url: 'https://example.com/a/list' } }),
+    record({ seq: 3, tool: 'browser_press_key', params: { key: 'Enter' } }),
+  ];
+  const result = compileSession({ records, meta });
+  const flow = result.flows[0];
+  assert.equal(flow.steps[0].url, '/verify?code=a');
+  assert.equal(flow.steps[1].url, '/a/list');
+  assert.deepEqual(flow.args, {});
+});
+
+test('MAT-136 task 7 fix round 1, F3: hyphenated human-authored slugs are not high-entropy and stay fully literal', () => {
+  const shapes = [
+    '/blog/top-10-things-to-do-in-2026',
+    '/p/nike-air-max-270-black',
+    '/archive/2024-01-15-release-notes',
+    '/downloads/annual-report-2024.pdf',
+  ];
+  for (const path of shapes) {
+    const records = [
+      record({ seq: 1, tool: 'browser_navigate', params: { url: `https://example.com${path}` } }),
+      record({ seq: 2, tool: 'browser_press_key', params: { key: 'Enter' } }),
+    ];
+    const result = compileSession({ records, meta });
+    const flow = result.flows[0];
+    assert.equal(flow.steps[0].url, path, path);
+    assert.deepEqual(flow.args, {}, path);
+  }
+});
+
+test('MAT-136 task 7 fix round 1, F3: a dotted JWT (0-1 hyphens) still lifts despite the tightened hyphen discriminator', () => {
+  const jwt = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U';
+  const records = [
+    record({ seq: 1, tool: 'browser_navigate', params: { url: `https://example.com/session/${jwt}` } }),
+    record({ seq: 2, tool: 'browser_press_key', params: { key: 'Enter' } }),
+  ];
+  const result = compileSession({ records, meta });
+  const flow = result.flows[0];
+  assert.deepEqual(flow.args, { value: { type: 'string', required: true } });
+  assert.equal(flow.steps[0].url, '/session/{value}');
+});
+
+test('MAT-136 task 7 fix round 1, F5: a 19-char alphanumeric value (one under the length floor) is not high-entropy and stays literal', () => {
+  const value = 'a1b2c3d4e5f6g7h8i9j'; // len 19, letter+digit, no hyphens
+  assert.equal(value.length, 19);
+  const records = [
+    record({ seq: 1, tool: 'browser_navigate', params: { url: `https://example.com/x/${value}` } }),
+    record({ seq: 2, tool: 'browser_press_key', params: { key: 'Enter' } }),
+  ];
+  const result = compileSession({ records, meta });
+  const flow = result.flows[0];
+  assert.equal(flow.steps[0].url, `/x/${value}`);
+  assert.deepEqual(flow.args, {});
+});
+
+test('MAT-136 task 7 fix round 1, F5: a 30-char all-letters value (no digit) is not high-entropy and stays literal', () => {
+  const value = 'abcdefghijklmnopqrstuvwxyzabcd'; // len 30, letters only
+  assert.equal(value.length, 30);
+  const records = [
+    record({ seq: 1, tool: 'browser_navigate', params: { url: `https://example.com/x/${value}` } }),
+    record({ seq: 2, tool: 'browser_press_key', params: { key: 'Enter' } }),
+  ];
+  const result = compileSession({ records, meta });
+  const flow = result.flows[0];
+  assert.equal(flow.steps[0].url, `/x/${value}`);
+  assert.deepEqual(flow.args, {});
+});
+
+test('MAT-136 task 7 fix round 1, F5: a 24-char all-digits value (no letter) is not high-entropy and stays literal', () => {
+  const value = '123456789012345678901234'; // len 24, digits only
+  assert.equal(value.length, 24);
+  const records = [
+    record({ seq: 1, tool: 'browser_navigate', params: { url: `https://example.com/x/${value}` } }),
+    record({ seq: 2, tool: 'browser_press_key', params: { key: 'Enter' } }),
+  ];
+  const result = compileSession({ records, meta });
+  const flow = result.flows[0];
+  assert.equal(flow.steps[0].url, `/x/${value}`);
+  assert.deepEqual(flow.args, {});
+});
+
+// --- MAT-136 task 7, fix round 2: N1 (UUID hyphen exemption), N3 (fragment
+// classification, per-part rather than whole-fragment) ---
+
+test('MAT-136 task 7 fix round 2, N1: a canonical UUID path segment lifts regardless of its four hyphens (the magic-link/reset shape the F3 hyphen discriminator regressed)', () => {
+  const uuid = '3f2504e0-4f89-11d3-9a0c-0305e82c3301';
+  const records = [
+    record({ seq: 1, tool: 'browser_navigate', params: { url: `https://example.com/reset/${uuid}` } }),
+    record({ seq: 2, tool: 'browser_press_key', params: { key: 'Enter' } }),
+  ];
+  const result = compileSession({ records, meta });
+  const flow = result.flows[0];
+  assert.equal(flow.urlPattern, '/reset/:value');
+  assert.equal(flow.steps[0].url, '/reset/{value}');
+  assert.deepEqual(flow.args, { value: { type: 'string', required: true } });
+  assert.equal(JSON.stringify(flow).includes(uuid), false);
+});
+
+test('MAT-136 task 7 fix round 2, N1: a canonical UUID as a bare fragment value also lifts', () => {
+  const uuid = '3f2504e0-4f89-11d3-9a0c-0305e82c3301';
+  const records = [
+    record({ seq: 1, tool: 'browser_navigate', params: { url: `https://example.com/magic#${uuid}` } }),
+    record({ seq: 2, tool: 'browser_press_key', params: { key: 'Enter' } }),
+  ];
+  const result = compileSession({ records, meta });
+  const flow = result.flows[0];
+  assert.deepEqual(flow.args, { value: { type: 'string', required: true } });
+  assert.equal(flow.steps[0].url, '/magic#{value}');
+});
+
+test('MAT-136 task 7 fix round 2, N1: the four F3 hyphenated-slug shapes still stay literal -- the UUID exemption is a narrow, rigid-shape match and does not reopen F3', () => {
+  const shapes = [
+    '/blog/top-10-things-to-do-in-2026',
+    '/p/nike-air-max-270-black',
+    '/archive/2024-01-15-release-notes',
+    '/downloads/annual-report-2024.pdf',
+  ];
+  for (const path of shapes) {
+    const records = [
+      record({ seq: 1, tool: 'browser_navigate', params: { url: `https://example.com${path}` } }),
+      record({ seq: 2, tool: 'browser_press_key', params: { key: 'Enter' } }),
+    ];
+    const result = compileSession({ records, meta });
+    const flow = result.flows[0];
+    assert.equal(flow.steps[0].url, path, path);
+    assert.deepEqual(flow.args, {}, path);
+  }
+});
+
+test('MAT-136 task 7 fix round 2, N3: a padded-base64 fragment value now correctly routes to the bare branch, but still can\'t lift on entropy -- the F4 residual extends to fragments (documented, not fixed)', () => {
+  const records = [
+    record({ seq: 1, tool: 'browser_navigate', params: { url: 'https://example.com/share#dGhpc2lzYXNlY3JldDEyMzQ1Njc4OTA=' } }),
+    record({ seq: 2, tool: 'browser_press_key', params: { key: 'Enter' } }),
+  ];
+  const result = compileSession({ records, meta });
+  const flow = result.flows[0];
+  assert.equal(flow.steps[0].url, '/share#dGhpc2lzYXNlY3JldDEyMzQ1Njc4OTA=');
+  assert.deepEqual(flow.args, {});
+});
+
+test('MAT-136 task 7 fix round 2, N3: a "<high-entropy-token>=x" shaped fragment is textually ambiguous (real pair vs. a bare value with junk appended) and stays literal rather than guessing -- no crash, no partial output', () => {
+  const records = [
+    record({ seq: 1, tool: 'browser_navigate', params: { url: 'https://example.com/share#abcDEF1234567890ghijKLMN=x' } }),
+    record({ seq: 2, tool: 'browser_press_key', params: { key: 'Enter' } }),
+  ];
+  const result = compileSession({ records, meta });
+  const flow = result.flows[0];
+  assert.equal(flow.steps[0].url, '/share#abcDEF1234567890ghijKLMN=x');
+  assert.deepEqual(flow.args, {});
+});
+
+test('MAT-136 task 7 fix round 2, N3: the discriminating case -- a bare high-entropy value mixed with a real pair in the same fragment now lifts BOTH (round-1 code lifted only the pair, never entropy-checking the bare part)', () => {
+  const accessToken = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U';
+  const bareToken = 'ZZ11xx22yy33zz44AA55BB66CC77DD1';
+  const records = [
+    record({
+      seq: 1,
+      tool: 'browser_navigate',
+      params: { url: `https://example.com/callback#access_token=${accessToken}&${bareToken}` },
+    }),
+    record({ seq: 2, tool: 'browser_press_key', params: { key: 'Enter' } }),
+  ];
+  const result = compileSession({ records, meta });
+  const flow = result.flows[0];
+  assert.deepEqual(flow.args, {
+    accessToken: { type: 'string', required: true },
+    value: { type: 'string', required: true },
+  });
+  assert.equal(flow.steps[0].url, '/callback#access_token={accessToken}&{value}');
+  assert.equal(JSON.stringify(flow).includes(accessToken), false);
+  assert.equal(JSON.stringify(flow).includes(bareToken), false);
 });
 
 test('browser_file_upload paths are always lifted into sequential file/file2/... args, never baked as literal paths', () => {
@@ -928,6 +1277,56 @@ test('fix-round-1 "ADOPTED F8": an empty-string fill value is not degenerate (a 
 });
 
 // --- remaining test gaps: the `origin` fallback option, browser_hover ---
+
+// The no-navigate fallback (`resolveOriginAndPattern`, no `browser_navigate`
+// record in the segment at all) used to build `urlPattern` from the first
+// record's raw `urlBefore`/`urlAfter` pathname -- bypassing Task 7's
+// sensitive-value lifting entirely, since that lifting only ran inside
+// `tokenizePath`/`buildGotoStep` on the goto path. A segment that happens
+// to START on a token-bearing URL with no navigate of its own (e.g. the
+// user was already on a password-reset link when the capture began) would
+// therefore bake the token into `urlPattern` verbatim. This routes the
+// fallback pathname through the SAME `tokenizePath` the goto path uses.
+test('a no-navigate segment starting on a token-bearing URL collapses the token out of urlPattern and out of the flow bytes', () => {
+  const token = 'aB3fG7kL9mN2pQ5rS8tU1vW4'; // 24 chars, high-entropy per isHighEntropyValue
+  const url = `https://example.com/reset/${token}`;
+  const records = [
+    record({
+      seq: 1, urlBefore: url, urlAfter: url, targets: [traceTarget({ name: 'Confirm' })],
+    }),
+    record({
+      seq: 2, urlBefore: url, urlAfter: url, targets: [traceTarget({ name: 'Cancel' })],
+    }),
+  ];
+  const result = compileSession({ records, meta });
+  assert.equal(result.flows.length, 1);
+  const flow = result.flows[0];
+  assert.equal(flow.origin, 'https://example.com');
+  assert.equal(flow.urlPattern, '/reset/:value');
+  assert.deepEqual(flow.args, { value: { type: 'string', required: true } });
+  assert.equal(JSON.stringify(flow).includes(token), false);
+});
+
+// Regression guard for the fix above: an ORDINARY no-navigate segment (no
+// sensitive segment in the fallback pathname) must keep its literal
+// pattern -- the new tokenizePath call must be a no-op here, same as it is
+// on the goto path for non-sensitive segments.
+test('a no-navigate segment starting on an ordinary URL ("/dashboard") keeps its literal urlPattern', () => {
+  const records = [
+    record({
+      seq: 1, urlBefore: 'https://example.com/dashboard', urlAfter: 'https://example.com/dashboard', targets: [traceTarget({ name: 'Open' })],
+    }),
+    record({
+      seq: 2, urlBefore: 'https://example.com/dashboard', urlAfter: 'https://example.com/dashboard', targets: [traceTarget({ name: 'Close' })],
+    }),
+  ];
+  const result = compileSession({ records, meta });
+  assert.equal(result.flows.length, 1);
+  const flow = result.flows[0];
+  assert.equal(flow.origin, 'https://example.com');
+  assert.equal(flow.urlPattern, '/dashboard');
+  assert.deepEqual(flow.args, {});
+});
 
 test('the origin option seeds the flow origin when a segment has no navigate and no resolvable urlBefore/urlAfter', () => {
   const records = [
