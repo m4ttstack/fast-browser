@@ -97,6 +97,10 @@ async function readFlow(dir, fileName) {
   return JSON.parse(await readFile(path.join(dir, fileName), 'utf8'));
 }
 
+async function readState(paths) {
+  return JSON.parse(await readFile(paths.flowsStateFile, 'utf8'));
+}
+
 // Two-segment session (origin change splits them, no error record needed):
 // a read-only flow (nav + non-mutating click) on shop.example, and a
 // mutating flow (nav + mutating click) on checkout.example.
@@ -119,7 +123,7 @@ function twoTierRecords() {
 
 // --- fresh sweep ---
 
-test('a fresh sweep compiles a session into flows landed in the correct tier dirs', async (t) => {
+test('a fresh sweep compiles a completed session into flows landed in the correct tier dirs', async (t) => {
   const paths = await tempPaths(t);
   await writeSession(paths, 1000, { meta: baseMeta(), records: twoTierRecords() });
 
@@ -136,7 +140,7 @@ test('a fresh sweep compiles a session into flows landed in the correct tier dir
   assert.deepEqual(result.updated, []);
   assert.equal(result.replaysSeen, 0);
   assert.deepEqual(result.skippedBySession, {});
-  assert.deepEqual(result.cursor, { 'trace-1000': { lines: 4 } });
+  assert.deepEqual(result.cursor, { 'trace-1000': { lines: 4, provenanceLines: 4 } });
 
   assert.deepEqual(await listFlowFiles(paths.flowsDir), ['view-details.flow.json']);
   assert.deepEqual(await listFlowFiles(paths.flowsPendingDir), ['place-order.flow.json']);
@@ -176,21 +180,39 @@ test('a second sweep with no new lines compiles nothing and leaves the cursor un
   assert.deepEqual(await listFlowFiles(paths.flowsPendingDir), ['place-order.flow.json']);
 });
 
-// --- grown session: only new lines are reprocessed ---
+// --- grown session: only new lines are reprocessed (F5: discriminate true
+// slicing from a "recompile everything, dedup absorbs the redundancy" bug)
+// ---
 
-test('a session that grows between sweeps is reprocessed from its saved line cursor only', async (t) => {
+test('a completed session that grows after its first sweep is reprocessed from its saved line cursor only, not recompiled wholesale', async (t) => {
   const paths = await tempPaths(t);
+  // seq2 errors -- forces a segment flush, and (on its own) an
+  // 'error-truncated' skip that must be reported EXACTLY ONCE, on the
+  // sweep that first observes it. If a later sweep ever re-feeds records
+  // 1-2 to the compiler (the "recompile everything, let dedup mask it"
+  // bug this test is designed to catch), that skip reappears -- dedup has
+  // no equivalent protection for report.skipped the way it does for
+  // `compiled`, so this is a genuine discriminator, not just a duplicate
+  // assertion of what `compiled` already shows.
   await writeSession(paths, 3000, {
     meta: baseMeta(),
     records: [
       record({ seq: 1, tool: 'browser_navigate', params: { url: 'https://shop.example/cart' } }),
-      record({ seq: 2, targets: [traceTarget({ name: 'View details' })], mutating: false }),
+      record({
+        seq: 2, targets: [traceTarget({ name: 'Whoops' })], mutating: false, error: 'boom',
+      }),
     ],
   });
 
   const first = await sweep({ paths });
-  assert.deepEqual(first.compiled, [{ name: 'view-details', tier: 'ready' }]);
-  assert.deepEqual(first.cursor, { 'trace-3000': { lines: 2 } });
+  assert.deepEqual(first.compiled, []); // nav-only fragment, too short either way
+  assert.deepEqual(first.skippedBySession, {
+    'trace-3000': [
+      { reason: 'error-truncated', seqRange: [1, 1] },
+      { reason: 'error-truncated', seqRange: [2, 2] },
+    ],
+  });
+  assert.deepEqual(first.cursor, { 'trace-3000': { lines: 2, provenanceLines: 2 } });
 
   await appendRecords(paths, 3000, [
     record({
@@ -204,10 +226,15 @@ test('a session that grows between sweeps is reprocessed from its saved line cur
   const second = await sweep({ paths });
   assert.deepEqual(second.compiled, [{ name: 'place-order', tier: 'pending' }]);
   assert.equal(second.sessionsProcessed, 1);
-  assert.deepEqual(second.cursor, { 'trace-3000': { lines: 4 } });
+  // The discriminator: records 1-2 (and their error skip) must NOT be
+  // re-reported. A wholesale-recompile bug would show the same `compiled`
+  // array (dedup absorbs the redundant 'place-order'... no -- it would
+  // absorb a redundant nothing here, since records 1-2 never compiled a
+  // flow at all -- but it WOULD re-surface both error-truncated skips).
+  assert.deepEqual(second.skippedBySession, {});
+  assert.deepEqual(second.cursor, { 'trace-3000': { lines: 4, provenanceLines: 4 } });
 
-  // The first flow was never recompiled/rewritten a second time.
-  assert.deepEqual(await listFlowFiles(paths.flowsDir), ['view-details.flow.json']);
+  assert.deepEqual(await listFlowFiles(paths.flowsDir), []);
   assert.deepEqual(await listFlowFiles(paths.flowsPendingDir), ['place-order.flow.json']);
 });
 
@@ -243,6 +270,7 @@ test('a successful replay record increments successRuns and resets failStreak on
   assert.equal(second.replaysSeen, 1);
   assert.deepEqual(second.compiled, []); // never compiled into a js-step flow
   assert.deepEqual(second.updated, [{ name, successRuns: 1, failStreak: 0 }]);
+  assert.deepEqual(second.cursor, { 'trace-4000': { lines: 3, provenanceLines: 3 } });
 
   const updatedOnDisk = await readFlow(paths.flowsDir, 'view-details.flow.json');
   assert.equal(updatedOnDisk.provenance.successRuns, 1);
@@ -273,6 +301,7 @@ test('a failing replay record increments failStreak and does not touch successRu
     }),
   ]);
   const second = await sweep({ paths });
+  assert.deepEqual(second.compiled, []);
   assert.deepEqual(second.updated, [{ name, successRuns: 1, failStreak: 0 }]);
 
   await appendRecords(paths, 5000, [
@@ -285,11 +314,95 @@ test('a failing replay record increments failStreak and does not touch successRu
   ]);
   const third = await sweep({ paths });
   assert.equal(third.replaysSeen, 1);
+  assert.deepEqual(third.compiled, []);
   assert.deepEqual(third.updated, [{ name, successRuns: 1, failStreak: 1 }]);
 
   const updatedOnDisk = await readFlow(paths.flowsDir, 'view-details.flow.json');
   assert.equal(updatedOnDisk.provenance.successRuns, 1);
   assert.equal(updatedOnDisk.provenance.failStreak, 1);
+});
+
+// --- F3: replays never reach the compiler, tested directly (not via an
+// accidental too-short pass) ---
+
+test('a completed session whose new records are ALL replays never reaches the compiler: nothing compiled, both tier dirs stay empty', async (t) => {
+  const paths = await tempPaths(t);
+  await writeSession(paths, 5500, {
+    meta: baseMeta(),
+    records: [
+      record({
+        seq: 1,
+        tool: 'browser_run_code_unsafe',
+        params: { filename: 'flow-runner.js', args: { flow: { id: 'a'.repeat(64), name: 'ghost' } } },
+      }),
+      record({
+        seq: 2,
+        tool: 'browser_run_code_unsafe',
+        params: { filename: 'flow-runner.js', args: { flow: { id: 'b'.repeat(64), name: 'ghost-2' } } },
+        error: 'replay failed',
+      }),
+    ],
+  });
+
+  const result = await sweep({ paths });
+
+  assert.deepEqual(result.compiled, []);
+  assert.deepEqual(result.skippedBySession, {}); // compileSession was never even called
+  assert.equal(result.replaysSeen, 2);
+  assert.deepEqual(result.updated, []); // neither ghost id/name matches a stored artifact
+  assert.deepEqual(await listFlowFiles(paths.flowsDir), []);
+  assert.deepEqual(await listFlowFiles(paths.flowsPendingDir), []);
+});
+
+// --- F7: `updated` is aggregated per flow id at sweep level ---
+
+test('a flow replayed from two different sessions in one sweep gets exactly one final updated entry, not two contradictory ones', async (t) => {
+  const paths = await tempPaths(t);
+  await writeSession(paths, 5600, {
+    meta: baseMeta(),
+    records: [
+      record({ seq: 1, tool: 'browser_navigate', params: { url: 'https://shop.example/cart' } }),
+      record({ seq: 2, targets: [traceTarget({ name: 'View details' })], mutating: false }),
+    ],
+  });
+  const setup = await sweep({ paths });
+  const [{ name }] = setup.compiled;
+  const stored = await readFlow(paths.flowsDir, 'view-details.flow.json');
+
+  // Two DIFFERENT sessions, each replaying the same flow once, swept
+  // together in a single sweep() call.
+  await writeSession(paths, 5700, {
+    meta: baseMeta(),
+    records: [
+      record({
+        seq: 1,
+        tool: 'browser_run_code_unsafe',
+        params: { filename: 'flow-runner.js', args: { flow: { id: stored.id, name } } },
+      }),
+    ],
+  });
+  await writeSession(paths, 5800, {
+    meta: baseMeta(),
+    records: [
+      record({
+        seq: 1,
+        tool: 'browser_run_code_unsafe',
+        params: { filename: 'flow-runner.js', args: { flow: { id: stored.id, name } } },
+        error: 'boom',
+      }),
+    ],
+  });
+
+  const result = await sweep({ paths });
+  assert.equal(result.replaysSeen, 2);
+  // Exactly one entry for this flow, reflecting BOTH replays applied in
+  // session order (success then failure): successRuns from the first,
+  // failStreak from the second -- never two separate/contradictory rows.
+  assert.deepEqual(result.updated, [{ name, successRuns: 1, failStreak: 1 }]);
+
+  const onDisk = await readFlow(paths.flowsDir, 'view-details.flow.json');
+  assert.equal(onDisk.provenance.successRuns, 1);
+  assert.equal(onDisk.provenance.failStreak, 1);
 });
 
 // --- id-dedup ---
@@ -373,13 +486,13 @@ test('a corrupt flows-state.json is treated as empty and never throws; a fresh v
   const result = await sweep({ paths });
 
   assert.deepEqual(result.compiled, [{ name: 'view-details', tier: 'ready' }]);
-  assert.deepEqual(result.cursor, { 'trace-8000': { lines: 2 } });
+  assert.deepEqual(result.cursor, { 'trace-8000': { lines: 2, provenanceLines: 2 } });
 
-  const onDisk = JSON.parse(await readFile(paths.flowsStateFile, 'utf8'));
-  assert.deepEqual(onDisk, { schemaVersion: 1, processed: { 'trace-8000': { lines: 2 } } });
+  const onDisk = await readState(paths);
+  assert.deepEqual(onDisk, { schemaVersion: 1, processed: { 'trace-8000': { lines: 2, provenanceLines: 2 } } });
 });
 
-test('a flows-state.json with the wrong schemaVersion is also treated as empty', async (t) => {
+test('a flows-state.json with the wrong schemaVersion is treated as empty; the stale entry never survives into the rewritten file', async (t) => {
   const paths = await tempPaths(t);
   await writeSession(paths, 8100, {
     meta: baseMeta(),
@@ -393,11 +506,51 @@ test('a flows-state.json with the wrong schemaVersion is also treated as empty',
 
   const result = await sweep({ paths });
   assert.deepEqual(result.compiled, [{ name: 'view-details', tier: 'ready' }]);
+  assert.equal('foo' in result.cursor, false);
+
+  const onDisk = await readState(paths);
+  assert.equal('foo' in onDisk.processed, false); // F4: the stale key must not survive a gate that actually fired
+  assert.deepEqual(onDisk.processed, { 'trace-8100': { lines: 2, provenanceLines: 2 } });
 });
 
-// --- incomplete session re-sweep ---
+test('an old (pre-fix) one-cursor state entry upgrades cleanly: absent provenanceLines defaults to lines, no re-counted replay', async (t) => {
+  const paths = await tempPaths(t);
+  await writeSession(paths, 8200, {
+    meta: baseMeta(),
+    records: [
+      record({ seq: 1, tool: 'browser_navigate', params: { url: 'https://shop.example/cart' } }),
+      record({ seq: 2, targets: [traceTarget({ name: 'View details' })], mutating: false }),
+      record({
+        seq: 3,
+        tool: 'browser_run_code_unsafe',
+        params: { filename: 'flow-runner.js', args: { flow: { name: 'view-details' } } },
+      }),
+    ],
+  });
+  // Seed a stored artifact matching what a prior (old-design) sweep would
+  // have already produced and already applied the replay to.
+  const preSweep = await sweep({ paths }); // establishes the real flow + applies the one replay once
+  assert.deepEqual(preSweep.updated, [{ name: 'view-details', successRuns: 1, failStreak: 0 }]);
 
-test('a session with no meta.endedAt is swept but stays incomplete; it completes once endedAt appears, even with no new lines', async (t) => {
+  // Now hand-roll an old-shape state entry (as if written before this fix)
+  // that only carries `lines`, at the same total the real sweep just
+  // reached -- overwriting the (already-correct) new-shape entry.
+  const state = await readState(paths);
+  state.processed['trace-8200'] = { lines: 3 }; // no provenanceLines at all
+  await writeFile(paths.flowsStateFile, JSON.stringify(state));
+
+  const second = await sweep({ paths });
+  assert.deepEqual(second.compiled, []);
+  assert.deepEqual(second.updated, []); // NOT re-applied -- provenanceLines defaulted to lines (3), already caught up
+  assert.deepEqual(second.cursor, { 'trace-8200': { lines: 3, provenanceLines: 3 } });
+
+  const onDisk = await readFlow(paths.flowsDir, 'view-details.flow.json');
+  assert.equal(onDisk.provenance.successRuns, 1); // still just the one real application
+});
+
+// --- F2: live-session compilation deferral ---
+
+test('a live session (no meta.endedAt) defers compilation entirely; it compiles the whole coherent trace once meta.endedAt appears', async (t) => {
   const paths = await tempPaths(t);
   const clock = () => new Date('2026-02-02T00:00:00.000Z');
   await writeSession(paths, 9000, {
@@ -409,22 +562,165 @@ test('a session with no meta.endedAt is swept but stays incomplete; it completes
   });
 
   const first = await sweep({ paths, now: clock });
-  assert.equal(first.compiled.length, 1);
-  assert.deepEqual(first.cursor, { 'trace-9000': { lines: 2, incomplete: true } });
-  const compiledFlow = await readFlow(paths.flowsDir, 'view-details.flow.json');
-  assert.equal(compiledFlow.provenance.compiledAt, '2026-02-02T00:00:00.000Z'); // from the injected clock
+  assert.deepEqual(first.compiled, []); // deferred -- not yet complete
+  assert.equal(first.sessionsProcessed, 0); // nothing substantive happened (no compile, no replay)
+  assert.deepEqual(first.cursor, { 'trace-9000': { lines: 0, provenanceLines: 2, incomplete: true } });
+  assert.deepEqual(await listFlowFiles(paths.flowsDir), []);
+  assert.deepEqual(await listFlowFiles(paths.flowsPendingDir), []);
 
-  // Second sweep: still no endedAt, no new lines -- a genuine no-op, but the
-  // session must still be re-checked (not silently dropped from the cursor).
+  // Still live, no new lines -- a genuine no-op, but re-checked every sweep.
   const second = await sweep({ paths, now: clock });
   assert.deepEqual(second.compiled, []);
   assert.equal(second.sessionsProcessed, 0);
-  assert.deepEqual(second.cursor, { 'trace-9000': { lines: 2, incomplete: true } });
+  assert.deepEqual(second.cursor, { 'trace-9000': { lines: 0, provenanceLines: 2, incomplete: true } });
 
-  // The session ends: meta gains endedAt, still zero new lines.
+  // The session ends -- meta gains endedAt, still zero new lines beyond
+  // what was already scanned for provenance. The WHOLE coherent file
+  // compiles in one shot now, never having been fragmented while live.
   await rewriteMeta(paths, 9000, baseMeta());
   const third = await sweep({ paths, now: clock });
-  assert.deepEqual(third.compiled, []);
-  assert.equal(third.sessionsProcessed, 0);
-  assert.deepEqual(third.cursor, { 'trace-9000': { lines: 2 } }); // incomplete flag dropped
+  assert.deepEqual(third.compiled, [{ name: 'view-details', tier: 'ready' }]);
+  assert.deepEqual(third.cursor, { 'trace-9000': { lines: 2, provenanceLines: 2 } });
+
+  const compiledFlow = await readFlow(paths.flowsDir, 'view-details.flow.json');
+  // meta.endedAt now present -- wins over the injected clock (compile.mjs's
+  // own resolveCompiledAt contract), so compiledAt is the real close time,
+  // not the moment this sweep happened to run.
+  assert.equal(compiledFlow.provenance.compiledAt, '2026-01-01T00:10:00.000Z');
+});
+
+test('a replay record inside a still-live session updates the stored artifact immediately, even though the replaying session itself stays uncompiled', async (t) => {
+  const paths = await tempPaths(t);
+  // A separate, already-complete session establishes the flow to replay.
+  await writeSession(paths, 12000, {
+    meta: baseMeta(),
+    records: [
+      record({ seq: 1, tool: 'browser_navigate', params: { url: 'https://shop.example/cart' } }),
+      record({ seq: 2, targets: [traceTarget({ name: 'View details' })], mutating: false }),
+    ],
+  });
+  const setup = await sweep({ paths });
+  const [{ name }] = setup.compiled;
+  const stored = await readFlow(paths.flowsDir, 'view-details.flow.json');
+
+  // A live session (no endedAt) whose only content, so far, is a replay of
+  // that flow.
+  await writeSession(paths, 13000, {
+    meta: baseMeta({ endedAt: undefined }),
+    records: [
+      record({
+        seq: 1,
+        tool: 'browser_run_code_unsafe',
+        params: { filename: 'flow-runner.js', args: { flow: { id: stored.id, name } } },
+      }),
+    ],
+  });
+
+  const result = await sweep({ paths });
+  assert.equal(result.replaysSeen, 1);
+  assert.equal(result.sessionsProcessed, 1); // only the live session did anything this round
+  assert.deepEqual(result.updated, [{ name, successRuns: 1, failStreak: 0 }]);
+  assert.deepEqual(result.compiled, []); // the live session itself compiles nothing
+  assert.deepEqual(result.cursor['trace-13000'], { lines: 0, provenanceLines: 1, incomplete: true });
+
+  const updatedOnDisk = await readFlow(paths.flowsDir, 'view-details.flow.json');
+  assert.equal(updatedOnDisk.provenance.successRuns, 1);
+
+  // The live session later completes with no new lines: it contributes
+  // nothing further (the replay was already counted; there was nothing
+  // else in it to compile).
+  await rewriteMeta(paths, 13000, baseMeta());
+  const after = await sweep({ paths });
+  assert.deepEqual(after.compiled, []);
+  assert.deepEqual(after.updated, []); // not re-applied
+  assert.deepEqual(after.cursor['trace-13000'], { lines: 1, provenanceLines: 1 });
+});
+
+// --- F1: per-session state persistence survives a mid-sweep failure ---
+
+test('a write failure on a later session does not lose an earlier session\'s already-persisted progress; a retry does not double-count', async (t) => {
+  const paths = await tempPaths(t);
+
+  // Session Z: already complete, swept on its own first -- establishes a
+  // stored flow to replay against.
+  await writeSession(paths, 500, {
+    meta: baseMeta(),
+    records: [
+      record({ seq: 1, tool: 'browser_navigate', params: { url: 'https://shop.example/cart' } }),
+      record({ seq: 2, targets: [traceTarget({ name: 'View details' })], mutating: false }),
+    ],
+  });
+  const zeroth = await sweep({ paths });
+  const [{ name }] = zeroth.compiled;
+  const storedBefore = await readFlow(paths.flowsDir, 'view-details.flow.json');
+
+  // Session A (epochMs 1000, processed before B in listTraceSessions'
+  // ascending order): a completed session whose only new content is a
+  // successful replay of the stored flow.
+  await writeSession(paths, 1000, {
+    meta: baseMeta(),
+    records: [
+      record({
+        seq: 1,
+        tool: 'browser_run_code_unsafe',
+        params: { filename: 'flow-runner.js', args: { flow: { id: storedBefore.id, name } } },
+      }),
+    ],
+  });
+
+  // Session B (epochMs 2000): a completed session that would compile a new
+  // mutating flow into flowsPendingDir -- but that directory is sabotaged
+  // (a FILE sits where the directory belongs), so the write throws mid-
+  // sweep, strictly AFTER A has already been fully processed.
+  await writeSession(paths, 2000, {
+    meta: baseMeta(),
+    records: [
+      record({ seq: 1, tool: 'browser_navigate', params: { url: 'https://other.example/checkout' } }),
+      record({ seq: 2, targets: [traceTarget({ name: 'Confirm' })], mutating: true }),
+    ],
+  });
+  await rm(paths.flowsPendingDir, { recursive: true, force: true });
+  await writeFile(paths.flowsPendingDir, 'not a directory');
+
+  await assert.rejects(() => sweep({ paths }));
+
+  // A's work already landed on disk before B blew up.
+  const afterCrash = await readFlow(paths.flowsDir, 'view-details.flow.json');
+  assert.equal(afterCrash.provenance.successRuns, 1);
+  const stateAfterCrash = await readState(paths);
+  assert.equal(stateAfterCrash.processed['trace-1000'].provenanceLines, 1);
+  assert.equal('trace-2000' in stateAfterCrash.processed, false); // B never got as far as recording its own entry
+
+  // Repair the sabotage and retry: B now succeeds, and A's already-counted
+  // replay is NOT re-applied (state already reflects it was processed).
+  await rm(paths.flowsPendingDir, { force: true });
+  const retry = await sweep({ paths });
+  assert.deepEqual(retry.compiled, [{ name: 'confirm', tier: 'pending' }]);
+  assert.deepEqual(retry.updated, []); // A contributes nothing new this time
+
+  const afterRetry = await readFlow(paths.flowsDir, 'view-details.flow.json');
+  assert.equal(afterRetry.provenance.successRuns, 1); // NOT double-counted
+});
+
+// --- F8: stale state entries are pruned at save time ---
+
+test('a state entry for a trace dir that no longer exists is pruned from the persisted state on the next save', async (t) => {
+  const paths = await tempPaths(t);
+  await writeSession(paths, 11000, {
+    meta: baseMeta(),
+    records: [
+      record({ seq: 1, tool: 'browser_navigate', params: { url: 'https://shop.example/cart' } }),
+      record({ seq: 2, targets: [traceTarget({ name: 'View details' })], mutating: false }),
+    ],
+  });
+  const first = await sweep({ paths });
+  assert.deepEqual(first.cursor, { 'trace-11000': { lines: 2, provenanceLines: 2 } });
+
+  // The session directory is gone (e.g. archived/cleaned up elsewhere).
+  await rm(path.join(paths.dataDir, 'trace-11000'), { recursive: true, force: true });
+
+  const second = await sweep({ paths });
+  assert.deepEqual(second.cursor, {});
+  const onDisk = await readState(paths);
+  assert.deepEqual(onDisk.processed, {});
 });
