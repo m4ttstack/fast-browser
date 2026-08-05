@@ -172,17 +172,31 @@ test('mineInventory does not treat an ordinary run_code_unsafe call (non-flow-ru
 
 // --- mineInventory: keying falls back from urlBefore to urlAfter ---
 
-test('mineInventory keys off urlAfter when urlBefore is missing, unparseable, or cross-origin', () => {
+test('mineInventory keys off urlAfter when urlBefore is missing or unparseable', () => {
   const missingBefore = baseRecord({ urlBefore: undefined, urlAfter: `${ORIGIN}/checkout`, targets: [enrichedTarget()] });
   const unparseableBefore = baseRecord({ urlBefore: 'about:blank', urlAfter: `${ORIGIN}/checkout`, targets: [enrichedTarget()] });
+
+  for (const record of [missingBefore, unparseableBefore]) {
+    const { patterns } = mineInventory([record], { origin: ORIGIN, now: FIXED_NOW });
+    assert.deepEqual(Object.keys(patterns), ['/checkout']);
+  }
+});
+
+// --- mineInventory: fix round 1, Major F1 -- a usable-but-cross-origin
+// urlBefore must NOT fall back to urlAfter (that would mis-file the
+// interaction under the destination page rather than the page it actually
+// happened on); the record contributes nothing to THIS origin at all. It
+// belongs to its urlBefore's own origin group instead -- sweep.mjs's Task 4
+// grouping (fix round 1) guarantees that group exists whenever urlBefore
+// and urlAfter resolve to different origins. ---
+
+test('mineInventory drops a record whose urlBefore is usable but cross-origin, rather than falling back to urlAfter', () => {
   const crossOriginBefore = baseRecord({
     urlBefore: 'https://other.example/landing', urlAfter: `${ORIGIN}/checkout`, targets: [enrichedTarget()],
   });
 
-  for (const record of [missingBefore, unparseableBefore, crossOriginBefore]) {
-    const { patterns } = mineInventory([record], { origin: ORIGIN, now: FIXED_NOW });
-    assert.deepEqual(Object.keys(patterns), ['/checkout']);
-  }
+  const { patterns } = mineInventory([crossOriginBefore], { origin: ORIGIN, now: FIXED_NOW });
+  assert.deepEqual(patterns, {});
 });
 
 // --- mineInventory: cross-origin keying URL drops the record ---

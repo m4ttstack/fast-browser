@@ -1027,3 +1027,121 @@ test('a multi-origin session mines both origins into their own dirs, aggregated 
   const checkoutInventory = await readSiteFile(paths, 'https://checkout.example', 'inventory.json');
   assert.equal(checkoutInventory.patterns['/pay'].targets[0].name, 'Place order');
 });
+
+// --- fix round 1, Major F1: a navigating interaction attributes its target
+// to the page it happened ON, never the page it navigated TO ---
+
+test('a click that navigates cross-origin attributes its target to the SOURCE page\'s inventory, not the destination\'s; the destination still gets its (targetless) graph entry edge', async (t) => {
+  const paths = await tempPaths(t);
+  await writeSession(paths, 27000, {
+    meta: baseMeta(),
+    records: [
+      record({
+        seq: 1,
+        tool: 'browser_navigate',
+        params: { url: 'https://shop.example/cart' },
+        urlBefore: 'about:blank',
+        urlAfter: 'https://shop.example/cart',
+      }),
+      // The click happens ON shop.example/cart but navigates to
+      // checkout.example/pay -- before this fix, this record was grouped
+      // ONLY under checkout (urlAfter-first grouping), so
+      // inventory.mjs's old urlBefore-usable-but-cross-origin fallback
+      // keyed the target under checkout's /pay instead of shop's /cart.
+      record({
+        seq: 2,
+        targets: [traceTarget({ name: 'Proceed to checkout' })],
+        mutating: false,
+        urlBefore: 'https://shop.example/cart',
+        urlAfter: 'https://checkout.example/pay',
+      }),
+    ],
+  });
+
+  const result = await sweep({ paths });
+
+  assert.deepEqual(result.sites.origins.slice().sort(), ['https://checkout.example', 'https://shop.example']);
+  assert.equal(result.sites.edges, 2); // shop's entry nav + checkout's entry edge
+  assert.equal(result.sites.targets, 1); // ONLY shop's -- checkout gets none from this record
+
+  const shopInventory = await readSiteFile(paths, 'https://shop.example', 'inventory.json');
+  assert.deepEqual(Object.keys(shopInventory.patterns), ['/cart']);
+  assert.equal(shopInventory.patterns['/cart'].targets.length, 1);
+  assert.equal(shopInventory.patterns['/cart'].targets[0].name, 'Proceed to checkout');
+
+  // Checkout gets NO inventory entry from this record at all -- the record
+  // never belongs there (it happened on shop.example, not checkout.example).
+  const checkoutInventory = await readSiteFile(paths, 'https://checkout.example', 'inventory.json');
+  assert.deepEqual(checkoutInventory.patterns, {});
+
+  // The graph entry edge into checkout is unaffected by this fix and must
+  // stay: `from: null` (urlBefore is usable but off-origin), `to: '/pay'`.
+  const checkoutGraph = await readSiteFile(paths, 'https://checkout.example', 'graph.json');
+  assert.equal(checkoutGraph.edges.length, 1);
+  assert.equal(checkoutGraph.edges[0].from, null);
+  assert.equal(checkoutGraph.edges[0].to, '/pay');
+});
+
+// --- fix round 1, F2: reported sites counts are the NEW-mined output for
+// THIS sweep call, not the resulting on-disk totals -- a second session on
+// an already-mined origin exercises the real merge path (count-increment,
+// kinds-union), which only shows up on disk, not in the report ---
+
+test('a second session on an already-mined origin reports the NEW-mined edges/targets, while on-disk totals grow further via count-increment and kinds-union', async (t) => {
+  const paths = await tempPaths(t);
+  await writeSession(paths, 28000, { meta: baseMeta(), records: siteMiningRecords() });
+  const first = await sweep({ paths });
+  assert.equal(first.sites.edges, 2);
+  assert.equal(first.sites.targets, 1);
+
+  await writeSession(paths, 28100, {
+    meta: baseMeta(),
+    records: [
+      // A genuinely new route (`/product/:id` -> `/wishlist`): 1 new mined
+      // edge, no dedup match against session 1's edges.
+      record({
+        seq: 1,
+        tool: 'browser_navigate',
+        params: { url: 'https://shop.example/wishlist' },
+        urlBefore: 'https://shop.example/product/42',
+        urlAfter: 'https://shop.example/wishlist',
+      }),
+      // Re-touches session 1's EXISTING '/cart' -> 'View details' target,
+      // with a DIFFERENT locator kind -- this is what exercises
+      // count-increment and kinds-union through the real merge, once
+      // written to disk.
+      record({
+        seq: 2,
+        targets: [{
+          ref: 'e2',
+          resolved: "getByTestId('view-details')",
+          alternates: [{ kind: 'testid', selector: '[data-testid="view-details"]' }],
+          role: 'button',
+          name: 'View details',
+          description: 'View details',
+        }],
+        mutating: false,
+        urlBefore: 'https://shop.example/cart',
+        urlAfter: 'https://shop.example/cart',
+      }),
+    ],
+  });
+
+  const second = await sweep({ paths });
+
+  // Reported counts are session 2's OWN mined output only.
+  assert.deepEqual(second.sites.origins, ['https://shop.example']);
+  assert.equal(second.sites.edges, 1);
+  assert.equal(second.sites.targets, 1);
+  assert.equal(second.sites.evicted, 0);
+
+  // On-disk totals reflect the accumulated merge across BOTH sessions --
+  // strictly larger than what session 2 alone reported.
+  const graph = await readSiteFile(paths, 'https://shop.example', 'graph.json');
+  assert.equal(graph.edges.length, 3); // session 1's 2 + session 2's 1 new route
+
+  const inventory = await readSiteFile(paths, 'https://shop.example', 'inventory.json');
+  const cartTarget = inventory.patterns['/cart'].targets.find((t) => t.name === 'View details');
+  assert.equal(cartTarget.count, 2); // incremented across the two sessions, not reset
+  assert.deepEqual(cartTarget.kinds.slice().sort(), ['role', 'testid']); // unioned across sessions
+});
