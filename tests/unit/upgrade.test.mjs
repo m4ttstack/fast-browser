@@ -146,6 +146,26 @@ test('isExplainedByLockUpgrade is true for a genuine upgrade even when the optio
   );
 });
 
+// browser-driver's verdict comes from a live codex exec smoke run, which can
+// flake for reasons unrelated to this machine's managed state. A flake that
+// lands in the same report as a genuine version bump must not veto the
+// upgrade that report is asking for (live incident, 2026-08-05).
+test('isExplainedByLockUpgrade is true for a genuine upgrade even when the browser-driver smoke check also fails', async () => {
+  const paths = await tempPaths('fast-browser-upgrade-unit-browser-driver-');
+  const oldLock = lockFor('0.1.0-alpha.1', '0.2.1');
+  const newLock = lockFor('0.1.0-alpha.5', '0.2.2');
+  await writeRuntimeInstall(paths, oldLock);
+  await writeExtensionInstall(paths, oldLock);
+  const report = doctorReport([
+    'runtime-checksum', 'extension-artifact', 'mcp-handshake', 'tool-contract', 'extension-installed',
+    'browser-driver',
+  ]);
+  assert.equal(
+    await isExplainedByLockUpgrade({ paths, lock: newLock, doctorReport: report }),
+    true,
+  );
+});
+
 // gif-renderer is the same kind of optional capability as annotate-renderer:
 // ffmpeg is never installed by setup, so its absence is a permanent resting
 // state that must neither block a genuine upgrade nor read as drift.
