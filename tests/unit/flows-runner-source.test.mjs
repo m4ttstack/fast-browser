@@ -153,6 +153,112 @@ test('flow-runner.js dedupes byte-identical probe candidates and escalates once 
   ]);
 });
 
+test('flow-runner.js tags a locatorFallbacks entry the escalated pass found with escalated: true', async () => {
+  // A single candidate that only clears the probe at the escalated 3000ms
+  // timeout, never at the base 1500ms one -- the first pass misses
+  // outright (nothing to fall back to within it), rung 2 is what finds it,
+  // and that is exactly the case the entry's `escalated: true` flag exists
+  // to record.
+  const source = await readSource();
+  const sandbox = {};
+  vm.createContext(sandbox);
+  const script = new vm.Script(`(${source})`);
+  const macro = script.runInContext(sandbox);
+
+  const selector = 'role=button[name="Place order"]';
+  const stubPage = {
+    url: () => 'http://x/cart',
+    on: () => {},
+    off: () => {},
+    locator: () => ({
+      waitFor: async ({ timeout }) => {
+        if (timeout !== 3000) throw new Error('not found');
+      },
+      click: async () => {},
+    }),
+  };
+
+  const flow = {
+    schemaVersion: 1,
+    name: 'escalated-hit',
+    steps: [
+      {
+        op: 'click',
+        target: { locators: [{ kind: 'role', selector }] },
+      },
+    ],
+  };
+
+  const result = await macro(stubPage, { flow, args: {} });
+  assert.equal(result.ok, true);
+  // `result` is an object from the vm sandbox's own realm, not this file's
+  // -- `assert/strict`'s deepEqual also compares prototypes, which differ
+  // by realm even for structurally identical plain objects. Round-tripping
+  // through JSON (as the FLOW_RUNNER_FAILURE payload already does for the
+  // failure path above) reconstructs plain objects in THIS realm so the
+  // comparison is about content, not which realm built it.
+  const locatorFallbacks = JSON.parse(JSON.stringify(result.locatorFallbacks));
+  assert.deepEqual(locatorFallbacks, [
+    { step: 0, usedKind: 'role', usedIndex: 0, escalated: true },
+  ]);
+});
+
+test('flow-runner.js omits the escalated key entirely on a fallback the first pass already found', async () => {
+  // Two distinct (non-duplicate) candidates: index 0 never clears the
+  // probe at any timeout, index 1 clears it at the base 1500ms timeout --
+  // an ordinary rung-1 fallback, no escalation involved. The resulting
+  // entry must have NO `escalated` property at all, not merely a falsy
+  // one -- `hasOwnProperty` is checked directly rather than relying on
+  // `deepEqual`'s own key-set comparison, so a regression that started
+  // emitting `escalated: false` here would be caught on its own terms.
+  const source = await readSource();
+  const sandbox = {};
+  vm.createContext(sandbox);
+  const script = new vm.Script(`(${source})`);
+  const macro = script.runInContext(sandbox);
+
+  const missingSelector = 'role=button[name="Missing"]';
+  const hitSelector = 'role=button[name="Place order"]';
+  const stubPage = {
+    url: () => 'http://x/cart',
+    on: () => {},
+    off: () => {},
+    locator: (selector) => ({
+      waitFor: async ({ timeout }) => {
+        if (selector === hitSelector && timeout === 1500) return;
+        throw new Error('not found');
+      },
+      click: async () => {},
+    }),
+  };
+
+  const flow = {
+    schemaVersion: 1,
+    name: 'first-pass-fallback',
+    steps: [
+      {
+        op: 'click',
+        target: {
+          locators: [
+            { kind: 'role', selector: missingSelector },
+            { kind: 'role', selector: hitSelector },
+          ],
+        },
+      },
+    ],
+  };
+
+  const result = await macro(stubPage, { flow, args: {} });
+  assert.equal(result.ok, true);
+  assert.equal(result.locatorFallbacks.length, 1);
+  // See the sibling escalated-pass test above for why `entry` (a sandbox-
+  // realm object) has to go through this file's own JSON round-trip before
+  // `hasOwnProperty` is a meaningful check on it here.
+  const [entry] = JSON.parse(JSON.stringify(result.locatorFallbacks));
+  assert.deepEqual(entry, { step: 0, usedKind: 'role', usedIndex: 1 });
+  assert.equal(Object.prototype.hasOwnProperty.call(entry, 'escalated'), false);
+});
+
 test('flow-runner.js source has no require(, process., or console. -- no Node globals referenced at all', async () => {
   const source = await readSource();
   assert.doesNotMatch(source, /require\(/);
