@@ -8,6 +8,26 @@ description: Use when browser automation spans multiple interactions or page rea
 Minimize browser round trips and observation size. Prefer one informed batch
 over repeated inspect-and-click cycles.
 
+## Start with flows
+
+Before macros, run `fast-browser flows find --intent "<task>" --origin
+<origin> --json` via the shell and read the `candidates` array in its JSON
+output.
+
+If a candidate has `runnable: true`, make exactly one `browser_run_code_unsafe`
+call using its `invocation` field verbatim: `invocation.arguments.filename`
+and `invocation.arguments.args`, unedited.
+
+Never run a candidate with `runnable: false`. Its `reasons` say why:
+`pending approval: fast-browser flows approve <name>` means ask the human to
+run that command; `contains js step: not replayable in v1` means the flow
+needs re-recording. Do not attempt either yourself.
+
+If the call errors with a message starting `FLOW_RUNNER_FAILURE: `, parse
+the JSON payload after that prefix (`failedStep`, `error`, `url`,
+`stepsCompleted`, `locatorFallbacks`). Do not retry the flow: fall through
+to macros, then the fast loop below.
+
 ## Start with macros
 
 Read `~/.fast-browser/macros/MACROS.md` before any browser action. When one
@@ -63,6 +83,7 @@ ask the user to complete it in the real Chrome window, then continue.
 
 | Situation | Action |
 |---|---|
+| Replayable flow exists | flows find, then run flow-runner once |
 | Matching macro | Run its filename and args once |
 | Unfamiliar page | Run `page-affordances`, not `browser_snapshot` |
 | Digest lacks the control you need | Check `skipped`, then snapshot |

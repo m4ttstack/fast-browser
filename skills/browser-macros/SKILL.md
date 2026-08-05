@@ -7,6 +7,22 @@ description: Use when a browser task resembles a repeated flow or a reusable bro
 
 Use indexed Playwright macros instead of re-deriving known browser flows.
 
+## Flows before macros
+
+Compiled flows are checked before hand-written macros: run `fast-browser
+flows find --intent "<task>" --origin <origin> --json`, and if a candidate
+scores `runnable: true`, run it instead of reaching for a macro. See
+fast-browsing's "Start with flows" section for the full contract.
+
+`fast-browser flows approve <name>` is the one consent gate for a mutating
+or `js`-step flow. It is separate from, and does not change, the per-macro
+approval below: a mined macro still requires the user's explicit approval
+for that individual macro.
+
+The `## flow-runner` entry in `~/.fast-browser/macros/MACROS.md` documents
+the replay contract itself: the success shape and the `FLOW_RUNNER_FAILURE:
+` error shape.
+
 ## Run a macro
 
 1. Read `~/.fast-browser/macros/MACROS.md`.
