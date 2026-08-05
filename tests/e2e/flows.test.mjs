@@ -108,12 +108,13 @@ async function tracedSession(t, outputDir) {
 // `browser_find`'s, that collapses the returned value to just its first
 // line (verified against the real runtime; this is existing, uneditable
 // helper behavior, not a bug introduced here). `Found 1 match for "<text>":`
-// is that first line and is exact-equality-checkable on its own.
+// is that first line; prefix checks below survive a future textResult fix
+// that starts returning the full multi-line response.
 async function assertOrderComplete(session, orderId) {
   const headingFind = await session.callTool('browser_find', { text: 'Order complete' });
-  assert.equal(headingFind, 'Found 1 match for "Order complete":');
+  assert.ok(headingFind.startsWith('Found 1 match for "Order complete":'), headingFind);
   const orderIdFind = await session.callTool('browser_find', { text: orderId });
-  assert.equal(orderIdFind, `Found 1 match for "${orderId}":`);
+  assert.ok(orderIdFind.startsWith(`Found 1 match for "${orderId}":`), orderIdFind);
 }
 
 test('flywheel: record scripted, compile gated, approve, replay in one call', async (t) => {
@@ -230,6 +231,10 @@ test('flywheel: record scripted, compile gated, approve, replay in one call', as
   const approvedFlowPath = path.join(paths.flowsDir, flowFileName({ name: flowName }));
   const approvedFlow = JSON.parse(await readFile(approvedFlowPath, 'utf8'));
   assert.deepEqual(invocation.arguments.args.flow, approvedFlow);
+  // Approval is a plain rename: the ready-tier bytes must equal what the
+  // compiler wrote into pending, or the consent gate approved one thing and
+  // stored another.
+  assert.deepEqual(approvedFlow, compiledFlow);
 
   // Placeholder shape (fix round 1, F4): pinned before either arg is filled
   // in, so a future change to `argPlaceholder`'s literal text fails here
