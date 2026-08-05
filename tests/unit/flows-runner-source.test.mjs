@@ -608,3 +608,535 @@ test('flow-runner.js settles network with a single bounded call, no dangling sec
   assert.match(source, /page\.waitForLoadState\('networkidle', \{ timeout: 5000 \}\)\.catch\(\(\) => \{\}\);/);
   assert.doesNotMatch(source, /Promise\.race/);
 });
+
+// --- WS3a Task 3: rung 3, quirk-based interrupt recovery ---
+// Every test below embeds `quirks` alongside `flow`/`args` in the same
+// invocation object the macro receives, per Shared shapes. A stub
+// `page.locator()` distinguishes the quirk's own selector from the step's
+// target selector (and, where candidate enrichment also fires, from the
+// bounded compound scan selector Task 2's collector uses) so each test can
+// pin exactly which locator was probed, and how many times.
+
+test('flow-runner.js dismisses a matching quirk once and gives the step one more probe-then-act pass on a locator miss (WS3a Task 3)', async () => {
+  // The step's own target only clears its probe once the quirk has been
+  // clicked (simulating an interrupt covering it beforehand) -- proving
+  // the runner actually dismissed the quirk BEFORE the step's post-quirk
+  // pass, not merely that both happened to succeed independently.
+  const source = await readSource();
+  const sandbox = {};
+  vm.createContext(sandbox);
+  const script = new vm.Script(`(${source})`);
+  const macro = script.runInContext(sandbox);
+
+  const stepSelector = 'role=button[name="Buy now"]';
+  const quirkSelector = '#cookie-accept';
+  let quirkClickCount = 0;
+  let dismissed = false;
+  const stubPage = {
+    url: () => 'http://x/checkout',
+    on: () => {},
+    off: () => {},
+    locator: (selector) => {
+      if (selector === quirkSelector) {
+        return {
+          waitFor: async () => {},
+          click: async () => {
+            quirkClickCount += 1;
+            dismissed = true;
+          },
+        };
+      }
+      return {
+        waitFor: async () => {
+          if (!dismissed) throw new Error('not found');
+        },
+        click: async () => {},
+      };
+    },
+  };
+
+  const flow = {
+    schemaVersion: 1,
+    name: 'quirk-recovery-success',
+    steps: [
+      { op: 'click', target: { locators: [{ kind: 'role', selector: stepSelector }] } },
+    ],
+  };
+  const quirks = [
+    {
+      name: 'cookie-banner',
+      urlPattern: null,
+      target: { locators: [{ kind: 'css', selector: quirkSelector }] },
+      action: 'click',
+    },
+  ];
+
+  const result = await macro(stubPage, { flow, args: {}, quirks });
+  assert.equal(result.ok, true);
+  assert.equal(quirkClickCount, 1, 'the quirk must be clicked exactly once');
+  // See the escalated-pass test above for why a sandbox-realm value needs
+  // this file's own JSON round-trip before deepEqual is meaningful.
+  const locatorFallbacks = JSON.parse(JSON.stringify(result.locatorFallbacks));
+  assert.deepEqual(locatorFallbacks, [
+    { step: 0, usedKind: 'role', usedIndex: 0, escalated: true },
+  ]);
+});
+
+test('flow-runner.js records quirkAttempted alongside candidates when the post-quirk pass still misses (WS3a Task 3)', async () => {
+  // The quirk itself is present and gets clicked, but dismissing it never
+  // actually reveals the step's own target -- the post-quirk pass misses
+  // too, so the step still fails, and the failure payload must show BOTH
+  // that a quirk was tried and (since the final miss is again a locator
+  // miss) the usual candidate evidence, with `quirkAttempted` ordered
+  // before `candidates` (additive-only, candidates stays last).
+  const source = await readSource();
+  const sandbox = {};
+  vm.createContext(sandbox);
+  const script = new vm.Script(`(${source})`);
+  const macro = script.runInContext(sandbox);
+
+  const stepSelector = 'role=button[name="Buy now"]';
+  const quirkSelector = '#cookie-accept';
+  const fakeElement = {
+    getAttribute: async (attr) => (attr === 'role' ? 'button' : null),
+    innerText: async () => 'Buy now',
+  };
+  const stubPage = {
+    url: () => 'http://x/checkout',
+    on: () => {},
+    off: () => {},
+    locator: (selector) => {
+      if (selector === quirkSelector) {
+        return { waitFor: async () => {}, click: async () => {} };
+      }
+      if (typeof selector === 'string' && selector.indexOf(',') >= 0) {
+        return { all: async () => [fakeElement] };
+      }
+      return {
+        waitFor: async () => {
+          throw new Error('not found');
+        },
+      };
+    },
+  };
+
+  const flow = {
+    schemaVersion: 1,
+    name: 'quirk-recovery-still-misses',
+    steps: [
+      { op: 'click', target: { locators: [{ kind: 'role', selector: stepSelector }] } },
+    ],
+  };
+  const quirks = [
+    {
+      name: 'cookie-banner',
+      urlPattern: null,
+      target: { locators: [{ kind: 'css', selector: quirkSelector }] },
+      action: 'click',
+    },
+  ];
+
+  await assert.rejects(
+    () => macro(stubPage, { flow, args: {}, quirks }),
+    (error) => {
+      assert.match(error.message, /^FLOW_RUNNER_FAILURE: /);
+      const payload = JSON.parse(error.message.slice('FLOW_RUNNER_FAILURE: '.length));
+      assert.equal(payload.failedStep, 0);
+      assert.equal(payload.error, 'no locator candidate matched');
+      assert.equal(payload.quirkAttempted, 'cookie-banner');
+      assert.equal(payload.candidates.length, 1);
+      assert.deepEqual(Object.keys(payload), [
+        'failedStep', 'error', 'url', 'stepsCompleted', 'locatorFallbacks', 'quirkAttempted', 'candidates',
+      ]);
+      return true;
+    },
+  );
+});
+
+test('flow-runner.js never probes a quirk whose urlPattern does not match the current page (WS3a Task 3)', async () => {
+  const source = await readSource();
+  const sandbox = {};
+  vm.createContext(sandbox);
+  const script = new vm.Script(`(${source})`);
+  const macro = script.runInContext(sandbox);
+
+  const stepSelector = 'role=button[name="Buy now"]';
+  const quirkSelector = '#cookie-accept';
+  let quirkLocatorCalls = 0;
+  const stubPage = {
+    url: () => 'http://x/checkout',
+    on: () => {},
+    off: () => {},
+    locator: (selector) => {
+      if (selector === quirkSelector) {
+        quirkLocatorCalls += 1;
+        return { waitFor: async () => {}, click: async () => {} };
+      }
+      if (typeof selector === 'string' && selector.indexOf(',') >= 0) {
+        return { all: async () => [] };
+      }
+      return {
+        waitFor: async () => {
+          throw new Error('not found');
+        },
+      };
+    },
+  };
+
+  const flow = {
+    schemaVersion: 1,
+    name: 'quirk-url-mismatch',
+    steps: [
+      { op: 'click', target: { locators: [{ kind: 'role', selector: stepSelector }] } },
+    ],
+  };
+  const quirks = [
+    {
+      name: 'cookie-banner',
+      urlPattern: '/other-page',
+      target: { locators: [{ kind: 'css', selector: quirkSelector }] },
+      action: 'click',
+    },
+  ];
+
+  await assert.rejects(
+    () => macro(stubPage, { flow, args: {}, quirks }),
+    (error) => {
+      const payload = JSON.parse(error.message.slice('FLOW_RUNNER_FAILURE: '.length));
+      assert.equal(Object.prototype.hasOwnProperty.call(payload, 'quirkAttempted'), false);
+      return true;
+    },
+  );
+  assert.equal(quirkLocatorCalls, 0, 'a non-matching urlPattern must never probe the quirk target');
+});
+
+test("flow-runner.js matches a quirk's non-null urlPattern by path only, ignoring query and hash (WS3a Task 3)", async () => {
+  const source = await readSource();
+  const sandbox = {};
+  vm.createContext(sandbox);
+  const script = new vm.Script(`(${source})`);
+  const macro = script.runInContext(sandbox);
+
+  const stepSelector = 'role=button[name="Buy now"]';
+  const quirkSelector = '#cookie-accept';
+  let dismissed = false;
+  const stubPage = {
+    url: () => 'http://x/checkout?ref=email#top',
+    on: () => {},
+    off: () => {},
+    locator: (selector) => {
+      if (selector === quirkSelector) {
+        return { waitFor: async () => {}, click: async () => { dismissed = true; } };
+      }
+      return {
+        waitFor: async () => {
+          if (!dismissed) throw new Error('not found');
+        },
+        click: async () => {},
+      };
+    },
+  };
+
+  const flow = {
+    schemaVersion: 1,
+    name: 'quirk-url-exact-path-match',
+    steps: [
+      { op: 'click', target: { locators: [{ kind: 'role', selector: stepSelector }] } },
+    ],
+  };
+  const quirks = [
+    {
+      name: 'cookie-banner',
+      urlPattern: '/checkout',
+      target: { locators: [{ kind: 'css', selector: quirkSelector }] },
+      action: 'click',
+    },
+  ];
+
+  const result = await macro(stubPage, { flow, args: {}, quirks });
+  assert.equal(result.ok, true, 'a urlPattern matching the path alone must fire despite query/hash on the live URL');
+});
+
+test("flow-runner.js skips a quirk entry whose action is not 'click' (WS3a Task 3)", async () => {
+  const source = await readSource();
+  const sandbox = {};
+  vm.createContext(sandbox);
+  const script = new vm.Script(`(${source})`);
+  const macro = script.runInContext(sandbox);
+
+  const stepSelector = 'role=button[name="Buy now"]';
+  const quirkSelector = '#cookie-accept';
+  let quirkLocatorCalls = 0;
+  const stubPage = {
+    url: () => 'http://x/checkout',
+    on: () => {},
+    off: () => {},
+    locator: (selector) => {
+      if (selector === quirkSelector) {
+        quirkLocatorCalls += 1;
+        return { waitFor: async () => {}, click: async () => {} };
+      }
+      if (typeof selector === 'string' && selector.indexOf(',') >= 0) {
+        return { all: async () => [] };
+      }
+      return {
+        waitFor: async () => {
+          throw new Error('not found');
+        },
+      };
+    },
+  };
+
+  const flow = {
+    schemaVersion: 1,
+    name: 'quirk-non-click-action',
+    steps: [
+      { op: 'click', target: { locators: [{ kind: 'role', selector: stepSelector }] } },
+    ],
+  };
+  const quirks = [
+    {
+      name: 'cookie-banner',
+      urlPattern: null,
+      target: { locators: [{ kind: 'css', selector: quirkSelector }] },
+      action: 'hover',
+    },
+  ];
+
+  await assert.rejects(
+    () => macro(stubPage, { flow, args: {}, quirks }),
+    (error) => {
+      const payload = JSON.parse(error.message.slice('FLOW_RUNNER_FAILURE: '.length));
+      assert.equal(Object.prototype.hasOwnProperty.call(payload, 'quirkAttempted'), false);
+      return true;
+    },
+  );
+  assert.equal(quirkLocatorCalls, 0, 'a non-click quirk entry must be skipped before ever probing its target');
+});
+
+test('flow-runner.js silently skips a quirk entry with a non-string name or non-array target.locators (WS3a Task 3)', async () => {
+  const source = await readSource();
+  const sandbox = {};
+  vm.createContext(sandbox);
+  const script = new vm.Script(`(${source})`);
+  const macro = script.runInContext(sandbox);
+
+  const stepSelector = 'role=button[name="Buy now"]';
+  const stubPage = {
+    url: () => 'http://x/checkout',
+    on: () => {},
+    off: () => {},
+    locator: (selector) => {
+      if (typeof selector === 'string' && selector.indexOf(',') >= 0) {
+        return { all: async () => [] };
+      }
+      return {
+        waitFor: async () => {
+          throw new Error('not found');
+        },
+      };
+    },
+  };
+
+  const flow = {
+    schemaVersion: 1,
+    name: 'quirk-malformed-entries',
+    steps: [
+      { op: 'click', target: { locators: [{ kind: 'role', selector: stepSelector }] } },
+    ],
+  };
+  const quirks = [
+    { name: 42, urlPattern: null, target: { locators: [{ kind: 'css', selector: '#a' }] }, action: 'click' },
+    { name: 'no-locators-array', urlPattern: null, target: { locators: 'nope' }, action: 'click' },
+  ];
+
+  await assert.rejects(
+    () => macro(stubPage, { flow, args: {}, quirks }),
+    (error) => {
+      const payload = JSON.parse(error.message.slice('FLOW_RUNNER_FAILURE: '.length));
+      assert.equal(Object.prototype.hasOwnProperty.call(payload, 'quirkAttempted'), false);
+      return true;
+    },
+  );
+});
+
+test('flow-runner.js never attempts a quirk when args.quirks is absent or empty -- rung disabled (WS3a Task 3)', async () => {
+  const source = await readSource();
+  const sandbox = {};
+  vm.createContext(sandbox);
+  const script = new vm.Script(`(${source})`);
+  const macro = script.runInContext(sandbox);
+
+  const stepSelector = 'role=button[name="Buy now"]';
+  const stubPage = {
+    url: () => 'http://x/checkout',
+    on: () => {},
+    off: () => {},
+    locator: (selector) => {
+      if (typeof selector === 'string' && selector.indexOf(',') >= 0) {
+        return { all: async () => [] };
+      }
+      return {
+        waitFor: async () => {
+          throw new Error('not found');
+        },
+      };
+    },
+  };
+
+  const flow = {
+    schemaVersion: 1,
+    name: 'quirk-rung-disabled',
+    steps: [
+      { op: 'click', target: { locators: [{ kind: 'role', selector: stepSelector }] } },
+    ],
+  };
+
+  // Absent entirely.
+  await assert.rejects(
+    () => macro(stubPage, { flow, args: {} }),
+    (error) => {
+      const payload = JSON.parse(error.message.slice('FLOW_RUNNER_FAILURE: '.length));
+      assert.equal(Object.prototype.hasOwnProperty.call(payload, 'quirkAttempted'), false);
+      return true;
+    },
+  );
+
+  // Present but empty.
+  await assert.rejects(
+    () => macro(stubPage, { flow, args: {}, quirks: [] }),
+    (error) => {
+      const payload = JSON.parse(error.message.slice('FLOW_RUNNER_FAILURE: '.length));
+      assert.equal(Object.prototype.hasOwnProperty.call(payload, 'quirkAttempted'), false);
+      return true;
+    },
+  );
+});
+
+test('flow-runner.js gives every step its own fresh quirk budget, never reusing an earlier step\'s attempt (WS3a Task 3)', async () => {
+  // Step A's target only clears once the quirk has been clicked at least
+  // once; step B's target only clears once the quirk has been clicked at
+  // least TWICE -- forcing step B to make its OWN quirk attempt rather
+  // than free-riding on step A's. If a single run-wide flag ever gated
+  // this instead of a per-step check, step B's post-quirk pass would
+  // still see the target missing and the whole replay would fail here.
+  const source = await readSource();
+  const sandbox = {};
+  vm.createContext(sandbox);
+  const script = new vm.Script(`(${source})`);
+  const macro = script.runInContext(sandbox);
+
+  const quirkSelector = '#cookie-accept';
+  const stepASelector = 'role=button[name="Step A"]';
+  const stepBSelector = 'role=button[name="Step B"]';
+  let dismissCount = 0;
+  const stubPage = {
+    url: () => 'http://x/checkout',
+    on: () => {},
+    off: () => {},
+    locator: (selector) => {
+      if (selector === quirkSelector) {
+        return { waitFor: async () => {}, click: async () => { dismissCount += 1; } };
+      }
+      if (selector === stepASelector) {
+        return {
+          waitFor: async () => {
+            if (dismissCount < 1) throw new Error('not found');
+          },
+          click: async () => {},
+        };
+      }
+      if (selector === stepBSelector) {
+        return {
+          waitFor: async () => {
+            if (dismissCount < 2) throw new Error('not found');
+          },
+          click: async () => {},
+        };
+      }
+      throw new Error(`unexpected selector: ${selector}`);
+    },
+  };
+
+  const flow = {
+    schemaVersion: 1,
+    name: 'quirk-per-step-budget',
+    steps: [
+      { op: 'click', target: { locators: [{ kind: 'role', selector: stepASelector }] } },
+      { op: 'click', target: { locators: [{ kind: 'role', selector: stepBSelector }] } },
+    ],
+  };
+  const quirks = [
+    {
+      name: 'cookie-banner',
+      urlPattern: null,
+      target: { locators: [{ kind: 'css', selector: quirkSelector }] },
+      action: 'click',
+    },
+  ];
+
+  const result = await macro(stubPage, { flow, args: {}, quirks });
+  assert.equal(result.ok, true);
+  assert.equal(dismissCount, 2, 'each step must get its own fresh quirk attempt rather than sharing one budget');
+});
+
+test('flow-runner.js treats a quirk click failure as best-effort: never attempted again, the step still gets its post-quirk pass (WS3a Task 3)', async () => {
+  const source = await readSource();
+  const sandbox = {};
+  vm.createContext(sandbox);
+  const script = new vm.Script(`(${source})`);
+  const macro = script.runInContext(sandbox);
+
+  const stepSelector = 'role=button[name="Buy now"]';
+  const quirkSelector = '#cookie-accept';
+  let quirkClickCount = 0;
+  const stubPage = {
+    url: () => 'http://x/checkout',
+    on: () => {},
+    off: () => {},
+    locator: (selector) => {
+      if (selector === quirkSelector) {
+        return {
+          waitFor: async () => {},
+          click: async () => {
+            quirkClickCount += 1;
+            throw new Error('element detached mid-click');
+          },
+        };
+      }
+      // The step's own target still never resolves -- the click failure
+      // above must not stop the runner from giving it its one more pass.
+      return {
+        waitFor: async () => {
+          throw new Error('not found');
+        },
+      };
+    },
+  };
+
+  const flow = {
+    schemaVersion: 1,
+    name: 'quirk-click-throws',
+    steps: [
+      { op: 'click', target: { locators: [{ kind: 'role', selector: stepSelector }] } },
+    ],
+  };
+  const quirks = [
+    {
+      name: 'cookie-banner',
+      urlPattern: null,
+      target: { locators: [{ kind: 'css', selector: quirkSelector }] },
+      action: 'click',
+    },
+  ];
+
+  await assert.rejects(
+    () => macro(stubPage, { flow, args: {}, quirks }),
+    (error) => {
+      const payload = JSON.parse(error.message.slice('FLOW_RUNNER_FAILURE: '.length));
+      assert.equal(payload.quirkAttempted, 'cookie-banner', 'the attempt still counts even though the click itself threw');
+      return true;
+    },
+  );
+  assert.equal(quirkClickCount, 1, 'a failed click must never be attempted a second time');
+});
