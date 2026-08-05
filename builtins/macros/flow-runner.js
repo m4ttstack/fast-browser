@@ -246,15 +246,22 @@ async (page, args) => {
   // its own try/catch, so any throw (a missing `.all()`/`.getAttribute()`
   // method, a rejected page call, anything) is caught there rather than
   // handled per-element, matching the documented all-or-nothing degrade.
+  // Every per-element call below passes an explicit `{ timeout: 1000 }`,
+  // same as every other page wait in this file (1500/3000/1500/5000/5000
+  // elsewhere) -- a locator miss is exactly the state where the page is
+  // likely to have re-rendered out from under a stale `.all()` handle, and
+  // Playwright's own 30s default would otherwise let one stale element
+  // stall the whole failure report by up to 30s before this function's
+  // own catch (see the call site below) can even fire.
   const collectCandidates = async () => {
     const elements = await page.locator(CANDIDATE_SELECTOR).all();
     const candidates = [];
     for (const element of elements.slice(0, MAX_CANDIDATES)) {
       const [role, name, testid, text] = await Promise.all([
-        element.getAttribute('role'),
-        element.getAttribute('aria-label'),
-        element.getAttribute('data-testid'),
-        element.innerText(),
+        element.getAttribute('role', { timeout: 1000 }),
+        element.getAttribute('aria-label', { timeout: 1000 }),
+        element.getAttribute('data-testid', { timeout: 1000 }),
+        element.innerText({ timeout: 1000 }),
       ]);
       candidates.push({
         role: clampCandidateString(role),
