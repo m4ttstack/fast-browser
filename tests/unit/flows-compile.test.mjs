@@ -814,6 +814,19 @@ test('MAT-136 task 7 fix round 1, F1: a bare (non key=value) high-entropy fragme
   assert.equal(flow.steps[0].url, '/app#{value}');
 });
 
+test('MAT-136 task 7 round-2 S4: an empty-key fragment pair ("#=<token>") lifts the value, mirroring the query tokenizer\'s "?=<token>" handling', () => {
+  const secret = 'abcDEF1234567890ghijK';
+  const records = [
+    record({ seq: 1, tool: 'browser_navigate', params: { url: `https://example.com/cb#=${secret}` } }),
+    record({ seq: 2, tool: 'browser_press_key', params: { key: 'Enter' } }),
+  ];
+  const result = compileSession({ records, meta });
+  const flow = result.flows[0];
+  assert.deepEqual(flow.args, { value: { type: 'string', required: true } });
+  assert.equal(flow.steps[0].url, '/cb#={value}');
+  assert.equal(JSON.stringify(flow).includes(secret), false);
+});
+
 test('MAT-136 task 7 fix round 1, F1: a plain in-page anchor ("#overview") stays literal -- no special-case anchor detection needed', () => {
   const records = [
     record({ seq: 1, tool: 'browser_navigate', params: { url: 'https://example.com/docs#overview' } }),
