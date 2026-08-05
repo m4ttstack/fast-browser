@@ -398,11 +398,17 @@ test('find caps embedded quirks at 10, dropping the rest with a warning naming t
 
 // --- list ---
 
+// WS3a Task 7: `lastHealed` is `flow.provenance.lastHealed` (artifact.mjs's
+// own nullable ISO string), carried through as an additive key on each list
+// entry -- distinct null/non-null values on the two fixtures here pin that
+// it is passed through verbatim, not just present.
 test('list reports both tiers with health, ready sorted before pending', async () => {
   const paths = { flowsDir: '/h/flows', flowsPendingDir: '/h/pending' };
   const ready = validFlow({
     name: 'b-flow',
-    provenance: { ...validFlow().provenance, successRuns: 3, failStreak: 1 },
+    provenance: {
+      ...validFlow().provenance, successRuns: 3, failStreak: 1, lastHealed: '2026-08-04T00:00:00.000Z',
+    },
   });
   const pending = validFlow({ name: 'a-flow', sideEffects: 'mutating' });
 
@@ -427,6 +433,7 @@ test('list reports both tiers with health, ready sorted before pending', async (
         description: ready.description,
         origin: ready.origin,
         health: { successRuns: 3, failStreak: 1 },
+        lastHealed: '2026-08-04T00:00:00.000Z',
       },
       {
         tier: 'pending',
@@ -434,6 +441,7 @@ test('list reports both tiers with health, ready sorted before pending', async (
         description: pending.description,
         origin: pending.origin,
         health: { successRuns: 0, failStreak: 0 },
+        lastHealed: null,
       },
     ],
   });

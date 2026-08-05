@@ -4115,6 +4115,49 @@ test('CLI main renders flows list as a short readable block', async () => {
   assert.match(output, /pending/);
 });
 
+// WS3a Task 7: the one marker `flows list` needs so a heal (which never
+// re-enters the `approve` consent gate) is at least visible outside --json.
+// Matches humanFlowsFind's own bracket-suffix convention (`[quirks: N]`) --
+// one marker, not a redesign of the line -- and only fires when
+// `lastHealed` is non-null, exercising both states in one pinned block.
+test('CLI main marks a healed flow with a bracket suffix in the human list arm', async () => {
+  const report = {
+    command: 'flows',
+    sub: 'list',
+    flows: [
+      {
+        tier: 'ready',
+        name: 'log-in',
+        description: 'Logs in.',
+        origin: 'https://example.com',
+        health: { successRuns: 5, failStreak: 0 },
+        lastHealed: '2026-08-04T00:00:00.000Z',
+      },
+      {
+        tier: 'pending',
+        name: 'place-order',
+        description: 'Places an order.',
+        origin: 'https://example.com',
+        health: { successRuns: 0, failStreak: 0 },
+        lastHealed: null,
+      },
+    ],
+  };
+  const writes = [];
+  await main(
+    { command: 'flows', json: false },
+    { commands: { flows: async () => report }, write: (text) => writes.push(text) },
+  );
+  assert.equal(
+    writes.join(''),
+    [
+      'log-in [ready] https://example.com - successRuns=5 failStreak=0 [healed]',
+      'place-order [pending] https://example.com - successRuns=0 failStreak=0',
+      '',
+    ].join('\n'),
+  );
+});
+
 test('CLI main renders flows compile with no skips as just the summary line', async () => {
   const report = {
     command: 'flows',
@@ -4134,6 +4177,78 @@ test('CLI main renders flows compile with no skips as just the summary line', as
   assert.equal(
     writes.join(''),
     'Compiled 1 new flow(s); updated 0; sessions processed: 1; replays seen: 0.\n',
+  );
+});
+
+// WS3a Task 7: until now a heal rewrote a ready-tier artifact with no
+// human-visible signal outside --json, and heals never re-enter the
+// `approve` consent gate -- this pins the exact literal line format the
+// brief requires. `kind` (heal.mjs's own fixed 'testid'/'other' set, never
+// page-derived) is printed verbatim; `name` is `flow.name`, already
+// NAME_PATTERN-validated kebab-case like every other flow name this file
+// prints unstripped.
+test('CLI main renders flows compile healed-step lines in the exact pinned format', async () => {
+  const report = {
+    command: 'flows',
+    sub: 'compile',
+    compiled: [],
+    updated: [{ name: 'log-in', successRuns: 3, failStreak: 0 }],
+    healed: [
+      { name: 'log-in', stepIndex: 2, kind: 'testid' },
+      { name: 'checkout', stepIndex: 0, kind: 'other' },
+    ],
+    healErrors: [],
+    sessionsProcessed: 1,
+    cursor: {},
+    skippedBySession: {},
+    replaysSeen: 2,
+  };
+  const writes = [];
+  await main(
+    { command: 'flows', json: false },
+    { commands: { flows: async () => report }, write: (text) => writes.push(text) },
+  );
+  assert.equal(
+    writes.join(''),
+    [
+      'Compiled 0 new flow(s); updated 1; sessions processed: 1; replays seen: 2.',
+      'healed log-in step 2 (testid)',
+      'healed checkout step 0 (other)',
+      '',
+    ].join('\n'),
+  );
+});
+
+// A heal-WRITE failure is the same visibility gap as a healed step itself --
+// sweep.mjs's own doc comment: `healErrors` accumulates and the sweep
+// continues rather than failing, so this is the only place a human running
+// `flows compile` interactively would ever learn a heal silently failed to
+// write. Styled like this file's other warning lines (`Warning: <detail>`).
+test('CLI main renders flows compile heal-write failures as warning lines', async () => {
+  const report = {
+    command: 'flows',
+    sub: 'compile',
+    compiled: [],
+    updated: [],
+    healed: [],
+    healErrors: [{ name: 'log-in', error: 'EACCES: permission denied' }],
+    sessionsProcessed: 1,
+    cursor: {},
+    skippedBySession: {},
+    replaysSeen: 1,
+  };
+  const writes = [];
+  await main(
+    { command: 'flows', json: false },
+    { commands: { flows: async () => report }, write: (text) => writes.push(text) },
+  );
+  assert.equal(
+    writes.join(''),
+    [
+      'Compiled 0 new flow(s); updated 0; sessions processed: 1; replays seen: 1.',
+      'Warning: heal failed for log-in: EACCES: permission denied',
+      '',
+    ].join('\n'),
   );
 });
 
