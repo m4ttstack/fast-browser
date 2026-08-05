@@ -53,6 +53,7 @@ function migrationConfig() {
     managed: { files: [], blocks: [] },
     annotation: { palette: null },
     video: null,
+    trace: true,
   };
 }
 
@@ -386,6 +387,7 @@ test('the reinstall branch rewrites its declared fields and carries everything e
     connection: { mode: 'auto' },
     annotation: { palette: 'crimson' },
     video: { width: 1024, height: 768 },
+    trace: false,
   };
   assert.deepEqual(
     Object.keys(defaultConfig()).sort(),
