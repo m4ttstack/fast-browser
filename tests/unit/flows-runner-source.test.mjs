@@ -88,6 +88,71 @@ test('flow-runner.js runs with no Node globals in scope, matching the real sandb
   );
 });
 
+test('flow-runner.js dedupes byte-identical probe candidates and escalates once before failing a locator walk (rung 1 + rung 2)', async () => {
+  // A stub `page` whose `locator()` returns a locator recording every
+  // `waitFor` call it receives (selector + timeout), and whose `waitFor`
+  // always rejects -- the walk can never find the target, so this proves
+  // how many times, and at what timeouts, it probed rather than whether it
+  // eventually succeeded (that's Task 10's e2e coverage for the happy
+  // path). Two of `target.locators` are byte-identical (same `kind`, same
+  // `selector`) -- rung 1 must collapse them to a single probe per pass,
+  // and rung 2 must add exactly one escalated pass (3000ms) once the first
+  // pass (1500ms) comes up empty across every deduped candidate: two
+  // probes total, never four (two candidates x two passes, the shape a
+  // rung-2-without-dedupe implementation would produce).
+  const source = await readSource();
+  const sandbox = {};
+  vm.createContext(sandbox);
+  const script = new vm.Script(`(${source})`);
+  const macro = script.runInContext(sandbox);
+
+  const waitForCalls = [];
+  const duplicateSelector = 'role=button[name="Submit"]';
+  const stubPage = {
+    url: () => 'http://x/cart',
+    on: () => {},
+    off: () => {},
+    locator: (selector) => ({
+      waitFor: async ({ timeout }) => {
+        waitForCalls.push({ selector, timeout });
+        throw new Error('not found');
+      },
+    }),
+  };
+
+  const flow = {
+    schemaVersion: 1,
+    name: 'dupe-probe',
+    steps: [
+      {
+        op: 'click',
+        target: {
+          locators: [
+            { kind: 'role', selector: duplicateSelector },
+            { kind: 'role', selector: duplicateSelector },
+          ],
+        },
+      },
+    ],
+  };
+
+  await assert.rejects(
+    () => macro(stubPage, { flow, args: {} }),
+    (error) => {
+      assert.match(error.message, /^FLOW_RUNNER_FAILURE: /);
+      const payload = JSON.parse(error.message.slice('FLOW_RUNNER_FAILURE: '.length));
+      assert.equal(payload.failedStep, 0);
+      assert.deepEqual(payload.locatorFallbacks, []);
+      return true;
+    },
+  );
+
+  assert.deepEqual(waitForCalls, [
+    { selector: duplicateSelector, timeout: 1500 },
+    { selector: duplicateSelector, timeout: 3000 },
+  ]);
+});
+
 test('flow-runner.js source has no require(, process., or console. -- no Node globals referenced at all', async () => {
   const source = await readSource();
   assert.doesNotMatch(source, /require\(/);

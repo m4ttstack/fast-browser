@@ -73,7 +73,13 @@ check (`ENOENT` or "outside allowed roots").
   than half-running a flow it cannot finish, resolves each step's target by
   walking its locator candidates in order and recording which candidate won
   as a fallback, and never retries a step internally -- a step that throws is
-  reported as a structured failure immediately rather than run again. A
+  reported as a structured failure immediately rather than run again. Two
+  candidates that would resolve to the identical locator are probed at most
+  once per pass, not once each, before either pass runs. When that first
+  probe pass (1500ms per deduped candidate) misses every candidate, one more
+  probe-only pass over the same deduped candidates runs at an escalated
+  3000ms each before the step is allowed to fail; the step's own action
+  still only ever happens once, after whichever pass locates the target. A
   post-action network-settle wait never fails an action that already
   completed. `wait` steps are capped at 5s, a post-action network-settle
   wait is capped at 5s, a flow is capped at 60 steps and 20 `extract` steps,
@@ -88,7 +94,9 @@ check (`ENOENT` or "outside allowed roots").
   the flow declares as `required`; a required argument missing from `args`
   fails before any page interaction. On success the tool call returns `{ ok:
   true, result: { <extract keys> } | { completed: true }, stepsRun,
-  locatorFallbacks: [{ step, usedKind, usedIndex, part? }], ms }`. On
+  locatorFallbacks: [{ step, usedKind, usedIndex, part?, escalated? }], ms
+  }`; `escalated: true` marks an entry the second, 3000ms pass found, absent
+  otherwise. On
   failure the tool call itself errors rather than returning a value -- a
   successful return always reads as a successful replay to anything scoring
   flow health, so a failure has to fail the call, not merely describe one --

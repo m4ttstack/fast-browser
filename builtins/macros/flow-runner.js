@@ -117,36 +117,97 @@ async (page, args) => {
       : page.locator(candidate.selector)
   );
 
-  // Walks `target.locators` in order, probing each with a bounded waitFor
-  // before it is trusted. The first candidate that clears the probe wins;
-  // every earlier candidate having missed is exactly what "a fallback
-  // happened" means, so only then is an entry appended to
-  // `locatorFallbacks` -- the common case (index 0 hits) leaves the list
-  // untouched. No semantic healing: an empty `locators` array, or every
-  // candidate missing, is a step failure. `part` is an optional tag
+  // The same resolution precedence as `candidateLocator` above, collapsed
+  // to a string: two candidates that would resolve to the identical
+  // locator -- same `kind`, same selector they actually probe (a `role`
+  // candidate ignores its own `selector` once `target.role`/`target.name`
+  // are both set) -- share a key. Used by rung 1 below to probe each
+  // distinct locator at most once per pass.
+  const candidateKey = (target, candidate) => (
+    candidate.kind === 'role' && target.role && target.name
+      ? `role:${target.role}:${target.name}`
+      : `${candidate.kind}:${candidate.selector}`
+  );
+
+  // Walks `target.locators`, probing each DISTINCT candidate (rung 1: two
+  // byte-identical candidates are deduplicated up front, since probing the
+  // same locator twice teaches the walk nothing the first probe didn't
+  // already) with a bounded waitFor before it is trusted.
+  //
+  // Rung 1 is one pass at 1500ms per deduped candidate; the first one that
+  // clears the probe wins outright. Rung 2 fires only when that whole pass
+  // comes up empty: one more, probe-only pass over the SAME deduped
+  // candidates at 3000ms each, in case the page was merely slow to settle
+  // rather than genuinely different -- this never performs the step's own
+  // action, only locates; the caller still acts exactly once, after
+  // whichever pass returns a locator. Every earlier candidate (and, for
+  // rung 2, the whole first pass) having missed is exactly what "a
+  // fallback happened" means, so only then is an entry appended to
+  // `locatorFallbacks` -- the common case (index 0 hits on the first pass)
+  // leaves the list untouched -- and an entry the second pass produced
+  // also carries `escalated: true`, absent otherwise. No semantic
+  // healing: an empty `locators` array, or every candidate missing across
+  // both passes, is a step failure. `part` is an optional tag
   // ('source'/'dest') for `drag`, whose one step resolves two independent
   // targets -- every other op passes it as `undefined` and it is simply
   // omitted from the recorded entry.
   const resolveTarget = async (target, stepIndex, probe, part) => {
     const locators = target && Array.isArray(target.locators) ? target.locators : [];
+    if (locators.length === 0) {
+      throw new Error('target has no locator candidates');
+    }
+
+    const seenKeys = new Set();
+    const deduped = [];
     for (let i = 0; i < locators.length; i += 1) {
       const candidate = locators[i];
-      const located = candidateLocator(target, candidate);
-      try {
-        await located.waitFor({ timeout: 1500, ...probe });
-      } catch {
-        continue;
+      const key = candidateKey(target, candidate);
+      if (seenKeys.has(key)) continue;
+      seenKeys.add(key);
+      deduped.push({ candidate, index: i });
+    }
+
+    const probePass = async (timeout) => {
+      for (const candidateEntry of deduped) {
+        const located = candidateLocator(target, candidateEntry.candidate);
+        try {
+          await located.waitFor({ timeout, ...probe });
+        } catch {
+          continue;
+        }
+        return { located, candidateEntry };
       }
-      if (i > 0) {
-        const entry = { step: stepIndex, usedKind: candidate.kind, usedIndex: i };
+      return null;
+    };
+
+    const firstHit = await probePass(1500);
+    if (firstHit) {
+      if (firstHit.candidateEntry.index > 0) {
+        const entry = {
+          step: stepIndex,
+          usedKind: firstHit.candidateEntry.candidate.kind,
+          usedIndex: firstHit.candidateEntry.index,
+        };
         if (part) entry.part = part;
         locatorFallbacks.push(entry);
       }
-      return located;
+      return firstHit.located;
     }
-    throw new Error(
-      locators.length === 0 ? 'target has no locator candidates' : 'no locator candidate matched',
-    );
+
+    const secondHit = await probePass(3000);
+    if (secondHit) {
+      const entry = {
+        step: stepIndex,
+        usedKind: secondHit.candidateEntry.candidate.kind,
+        usedIndex: secondHit.candidateEntry.index,
+        escalated: true,
+      };
+      if (part) entry.part = part;
+      locatorFallbacks.push(entry);
+      return secondHit.located;
+    }
+
+    throw new Error('no locator candidate matched');
   };
 
   // --- rule 5, expect ---
