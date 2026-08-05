@@ -12,17 +12,21 @@ Check for a replayable flow first: run `fast-browser flows find --intent
 exactly one `browser_run_code_unsafe` call with its `invocation` verbatim.
 Never run a candidate with `runnable: false`; ask the human to run
 `fast-browser flows approve <name>` instead. On a `FLOW_RUNNER_FAILURE:`
-error or no runnable candidate, check `~/.fast-browser/macros/MACROS.md` next
-and use an applicable macro before inventing an ad hoc flow. Make one initial
-scout to learn the current URL, title, and relevant landmarks. After that
-scout, batch related navigation and interaction steps into as few
-`browser_run_code_unsafe` calls as practical; do not narrate or issue a long
-series of tiny calls. Use targeted reads of specific elements or text instead
-of page dumps.
+error or no runnable candidate, run `fast-browser sites affordances --url
+<url> --json` next, then check `~/.fast-browser/macros/MACROS.md` and use an
+applicable macro before inventing an ad hoc flow. Make one initial scout to
+learn the current URL, title, and relevant landmarks. After that scout, batch
+related navigation and interaction steps into as few `browser_run_code_unsafe`
+calls as practical; do not narrate or issue a long series of tiny calls. Use
+targeted reads of specific elements or text instead of page dumps.
 
 If the same macro or action fails twice, stop repeating it. Re-scout the
 relevant state once, choose a materially different recovery, and report a
 concise caveat if recovery is not possible.
+
+When you manually dismiss a cookie banner or interrupt overlay, record it
+with `fast-browser sites quirk add <name> --origin <origin> --selector
+<css>` so future sessions know.
 
 Fast Browser drives the real Chrome instance launched for its extension
 bridge. Do not claim access to arbitrary pre-existing Chrome windows, Incognito

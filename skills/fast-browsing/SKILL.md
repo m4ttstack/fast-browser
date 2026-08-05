@@ -28,6 +28,22 @@ the JSON payload after that prefix (`failedStep`, `error`, `url`,
 `stepsCompleted`, `locatorFallbacks`). Do not retry the flow: fall through
 to macros, then the fast loop below.
 
+## Know the site
+
+Before scouting an unfamiliar page on a known origin, run `fast-browser
+sites affordances --url <url> --json`.
+
+If `found` is true or `inventory` is non-empty, use the returned `digest`
+(or `inventory` targets) as the first recon snapshot instead of running
+`page-affordances` cold. Check `stale` and `savedAt` before trusting it
+without verification.
+
+For a multi-page plan, run `fast-browser sites show <origin> --json` and
+read `edges` for the route graph between patterns.
+
+If `found` is false and `inventory` is empty, the origin is unknown: scout
+normally.
+
 ## Start with macros
 
 Read `~/.fast-browser/macros/MACROS.md` before any browser action. When one

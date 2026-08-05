@@ -60,6 +60,12 @@ labelled and addressed, and everything refused is counted in `skipped` as
 absent, and never invent a selector for something the macro declined to
 address.
 
+After a `page-affordances` run on a page worth remembering, pipe its JSON to
+`fast-browser sites digest --url <url>` on stdin. A later `fast-browser sites
+affordances --url <url> --json` call then returns that saved digest as a warm
+start instead of a cold `page-affordances` run, until it expires: the default
+TTL is 72 hours (three days), overridable with `--ttl-hours`.
+
 ## Authoring contract
 
 - Store scripts in `~/.fast-browser/macros/` and use that stable path in the
