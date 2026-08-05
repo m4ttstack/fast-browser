@@ -1277,9 +1277,19 @@ test('a failed replay with a heal-worthy payload heals the artifact: alternate a
       seq: 3,
       tool: 'browser_run_code_unsafe',
       params: { filename: 'flow-runner.js', args: { flow: { id: stored.id, name } } },
-      error: failurePayload(1, [{
+      // Task 9 e2e finding (fix round): the real trace-capture runtime
+      // records `record.error` as `String(error)` -- wrapped with the
+      // thrown Error's own `name` ahead of this macro's message
+      // ("Error: FLOW_RUNNER_FAILURE: {...}"), never the bare form
+      // `failurePayload` alone produces. This, the primary heal
+      // happy-path fixture, wraps it the same way so the unit layer can
+      // never again silently regress to a position-0/unwrapped
+      // assumption; the other heal fixtures below are left on the bare
+      // form deliberately (parseFailurePayload's own unit tests are where
+      // the wrapped-vs-bare distinction itself is exhaustively covered).
+      error: `Error: ${failurePayload(1, [{
         role: 'button', name: 'View details', testid: 'vd-btn', text: 'View details',
-      }]),
+      }])}`,
     }),
   ]);
 

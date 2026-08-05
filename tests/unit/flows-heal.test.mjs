@@ -160,12 +160,37 @@ test('parseFailurePayload returns null for garbage, non-object JSON, and truncat
   assert.equal(parseFailurePayload(truncated), null);
 });
 
-test('parseFailurePayload requires the exact FLOW_RUNNER_FAILURE prefix and tolerates non-string input', () => {
+test('parseFailurePayload returns null when the marker never occurs, and tolerates non-string input', () => {
   assert.equal(parseFailurePayload('some other error: {"failedStep":0}'), null);
   assert.equal(parseFailurePayload(''), null);
   assert.equal(parseFailurePayload(null), null);
   assert.equal(parseFailurePayload(undefined), null);
   assert.equal(parseFailurePayload(42), null);
+});
+
+// Task 9 e2e finding (fix round): the trace-capture runtime records
+// `record.error` as `String(error)`, which prepends the thrown Error's own
+// `name` ahead of this macro's message -- `"Error: FLOW_RUNNER_FAILURE:
+// {...}"` in practice, never the bare `"FLOW_RUNNER_FAILURE: {...}"` a
+// position-0 check would require. `parseFailurePayload` locates the marker
+// via `indexOf` specifically so this real wrapper still parses.
+test('parseFailurePayload parses the "Error: "-wrapped form the real trace-capture runtime records', () => {
+  const payload = {
+    failedStep: 7,
+    error: 'no locator candidate matched',
+    url: 'http://127.0.0.1:1/',
+    stepsCompleted: 7,
+    locatorFallbacks: [],
+    candidates: [candidate({ testid: 'submit-v2', text: 'Place order' })],
+  };
+  const wrapped = `Error: ${FAILURE_PREFIX}${JSON.stringify(payload)}`;
+
+  assert.deepEqual(parseFailurePayload(wrapped), payload);
+});
+
+test('parseFailurePayload returns null for a string with no FLOW_RUNNER_FAILURE marker anywhere, wrapped or not', () => {
+  assert.equal(parseFailurePayload('Error: something else entirely failed'), null);
+  assert.equal(parseFailurePayload('TypeError: Cannot read properties of null'), null);
 });
 
 // ============================================================
