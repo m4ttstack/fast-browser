@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import path from 'node:path';
 import test from 'node:test';
 
 import { resolvePaths } from '../../lib/core/paths.mjs';
@@ -33,4 +34,11 @@ test('launcher paths resolve below the supplied home, outside the data dir', () 
 test('screenshotsDir is an exact data-directory child', () => {
   const paths = resolvePaths({ homeDir: '/tmp/fb-home', pluginRoot: '/plugin' });
   assert.equal(paths.screenshotsDir, '/tmp/fb-home/.fast-browser/screenshots');
+});
+
+test('resolvePaths exposes flow directories under the data dir', () => {
+  const paths = resolvePaths({ homeDir: '/home/u', pluginRoot: '/p' });
+  assert.equal(paths.flowsDir, path.join('/home/u', '.fast-browser', 'flows'));
+  assert.equal(paths.flowsPendingDir, path.join('/home/u', '.fast-browser', 'flows-pending'));
+  assert.equal(paths.flowsStateFile, path.join('/home/u', '.fast-browser', 'flows-state.json'));
 });

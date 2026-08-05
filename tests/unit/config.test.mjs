@@ -33,6 +33,7 @@ test('safe config contains no secret and disables recording', () => {
     managed: { files: [], blocks: [] },
     annotation: { palette: null },
     video: null,
+    trace: true,
   });
 });
 
@@ -58,6 +59,7 @@ test('parsing returns a clean supported config without unknown keys', () => {
     managed: { files: ['a'], blocks: ['b'] },
     annotation: { palette: null },
     video: null,
+    trace: true,
   });
 });
 
@@ -229,4 +231,25 @@ test('a stored video size round-trips and an invalid one is refused', () => {
       JSON.stringify(video),
     );
   }
+});
+
+test('trace defaults to true so a session captures a trace unless disabled', () => {
+  assert.equal(defaultConfig().trace, true);
+});
+
+test('parseConfig honors an explicit trace: false', () => {
+  assert.equal(parseConfig(configFor({ trace: false })).trace, false);
+});
+
+test('an existing v1 config without a trace field still parses as enabled', () => {
+  const legacy = defaultConfig();
+  delete legacy.trace;
+  assert.equal(parseConfig(legacy).trace, true);
+});
+
+test('rejects a non-boolean trace value', () => {
+  assert.throws(
+    () => parseConfig(configFor({ trace: 'yes' })),
+    /trace/,
+  );
 });

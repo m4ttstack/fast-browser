@@ -66,6 +66,7 @@ function validConfig(overrides = {}) {
     managed: { files: [], blocks: [] },
     annotation: { palette: null },
     video: null,
+    trace: true,
     ...overrides,
   };
 }

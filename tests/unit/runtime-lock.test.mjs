@@ -291,6 +291,7 @@ test('builds exact safe and full runtime argument snapshots', () => {
     '--snapshot-mode=none',
     '--timeout-settle=200',
     `--output-dir=${paths.dataDir}`,
+    '--save-trace',
   ];
 
   assert.deepEqual(runtimeArgs({ config: launcherConfig('safe'), paths, lock }), base);
@@ -298,6 +299,29 @@ test('builds exact safe and full runtime argument snapshots', () => {
     ...base,
     '--save-session',
   ]);
+});
+
+// Trace is orthogonal to the profile, same as video below: it rides on
+// either arg set, and disabling it removes exactly the one flag.
+test('runtimeArgs omits --save-trace exactly when config.trace is false', () => {
+  const paths = launcherPaths('/synthetic-home');
+  const lock = fixtureLock();
+  const base = [
+    '--extension',
+    '--extension-id=abcdefghijklmnopabcdefghijklmnop',
+    '--snapshot-mode=none',
+    '--timeout-settle=200',
+    `--output-dir=${paths.dataDir}`,
+  ];
+
+  assert.deepEqual(
+    runtimeArgs({ config: { ...launcherConfig('safe'), trace: false }, paths, lock }),
+    base,
+  );
+  assert.deepEqual(
+    runtimeArgs({ config: { ...launcherConfig('full'), trace: false }, paths, lock }),
+    [...base, '--save-session'],
+  );
 });
 
 // Video is orthogonal to the profile: it rides on either arg set, and its
