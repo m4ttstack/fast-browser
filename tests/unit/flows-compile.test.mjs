@@ -763,6 +763,151 @@ test('MAT-136 task 7: a value already lifted from a fill reuses that arg name in
   assert.equal(flow.steps[0].url, '/confirm?token={confirmationCode}');
 });
 
+// --- MAT-136 task 7, fix round 1: F1 (fragment lifting), F2 (key-branch
+// eligibility guard), F3 (hyphenated-slug false positives), F5 (entropy
+// boundary pins) ---
+
+test('MAT-136 task 7 fix round 1, F1: an OAuth-implicit-grant redirect (#access_token=... in the fragment) lifts the token instead of baking it verbatim into the step url and description', () => {
+  const accessToken = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U';
+  const records = [
+    record({
+      seq: 1,
+      tool: 'browser_navigate',
+      params: { url: `https://example.com/callback#access_token=${accessToken}&token_type=Bearer&expires_in=3600` },
+    }),
+    record({ seq: 2, tool: 'browser_press_key', params: { key: 'Enter' } }),
+  ];
+  const result = compileSession({ records, meta });
+  const flow = result.flows[0];
+  // "access_token" is not an exact SENSITIVE_QUERY_KEY match, so this
+  // lifts purely on the value's own entropy; "token_type"/"expires_in"
+  // stay literal (neither a sensitive key nor a high-entropy value).
+  assert.deepEqual(flow.args, { accessToken: { type: 'string', required: true } });
+  assert.equal(flow.steps[0].url, '/callback#access_token={accessToken}&token_type=Bearer&expires_in=3600');
+  assert.ok(flow.description.includes('navigates to /callback#access_token={accessToken}'));
+  assert.equal(JSON.stringify(flow).includes(accessToken), false);
+});
+
+test('MAT-136 task 7 fix round 1, F1: a value already lifted from the query is reused for an identical value in the fragment -- ONE deduped arg, both occurrences substituted', () => {
+  const records = [
+    record({
+      seq: 1,
+      tool: 'browser_navigate',
+      params: { url: 'https://example.com/confirm?token=abcDEF1234567890ghijK#t=abcDEF1234567890ghijK' },
+    }),
+    record({ seq: 2, tool: 'browser_press_key', params: { key: 'Enter' } }),
+  ];
+  const result = compileSession({ records, meta });
+  const flow = result.flows[0];
+  assert.deepEqual(flow.args, { token: { type: 'string', required: true } });
+  assert.equal(flow.steps[0].url, '/confirm?token={token}#t={token}');
+});
+
+test('MAT-136 task 7 fix round 1, F1: a bare (non key=value) high-entropy fragment value lifts as a positional-fallback arg', () => {
+  const records = [
+    record({ seq: 1, tool: 'browser_navigate', params: { url: 'https://example.com/app#dGhpc2lzYXNlY3JldDEyMw' } }),
+    record({ seq: 2, tool: 'browser_press_key', params: { key: 'Enter' } }),
+  ];
+  const result = compileSession({ records, meta });
+  const flow = result.flows[0];
+  assert.deepEqual(flow.args, { value: { type: 'string', required: true } });
+  assert.equal(flow.steps[0].url, '/app#{value}');
+});
+
+test('MAT-136 task 7 fix round 1, F1: a plain in-page anchor ("#overview") stays literal -- no special-case anchor detection needed', () => {
+  const records = [
+    record({ seq: 1, tool: 'browser_navigate', params: { url: 'https://example.com/docs#overview' } }),
+    record({ seq: 2, tool: 'browser_press_key', params: { key: 'Enter' } }),
+  ];
+  const result = compileSession({ records, meta });
+  const flow = result.flows[0];
+  assert.equal(flow.steps[0].url, '/docs#overview');
+  assert.deepEqual(flow.args, {});
+});
+
+test('MAT-136 task 7 fix round 1, F2: a too-short value under a sensitive query key does not lift, and so cannot cross-contaminate a later, unrelated URL with the same short literal', () => {
+  const records = [
+    record({ seq: 1, tool: 'browser_navigate', params: { url: 'https://example.com/verify?code=a' } }),
+    record({ seq: 2, tool: 'browser_navigate', params: { url: 'https://example.com/a/list' } }),
+    record({ seq: 3, tool: 'browser_press_key', params: { key: 'Enter' } }),
+  ];
+  const result = compileSession({ records, meta });
+  const flow = result.flows[0];
+  assert.equal(flow.steps[0].url, '/verify?code=a');
+  assert.equal(flow.steps[1].url, '/a/list');
+  assert.deepEqual(flow.args, {});
+});
+
+test('MAT-136 task 7 fix round 1, F3: hyphenated human-authored slugs are not high-entropy and stay fully literal', () => {
+  const shapes = [
+    '/blog/top-10-things-to-do-in-2026',
+    '/p/nike-air-max-270-black',
+    '/archive/2024-01-15-release-notes',
+    '/downloads/annual-report-2024.pdf',
+  ];
+  for (const path of shapes) {
+    const records = [
+      record({ seq: 1, tool: 'browser_navigate', params: { url: `https://example.com${path}` } }),
+      record({ seq: 2, tool: 'browser_press_key', params: { key: 'Enter' } }),
+    ];
+    const result = compileSession({ records, meta });
+    const flow = result.flows[0];
+    assert.equal(flow.steps[0].url, path, path);
+    assert.deepEqual(flow.args, {}, path);
+  }
+});
+
+test('MAT-136 task 7 fix round 1, F3: a dotted JWT (0-1 hyphens) still lifts despite the tightened hyphen discriminator', () => {
+  const jwt = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U';
+  const records = [
+    record({ seq: 1, tool: 'browser_navigate', params: { url: `https://example.com/session/${jwt}` } }),
+    record({ seq: 2, tool: 'browser_press_key', params: { key: 'Enter' } }),
+  ];
+  const result = compileSession({ records, meta });
+  const flow = result.flows[0];
+  assert.deepEqual(flow.args, { value: { type: 'string', required: true } });
+  assert.equal(flow.steps[0].url, '/session/{value}');
+});
+
+test('MAT-136 task 7 fix round 1, F5: a 19-char alphanumeric value (one under the length floor) is not high-entropy and stays literal', () => {
+  const value = 'a1b2c3d4e5f6g7h8i9j'; // len 19, letter+digit, no hyphens
+  assert.equal(value.length, 19);
+  const records = [
+    record({ seq: 1, tool: 'browser_navigate', params: { url: `https://example.com/x/${value}` } }),
+    record({ seq: 2, tool: 'browser_press_key', params: { key: 'Enter' } }),
+  ];
+  const result = compileSession({ records, meta });
+  const flow = result.flows[0];
+  assert.equal(flow.steps[0].url, `/x/${value}`);
+  assert.deepEqual(flow.args, {});
+});
+
+test('MAT-136 task 7 fix round 1, F5: a 30-char all-letters value (no digit) is not high-entropy and stays literal', () => {
+  const value = 'abcdefghijklmnopqrstuvwxyzabcd'; // len 30, letters only
+  assert.equal(value.length, 30);
+  const records = [
+    record({ seq: 1, tool: 'browser_navigate', params: { url: `https://example.com/x/${value}` } }),
+    record({ seq: 2, tool: 'browser_press_key', params: { key: 'Enter' } }),
+  ];
+  const result = compileSession({ records, meta });
+  const flow = result.flows[0];
+  assert.equal(flow.steps[0].url, `/x/${value}`);
+  assert.deepEqual(flow.args, {});
+});
+
+test('MAT-136 task 7 fix round 1, F5: a 24-char all-digits value (no letter) is not high-entropy and stays literal', () => {
+  const value = '123456789012345678901234'; // len 24, digits only
+  assert.equal(value.length, 24);
+  const records = [
+    record({ seq: 1, tool: 'browser_navigate', params: { url: `https://example.com/x/${value}` } }),
+    record({ seq: 2, tool: 'browser_press_key', params: { key: 'Enter' } }),
+  ];
+  const result = compileSession({ records, meta });
+  const flow = result.flows[0];
+  assert.equal(flow.steps[0].url, `/x/${value}`);
+  assert.deepEqual(flow.args, {});
+});
+
 test('browser_file_upload paths are always lifted into sequential file/file2/... args, never baked as literal paths', () => {
   const records = [
     record({ seq: 1, tool: 'browser_navigate', params: { url: 'https://example.com/app' } }),
