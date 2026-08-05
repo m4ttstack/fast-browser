@@ -122,12 +122,20 @@ test('extracts the verified archive snapshot if the source changes afterward', a
     }
   };
   const poller = pollForArchiveThenMutateSource();
+  // If client startup itself fails, the poller must not keep racing the
+  // t.after teardown of outputDir with an unhandled writeFile rejection.
+  poller.catch(() => {});
+  t.after(() => poller);
 
   const browser = await startMcpClient({ outputDir, releaseDir });
   t.after(browser.close);
   await poller;
 
-  assert.equal(mutated, true);
+  assert.equal(
+    mutated,
+    true,
+    `no .runtime-archive-* copy appeared in ${outputDir} within 5s of client startup`,
+  );
   assert.equal(
     (await readdir(outputDir)).some((name) => name.startsWith('.runtime-archive-')),
     false,
