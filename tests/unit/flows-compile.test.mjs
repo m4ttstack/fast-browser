@@ -510,18 +510,35 @@ test('I2: a js-step script arg value is redacted; the raw captured secret never 
   assert.equal(JSON.stringify(flow).includes('alice'), false);
 });
 
-test('I2: a non-object script.args redacts to null rather than being fabricated as {} -- parseFlow rejects it, so the segment skips as invalid', () => {
+test('I2: non-object script.args (absent or positional) redacts to an empty set -- the segment still compiles and no captured value survives', () => {
   const records = [
     record({ seq: 1, tool: 'browser_navigate', params: { url: 'https://example.com/app' } }),
     record({
       seq: 2,
       tool: 'browser_run_code_unsafe',
-      script: { sha256: 'b'.repeat(64), args: ['positional', 'secret'] },
+      script: { sha256: 'b'.repeat(64), args: ['positional', 'secret-value'] },
     }),
   ];
   const result = compileSession({ records, meta });
-  assert.deepEqual(result.flows, []);
-  assert.match(result.report.skipped[0].reason, /^invalid:/);
+  assert.equal(result.flows.length, 1);
+  const jsStep = result.flows[0].steps.find((step) => step.op === 'js');
+  assert.deepEqual(jsStep.args, {});
+  assert.equal(JSON.stringify(result.flows[0]).includes('secret-value'), false);
+});
+
+test('I2: a script recorded with no args at all compiles with args {} (the common no-args run_code shape must not skip)', () => {
+  const records = [
+    record({ seq: 1, tool: 'browser_navigate', params: { url: 'https://example.com/app' } }),
+    record({
+      seq: 2,
+      tool: 'browser_run_code_unsafe',
+      script: { sha256: 'c'.repeat(64) },
+    }),
+  ];
+  const result = compileSession({ records, meta });
+  assert.equal(result.flows.length, 1);
+  assert.deepEqual(result.flows[0].steps.find((step) => step.op === 'js').args, {});
+  assert.deepEqual(result.report.skipped, []);
 });
 
 test('two positional-fallback lifts in the same flow get value and value2', () => {
