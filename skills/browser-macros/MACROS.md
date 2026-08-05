@@ -103,12 +103,29 @@ check (`ENOENT` or "outside allowed roots").
   and the thrown error's message is the literal prefix
   `FLOW_RUNNER_FAILURE: ` followed by the JSON-serialized failure shape `{
   failedStep: <step index or 'args'>, error, url, stepsCompleted,
-  locatorFallbacks }`; parse that shape back out of the error text after the
-  prefix. `stepsRun` always equals `steps.length`, including a step 0 the
-  main replay loop itself never ran: when step 0 is a `goto`, the
-  precondition above performs that exact navigation and the loop starts at
-  step 1, but `stepsRun` still counts step 0 since the precondition
-  performed it on the loop's behalf.
+  locatorFallbacks, candidates? }`; parse that shape back out of the error
+  text after the prefix. `stepsRun` always equals `steps.length`, including
+  a step 0 the main replay loop itself never ran: when step 0 is a `goto`,
+  the precondition above performs that exact navigation and the loop starts
+  at step 1, but `stepsRun` still counts step 0 since the precondition
+  performed it on the loop's behalf. `candidates` (WS3a Task 2) is an
+  ADDITIVE, optional field present ONLY when the failed step is a
+  locator-miss -- every deduped candidate missed both the base and the
+  escalated probe pass above -- and always the LAST key in the payload;
+  every other failure (bad/missing args, a refused js step, a precondition
+  navigation failure, or a step action that throws AFTER its target already
+  resolved) carries no `candidates` key at all. When present it is a bounded
+  scan of the page's interactive elements (`button, a, input, select,
+  [role]`, one compound query rather than one `page.getByRole()` call per
+  role, since the same evidence costs one round trip instead of up to
+  eight), each entry `{ role, name, testid, text }` with every string
+  clamped to 80 characters, capped at 12 entries, and further trimmed from
+  the end if needed so the WHOLE payload stays under 8KB. Collection is
+  fully try/caught: if it throws for any reason, the payload silently
+  degrades to the pre-Task-2 shape and the original failure's `error` is
+  never touched -- a host-side heal module (a later task) treats this as
+  optional ranking evidence, never as something the failure contract
+  depends on.
 - Target: Any page; site-specific per invocation, driven entirely by
   `flow.origin`
 - Script: `~/.fast-browser/macros/flow-runner.js`

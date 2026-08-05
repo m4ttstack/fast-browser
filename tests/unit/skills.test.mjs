@@ -128,8 +128,17 @@ test('macro index exposes only the portable built-in macros', async () => {
   assert.match(text, /`FLOW_RUNNER_FAILURE: `/);
   assert.match(
     text,
-    /failedStep: <step index or 'args'>, error, url, stepsCompleted,\s+locatorFallbacks \}`; parse that shape back out of the error text/,
+    /failedStep: <step index or 'args'>, error, url, stepsCompleted,\s+locatorFallbacks, candidates\? \}`; parse that shape back out of the\s+error\s+text/,
   );
+  // WS3a Task 2: `candidates` is additive, optional, present ONLY on a
+  // locator-miss step failure, and always the last key -- the index has to
+  // say all four or a caller reading only this doc would assume it is
+  // always present, or present on failures it never appears on.
+  assert.match(text, /present ONLY when the failed step is a\s+locator-miss/);
+  assert.match(text, /always the LAST key in the payload/);
+  assert.match(text, /capped at 12 entries/);
+  assert.match(text, /clamped to 80 characters/);
+  assert.match(text, /the payload silently\s+degrades to the pre-Task-2 shape/);
   assert.match(text, /~\/\.fast-browser\/macros\/flow-runner\.js/);
   assert.equal((text.match(/Status: built-in/g) || []).length, 4);
 

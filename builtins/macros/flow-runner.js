@@ -210,6 +210,76 @@ async (page, args) => {
     throw new Error('no locator candidate matched');
   };
 
+  // --- WS3a Task 2: candidate enrichment for a locator-miss step failure ---
+  // A locator-miss (both probe passes above exhausted every deduped
+  // candidate -- exactly the `'no locator candidate matched'` throw) is the
+  // one failure a host-side heal module can act on: it needs bounded
+  // evidence of what the page actually offers so it can propose a
+  // replacement locator. Every other failure path -- args validation, a
+  // refused js step, a precondition/goto navigation failure, or a step
+  // action that throws AFTER its target already resolved -- has nothing a
+  // healer could rank against (its target was never the problem, or there
+  // was no target), so `candidates` is attached only at the one call site
+  // below that checks for this exact message.
+  const MAX_CANDIDATES = 12;
+  const CANDIDATE_STRING_CAP = 80;
+  const MAX_PAYLOAD_LENGTH = 8192; // 8KB, treated as characters (see boundString above)
+  // One bounded compound-selector scan rather than one `page.getByRole()`
+  // query per role this runner's own targets can use (button, link,
+  // textbox, combobox, checkbox, radio, tab, menuitem): a single locator
+  // query costs one round trip through the page no matter how many of
+  // those roles are actually present, where enumerating each role
+  // separately costs one round trip PER role -- up to 8x the work for the
+  // same evidence. `button, a, input, select, [role]` covers every element
+  // any of those 8 roles could be declared on, explicit or implicit.
+  const CANDIDATE_SELECTOR = 'button, a, input, select, [role]';
+
+  const clampCandidateString = (value) => {
+    const text = value === null || value === undefined ? '' : String(value);
+    return text.length > CANDIDATE_STRING_CAP ? text.slice(0, CANDIDATE_STRING_CAP) : text;
+  };
+
+  // `.all()` snapshots the compound scan's match list in one call; only the
+  // first MAX_CANDIDATES elements are ever touched, so a page with
+  // hundreds of matches costs the same as one with twelve. Left fully
+  // unguarded here -- the ONE call site below wraps this whole function in
+  // its own try/catch, so any throw (a missing `.all()`/`.getAttribute()`
+  // method, a rejected page call, anything) is caught there rather than
+  // handled per-element, matching the documented all-or-nothing degrade.
+  const collectCandidates = async () => {
+    const elements = await page.locator(CANDIDATE_SELECTOR).all();
+    const candidates = [];
+    for (const element of elements.slice(0, MAX_CANDIDATES)) {
+      const [role, name, testid, text] = await Promise.all([
+        element.getAttribute('role'),
+        element.getAttribute('aria-label'),
+        element.getAttribute('data-testid'),
+        element.innerText(),
+      ]);
+      candidates.push({
+        role: clampCandidateString(role),
+        name: clampCandidateString(name),
+        testid: clampCandidateString(testid),
+        text: clampCandidateString(text),
+      });
+    }
+    return candidates;
+  };
+
+  // Drops candidates from the END, one at a time, until the WHOLE payload
+  // (`shape`'s existing keys plus `candidates`) re-serializes under 8KB --
+  // `shape` itself is untouched; the caller assigns whatever this returns.
+  const boundCandidatesToPayload = (shape, candidates) => {
+    const trimmed = candidates.slice();
+    while (
+      trimmed.length > 0
+      && JSON.stringify({ ...shape, candidates: trimmed }).length > MAX_PAYLOAD_LENGTH
+    ) {
+      trimmed.pop();
+    }
+    return trimmed;
+  };
+
   // --- rule 5, expect ---
   // 'visible'/'hidden' are handled by resolution itself: Locator#waitFor's
   // own `state` option natively understands both, so the same probe that
@@ -433,13 +503,29 @@ async (page, args) => {
           }
         }
       } catch (error) {
-        fail({
+        const message = String(error && error.message ? error.message : error);
+        const shape = {
           failedStep: index,
-          error: String(error && error.message ? error.message : error),
+          error: message,
           url: page.url(),
           stepsCompleted: index,
           locatorFallbacks,
-        });
+        };
+        // Gated on the exact message `resolveTarget`'s own rung-2 miss
+        // throws above -- not "any step failure" -- so an action that
+        // throws AFTER its target already resolved (or any other failure
+        // sharing this catch) never picks up candidates it has no use for.
+        if (message === 'no locator candidate matched') {
+          try {
+            const candidates = boundCandidatesToPayload(shape, await collectCandidates());
+            if (candidates.length > 0) shape.candidates = candidates;
+          } catch {
+            // Enrichment must never mask the original step failure: on any
+            // collection error, `shape` above (sans `candidates`) is
+            // exactly the pre-Task-2 payload.
+          }
+        }
+        fail(shape);
       }
 
       // Deliberately its OWN try, separate from the action's above: a

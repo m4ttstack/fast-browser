@@ -259,6 +259,215 @@ test('flow-runner.js omits the escalated key entirely on a fallback the first pa
   assert.equal(Object.prototype.hasOwnProperty.call(entry, 'escalated'), false);
 });
 
+test('flow-runner.js collects up to 12 bounded, clamped candidates on a locator-miss failure, as the payload\'s last key (WS3a Task 2)', async () => {
+  // A locator-miss step failure (both probe passes exhaust every deduped
+  // candidate -- the exact case Task 1's tests above cover) is the one
+  // failure a host-side heal module can act on: this proves the enrichment
+  // that failure now carries. The stub `page.locator()` below plays two
+  // roles depending on the selector it receives, matching how the real
+  // macro calls it: the target's own candidate selector (no comma) always
+  // misses both probe passes, forcing the failure; the bounded interactive-
+  // element scan selector (a comma-joined compound CSS selector -- see
+  // MACROS.md/the code comment for why a single compound scan beats
+  // enumerating each role separately) resolves via `.all()` to 13 fake
+  // elements, one more than the 12-candidate cap, so dropping the 13th
+  // proves the bound is enforced rather than merely documented.
+  const source = await readSource();
+  const sandbox = {};
+  vm.createContext(sandbox);
+  const script = new vm.Script(`(${source})`);
+  const macro = script.runInContext(sandbox);
+
+  const LONG_LABEL = 'x'.repeat(120);
+  const LONG_TEXT = 'y'.repeat(90);
+  const fakeElements = [];
+  for (let i = 0; i < 13; i += 1) {
+    fakeElements.push({
+      getAttribute: async (attr) => {
+        if (attr === 'role') return i === 0 ? 'button' : null;
+        if (attr === 'aria-label') return i === 0 ? LONG_LABEL : null;
+        if (attr === 'data-testid') return `cand-${i}`;
+        return null;
+      },
+      innerText: async () => (i === 0 ? LONG_TEXT : `text-${i}`),
+    });
+  }
+
+  const stubPage = {
+    url: () => 'http://x/cart',
+    on: () => {},
+    off: () => {},
+    locator: (selector) => {
+      if (selector.indexOf(',') >= 0) {
+        return { all: async () => fakeElements };
+      }
+      return {
+        waitFor: async () => {
+          throw new Error('not found');
+        },
+      };
+    },
+  };
+
+  const flow = {
+    schemaVersion: 1,
+    name: 'candidate-enrichment',
+    steps: [
+      {
+        op: 'click',
+        target: { locators: [{ kind: 'role', selector: 'role=button[name="Go"]' }] },
+      },
+    ],
+  };
+
+  await assert.rejects(
+    () => macro(stubPage, { flow, args: {} }),
+    (error) => {
+      assert.match(error.message, /^FLOW_RUNNER_FAILURE: /);
+      const payload = JSON.parse(error.message.slice('FLOW_RUNNER_FAILURE: '.length));
+      assert.equal(payload.failedStep, 0);
+      assert.equal(payload.error, 'no locator candidate matched');
+      // `candidates` must be the payload's LAST key -- every existing key
+      // stays exactly where it was (additive-only contract).
+      assert.deepEqual(Object.keys(payload), [
+        'failedStep', 'error', 'url', 'stepsCompleted', 'locatorFallbacks', 'candidates',
+      ]);
+      assert.equal(payload.candidates.length, 12, 'the 13th offered candidate must be dropped by the 12-candidate bound');
+      assert.deepEqual(
+        payload.candidates.map((c) => c.testid),
+        Array.from({ length: 12 }, (_, i) => `cand-${i}`),
+        'must keep the first 12 in order and drop cand-12 (the 13th)',
+      );
+      assert.equal(payload.candidates[0].role, 'button');
+      assert.equal(payload.candidates[0].name.length, 80, 'every extracted string is clamped to 80 chars');
+      assert.equal(payload.candidates[0].name, 'x'.repeat(80));
+      assert.equal(payload.candidates[0].text.length, 80);
+      assert.equal(payload.candidates[0].text, 'y'.repeat(80));
+      assert.equal(payload.candidates[1].role, '', 'a missing attribute reads as an empty string, not null/undefined');
+      return true;
+    },
+  );
+});
+
+test('flow-runner.js never adds a candidates key to an args-validation failure payload (WS3a Task 2)', async () => {
+  const source = await readSource();
+  const sandbox = {};
+  vm.createContext(sandbox);
+  const script = new vm.Script(`(${source})`);
+  const macro = script.runInContext(sandbox);
+
+  const stubPage = { url: () => 'http://x/', on: () => {}, off: () => {} };
+  await assert.rejects(
+    () => macro(stubPage, { flow: { schemaVersion: 2 }, args: {} }),
+    (error) => {
+      const payload = JSON.parse(error.message.slice('FLOW_RUNNER_FAILURE: '.length));
+      assert.equal(payload.failedStep, 'args');
+      assert.equal(Object.prototype.hasOwnProperty.call(payload, 'candidates'), false);
+      return true;
+    },
+  );
+});
+
+test('flow-runner.js degrades to the plain failure payload, original error intact, when candidate collection itself throws (WS3a Task 2)', async () => {
+  // Enrichment is fully try/caught around the WHOLE collection, not
+  // per-element: a collection failure must never mask or replace the
+  // original step failure it is trying to enrich. `page.locator()` throws
+  // synchronously (not merely rejects) for the compound scan selector here,
+  // proving the guard catches a sync throw inside the async collector too.
+  const source = await readSource();
+  const sandbox = {};
+  vm.createContext(sandbox);
+  const script = new vm.Script(`(${source})`);
+  const macro = script.runInContext(sandbox);
+
+  const stubPage = {
+    url: () => 'http://x/cart',
+    on: () => {},
+    off: () => {},
+    locator: (selector) => {
+      if (selector.indexOf(',') >= 0) {
+        throw new Error('scan blew up');
+      }
+      return {
+        waitFor: async () => {
+          throw new Error('not found');
+        },
+      };
+    },
+  };
+
+  const flow = {
+    schemaVersion: 1,
+    name: 'enrichment-throws',
+    steps: [
+      {
+        op: 'click',
+        target: { locators: [{ kind: 'role', selector: 'role=button[name="Go"]' }] },
+      },
+    ],
+  };
+
+  await assert.rejects(
+    () => macro(stubPage, { flow, args: {} }),
+    (error) => {
+      const payload = JSON.parse(error.message.slice('FLOW_RUNNER_FAILURE: '.length));
+      assert.equal(payload.failedStep, 0);
+      assert.equal(payload.error, 'no locator candidate matched', 'the original error must survive an enrichment failure untouched');
+      assert.deepEqual(Object.keys(payload), ['failedStep', 'error', 'url', 'stepsCompleted', 'locatorFallbacks']);
+      return true;
+    },
+  );
+});
+
+test('flow-runner.js never adds a candidates key to a step failure that is not a locator miss (WS3a Task 2)', async () => {
+  // Same catch site as the locator-miss case above (a step's action throws
+  // after its target already resolved), but a different error message --
+  // proving enrichment is gated on the exact 'no locator candidate matched'
+  // message resolveTarget's own rung-2 miss throws, not on "any step
+  // failure".
+  const source = await readSource();
+  const sandbox = {};
+  vm.createContext(sandbox);
+  const script = new vm.Script(`(${source})`);
+  const macro = script.runInContext(sandbox);
+
+  const stubPage = {
+    url: () => 'http://x/cart',
+    on: () => {},
+    off: () => {},
+    locator: () => ({
+      waitFor: async ({ timeout }) => {
+        if (timeout === 1500) return;
+        throw new Error('not found');
+      },
+      click: async () => {
+        throw new Error('boom');
+      },
+    }),
+  };
+
+  const flow = {
+    schemaVersion: 1,
+    name: 'action-failure-not-a-miss',
+    steps: [
+      {
+        op: 'click',
+        target: { locators: [{ kind: 'role', selector: 'role=button[name="Go"]' }] },
+      },
+    ],
+  };
+
+  await assert.rejects(
+    () => macro(stubPage, { flow, args: {} }),
+    (error) => {
+      const payload = JSON.parse(error.message.slice('FLOW_RUNNER_FAILURE: '.length));
+      assert.equal(payload.error, 'boom');
+      assert.equal(Object.prototype.hasOwnProperty.call(payload, 'candidates'), false);
+      return true;
+    },
+  );
+});
+
 test('flow-runner.js source has no require(, process., or console. -- no Node globals referenced at all', async () => {
   const source = await readSource();
   assert.doesNotMatch(source, /require\(/);
