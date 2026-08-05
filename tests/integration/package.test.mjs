@@ -46,6 +46,8 @@ const requiredEntries = [
   'package/lib/runtime/install.mjs',
   'package/lib/runtime/launch.mjs',
   'package/lib/runtime/lock.mjs',
+  'package/lib/sites/patterns.mjs',
+  'package/lib/sites/store.mjs',
   'package/skills/annotating-screenshots/agents/openai.yaml',
   'package/skills/browser-macros/agents/openai.yaml',
   'package/skills/fast-browsing/agents/openai.yaml',
