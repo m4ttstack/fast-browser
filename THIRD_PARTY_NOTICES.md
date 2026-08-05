@@ -6,7 +6,7 @@ that license: Playwright is licensed under the Apache License 2.0.
 
 - Playwright license: https://github.com/microsoft/playwright/blob/main/LICENSE
 - Source repository: https://github.com/m4ttheweric/playwright
-- Source commit: `1c3747d9a82d2c0ccfb4918e077106067218b6b2`
+- Source commit: `612dc0b137db64695fde093c34bbbf9fa11e500b`
 
 The MIT license covers this plugin's own source. The runtime and Chrome
 extension artifacts it downloads remain Apache-2.0 works of the Playwright
@@ -17,16 +17,16 @@ project and its contributors.
 The URLs in `runtime-lock.json` are immutable release coordinates: a specific
 tag, never `latest`, so the bytes behind them cannot change without the lock
 changing. The artifacts are built from that commit of the fork; publishing the
-`fast-browser-v0.1.0-alpha.9` tag and its release assets is part of cutting
+`fast-browser-v0.1.0-alpha.10` tag and its release assets is part of cutting
 the release this lock belongs to, and the installer verifies both checksums
 after download regardless.
 
-- Runtime: `fast-browser-mcp-0.1.0-alpha.9.tar.gz`
-  SHA-256 `152cc0d0730caeba2a1da66baf6685ade4b2e22fa73a9088b0ae6e405f5225ad`
-  https://github.com/m4ttheweric/playwright/releases/download/fast-browser-v0.1.0-alpha.9/fast-browser-mcp-0.1.0-alpha.9.tar.gz
-- Chrome extension: `fast-browser-extension-0.1.0-alpha.9.zip`
+- Runtime: `fast-browser-mcp-0.1.0-alpha.10.tar.gz`
+  SHA-256 `dc58f160b390e1b49952c062039cb2bfc1ac4200ac433ccce3d052cccd355cd4`
+  https://github.com/m4ttheweric/playwright/releases/download/fast-browser-v0.1.0-alpha.10/fast-browser-mcp-0.1.0-alpha.10.tar.gz
+- Chrome extension: `fast-browser-extension-0.1.0-alpha.10.zip`
   SHA-256 `cc529a4374b8d7ce1936ab037fd8d78290dd7801805be5143f87315ac999ecba`
-  https://github.com/m4ttheweric/playwright/releases/download/fast-browser-v0.1.0-alpha.9/fast-browser-extension-0.1.0-alpha.9.zip
+  https://github.com/m4ttheweric/playwright/releases/download/fast-browser-v0.1.0-alpha.10/fast-browser-extension-0.1.0-alpha.10.zip
   Extension ID `bjlfojdaaanoliidngocnbcalhpfmlie`, version `0.2.5`
 
 Every value above is reproduced from the committed runtime lock, so the notice
@@ -35,7 +35,7 @@ still agree; hand-editing either one alone fails that gate rather than silently
 publishing stale provenance.
 
 An unpublished local build can still be installed with a URL-free
-`fast-browser-release-0.1.0-alpha.9.json` beside those exact two files, passed
+`fast-browser-release-0.1.0-alpha.10.json` beside those exact two files, passed
 via `--runtime-lock`. That local manifest and the locked hashes provide the
 same provenance without reaching the network.
 

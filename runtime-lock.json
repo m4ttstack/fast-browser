@@ -1,17 +1,17 @@
 {
   "schemaVersion": 1,
-  "productVersion": "0.1.0-alpha.9",
-  "sourceCommit": "1c3747d9a82d2c0ccfb4918e077106067218b6b2",
+  "productVersion": "0.1.0-alpha.10",
+  "sourceCommit": "612dc0b137db64695fde093c34bbbf9fa11e500b",
   "protocolVersion": 2,
   "runtime": {
-    "url": "https://github.com/m4ttheweric/playwright/releases/download/fast-browser-v0.1.0-alpha.9/fast-browser-mcp-0.1.0-alpha.9.tar.gz",
-    "file": "fast-browser-mcp-0.1.0-alpha.9.tar.gz",
-    "sha256": "152cc0d0730caeba2a1da66baf6685ade4b2e22fa73a9088b0ae6e405f5225ad",
+    "url": "https://github.com/m4ttheweric/playwright/releases/download/fast-browser-v0.1.0-alpha.10/fast-browser-mcp-0.1.0-alpha.10.tar.gz",
+    "file": "fast-browser-mcp-0.1.0-alpha.10.tar.gz",
+    "sha256": "dc58f160b390e1b49952c062039cb2bfc1ac4200ac433ccce3d052cccd355cd4",
     "node": ">=20"
   },
   "extension": {
-    "url": "https://github.com/m4ttheweric/playwright/releases/download/fast-browser-v0.1.0-alpha.9/fast-browser-extension-0.1.0-alpha.9.zip",
-    "file": "fast-browser-extension-0.1.0-alpha.9.zip",
+    "url": "https://github.com/m4ttheweric/playwright/releases/download/fast-browser-v0.1.0-alpha.10/fast-browser-extension-0.1.0-alpha.10.zip",
+    "file": "fast-browser-extension-0.1.0-alpha.10.zip",
     "sha256": "cc529a4374b8d7ce1936ab037fd8d78290dd7801805be5143f87315ac999ecba",
     "id": "bjlfojdaaanoliidngocnbcalhpfmlie",
     "version": "0.2.5"
