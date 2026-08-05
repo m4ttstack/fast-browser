@@ -35,6 +35,7 @@ const requiredEntries = [
   'package/lib/doctor/checks.mjs',
   'package/lib/flows/artifact.mjs',
   'package/lib/flows/compile.mjs',
+  'package/lib/flows/match.mjs',
   'package/lib/flows/sweep.mjs',
   'package/lib/flows/trace-reader.mjs',
   'package/lib/migration/apply.mjs',
