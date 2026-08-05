@@ -908,6 +908,98 @@ test('MAT-136 task 7 fix round 1, F5: a 24-char all-digits value (no letter) is 
   assert.deepEqual(flow.args, {});
 });
 
+// --- MAT-136 task 7, fix round 2: N1 (UUID hyphen exemption), N3 (fragment
+// classification, per-part rather than whole-fragment) ---
+
+test('MAT-136 task 7 fix round 2, N1: a canonical UUID path segment lifts regardless of its four hyphens (the magic-link/reset shape the F3 hyphen discriminator regressed)', () => {
+  const uuid = '3f2504e0-4f89-11d3-9a0c-0305e82c3301';
+  const records = [
+    record({ seq: 1, tool: 'browser_navigate', params: { url: `https://example.com/reset/${uuid}` } }),
+    record({ seq: 2, tool: 'browser_press_key', params: { key: 'Enter' } }),
+  ];
+  const result = compileSession({ records, meta });
+  const flow = result.flows[0];
+  assert.equal(flow.urlPattern, '/reset/:value');
+  assert.equal(flow.steps[0].url, '/reset/{value}');
+  assert.deepEqual(flow.args, { value: { type: 'string', required: true } });
+  assert.equal(JSON.stringify(flow).includes(uuid), false);
+});
+
+test('MAT-136 task 7 fix round 2, N1: a canonical UUID as a bare fragment value also lifts', () => {
+  const uuid = '3f2504e0-4f89-11d3-9a0c-0305e82c3301';
+  const records = [
+    record({ seq: 1, tool: 'browser_navigate', params: { url: `https://example.com/magic#${uuid}` } }),
+    record({ seq: 2, tool: 'browser_press_key', params: { key: 'Enter' } }),
+  ];
+  const result = compileSession({ records, meta });
+  const flow = result.flows[0];
+  assert.deepEqual(flow.args, { value: { type: 'string', required: true } });
+  assert.equal(flow.steps[0].url, '/magic#{value}');
+});
+
+test('MAT-136 task 7 fix round 2, N1: the four F3 hyphenated-slug shapes still stay literal -- the UUID exemption is a narrow, rigid-shape match and does not reopen F3', () => {
+  const shapes = [
+    '/blog/top-10-things-to-do-in-2026',
+    '/p/nike-air-max-270-black',
+    '/archive/2024-01-15-release-notes',
+    '/downloads/annual-report-2024.pdf',
+  ];
+  for (const path of shapes) {
+    const records = [
+      record({ seq: 1, tool: 'browser_navigate', params: { url: `https://example.com${path}` } }),
+      record({ seq: 2, tool: 'browser_press_key', params: { key: 'Enter' } }),
+    ];
+    const result = compileSession({ records, meta });
+    const flow = result.flows[0];
+    assert.equal(flow.steps[0].url, path, path);
+    assert.deepEqual(flow.args, {}, path);
+  }
+});
+
+test('MAT-136 task 7 fix round 2, N3: a padded-base64 fragment value now correctly routes to the bare branch, but still can\'t lift on entropy -- the F4 residual extends to fragments (documented, not fixed)', () => {
+  const records = [
+    record({ seq: 1, tool: 'browser_navigate', params: { url: 'https://example.com/share#dGhpc2lzYXNlY3JldDEyMzQ1Njc4OTA=' } }),
+    record({ seq: 2, tool: 'browser_press_key', params: { key: 'Enter' } }),
+  ];
+  const result = compileSession({ records, meta });
+  const flow = result.flows[0];
+  assert.equal(flow.steps[0].url, '/share#dGhpc2lzYXNlY3JldDEyMzQ1Njc4OTA=');
+  assert.deepEqual(flow.args, {});
+});
+
+test('MAT-136 task 7 fix round 2, N3: a "<high-entropy-token>=x" shaped fragment is textually ambiguous (real pair vs. a bare value with junk appended) and stays literal rather than guessing -- no crash, no partial output', () => {
+  const records = [
+    record({ seq: 1, tool: 'browser_navigate', params: { url: 'https://example.com/share#abcDEF1234567890ghijKLMN=x' } }),
+    record({ seq: 2, tool: 'browser_press_key', params: { key: 'Enter' } }),
+  ];
+  const result = compileSession({ records, meta });
+  const flow = result.flows[0];
+  assert.equal(flow.steps[0].url, '/share#abcDEF1234567890ghijKLMN=x');
+  assert.deepEqual(flow.args, {});
+});
+
+test('MAT-136 task 7 fix round 2, N3: the discriminating case -- a bare high-entropy value mixed with a real pair in the same fragment now lifts BOTH (round-1 code lifted only the pair, never entropy-checking the bare part)', () => {
+  const accessToken = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U';
+  const bareToken = 'ZZ11xx22yy33zz44AA55BB66CC77DD1';
+  const records = [
+    record({
+      seq: 1,
+      tool: 'browser_navigate',
+      params: { url: `https://example.com/callback#access_token=${accessToken}&${bareToken}` },
+    }),
+    record({ seq: 2, tool: 'browser_press_key', params: { key: 'Enter' } }),
+  ];
+  const result = compileSession({ records, meta });
+  const flow = result.flows[0];
+  assert.deepEqual(flow.args, {
+    accessToken: { type: 'string', required: true },
+    value: { type: 'string', required: true },
+  });
+  assert.equal(flow.steps[0].url, '/callback#access_token={accessToken}&{value}');
+  assert.equal(JSON.stringify(flow).includes(accessToken), false);
+  assert.equal(JSON.stringify(flow).includes(bareToken), false);
+});
+
 test('browser_file_upload paths are always lifted into sequential file/file2/... args, never baked as literal paths', () => {
   const records = [
     record({ seq: 1, tool: 'browser_navigate', params: { url: 'https://example.com/app' } }),
