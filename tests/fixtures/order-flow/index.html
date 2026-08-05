@@ -3,14 +3,38 @@
   <head>
     <meta charset="utf-8">
     <title>Order flow fixture</title>
+    <!--FIXTURE_VARIANT-->
   </head>
   <body>
+    <!--FIXTURE_OVERLAY-->
     <main id="app">
       <button type="button" id="start-order">Start order</button>
     </main>
     <script>
+      const VARIANT = window.__FIXTURE_VARIANT__ || 'base';
       const app = document.querySelector('#app');
       const state = { customer: '', plan: 'starter', seats: 1 };
+
+      // WS3a Task 9 (healing e2e, tests/e2e/healing.test.mjs) -- only TWO
+      // behaviors in this whole script are variant-conditional; every other
+      // element (id, tag, text) is byte-identical across every variant, so
+      // tests/e2e/sites.test.mjs's pinned locator-kind assertions (mined
+      // from a 'base'-variant recording) are untouched by this file.
+      //
+      // 'overlay': a consent banner covers the page and the underlying
+      // #app is held `visibility: hidden` until `#consent-accept` is
+      // clicked -- see tests/e2e/healing.test.mjs's own doc comment for why
+      // this uses `visibility`, not just a higher z-index, to genuinely
+      // fail flow-runner's locator probe (Playwright's `waitFor({state:
+      // 'visible'})` -- what that probe calls -- checks bounding-box/CSS
+      // visibility only, never pointer-event occlusion).
+      if (VARIANT === 'overlay') {
+        app.style.visibility = 'hidden';
+        document.querySelector('#consent-accept').addEventListener('click', () => {
+          document.querySelector('#consent-overlay').remove();
+          app.style.visibility = 'visible';
+        });
+      }
 
       function orderId() {
         return `${state.customer.trim().toUpperCase()}-${state.plan.toUpperCase()}-${state.seats}`;
@@ -50,13 +74,29 @@
         });
       }
 
+      // 'drifted': the ONE element whose markup itself changes shape. The
+      // base/overlay branch keeps the exact original <button id="place-
+      // order"> (no data-testid) so its recorded role+css locators are
+      // untouched; the drifted branch swaps it for an <a> (no native
+      // "button" ARIA role, so flow-runner's role-based locator genuinely
+      // misses) carrying a fresh data-testid and no id (so the css locator
+      // also misses), while keeping the exact same visible text "Place
+      // order" -- heal.mjs's lexical ranking scores a healed candidate
+      // against the target's recorded NAME, and this is what keeps that
+      // score high despite the tag/id change. See
+      // tests/e2e/healing.test.mjs for the full write-up.
       function showReview() {
         app.innerHTML = `
           <h1>Review order</h1>
           <p>${state.customer} — ${state.plan} — ${state.seats}</p>
-          <button type="button" id="place-order">Place order</button>
         `;
-        document.querySelector('#place-order').addEventListener('click', showComplete);
+        if (VARIANT === 'drifted') {
+          app.insertAdjacentHTML('beforeend', '<a class="order-action" data-testid="submit-v2">Place order</a>');
+          document.querySelector('.order-action').addEventListener('click', showComplete);
+        } else {
+          app.insertAdjacentHTML('beforeend', '<button type="button" id="place-order">Place order</button>');
+          document.querySelector('#place-order').addEventListener('click', showComplete);
+        }
       }
 
       function showComplete() {
