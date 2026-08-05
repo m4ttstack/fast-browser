@@ -20,6 +20,7 @@ import {
   isPreferredCodexModelRejection,
   runCodexBrowserDriverSmoke,
 } from '../../lib/commands/doctor.mjs';
+import { flows } from '../../lib/commands/flows.mjs';
 import { migrate } from '../../lib/commands/migrate.mjs';
 import { setup } from '../../lib/commands/setup.mjs';
 import { uninstall } from '../../lib/commands/uninstall.mjs';
@@ -52,6 +53,7 @@ test('exports dependency-injected lifecycle command functions', () => {
   assert.equal(typeof configure, 'function');
   assert.equal(typeof migrate, 'function');
   assert.equal(typeof uninstall, 'function');
+  assert.equal(typeof flows, 'function');
 });
 
 function validConfig(overrides = {}) {
@@ -3838,4 +3840,173 @@ test('extension-loaded stays silent when no managed extension is loaded', async 
   });
 
   assert.equal(status.status, 'pass');
+});
+
+test('CLI main dispatches to the flows command and renders JSON', async () => {
+  const report = {
+    command: 'flows', sub: 'find', candidates: [], warnings: [],
+  };
+  const writes = [];
+  const exitCode = await main(
+    { command: 'flows', json: true },
+    {
+      commands: {
+        flows: async (request) => {
+          assert.equal(request.command, 'flows');
+          return report;
+        },
+      },
+      write: (text) => writes.push(text),
+    },
+  );
+  assert.equal(exitCode, 0);
+  assert.deepEqual(JSON.parse(writes.join('')), report);
+});
+
+test('CLI main renders flows find as a short readable block', async () => {
+  const report = {
+    command: 'flows',
+    sub: 'find',
+    candidates: [
+      {
+        name: 'log-in',
+        description: 'Logs in.',
+        origin: 'https://example.com',
+        sideEffects: 'read-only',
+        runnable: true,
+        reasons: [],
+        invocation: {
+          tool: 'browser_run_code_unsafe',
+          arguments: { filename: '/x/flow-runner.js', args: { flow: {}, args: {} } },
+        },
+      },
+      {
+        name: 'place-order',
+        description: 'Places an order.',
+        origin: 'https://example.com',
+        sideEffects: 'mutating',
+        runnable: false,
+        reasons: ['pending approval: fast-browser flows approve place-order'],
+        invocation: {
+          tool: 'browser_run_code_unsafe',
+          arguments: { filename: '/x/flow-runner.js', args: { flow: {}, args: {} } },
+        },
+      },
+    ],
+    warnings: [],
+  };
+  const writes = [];
+  await main(
+    { command: 'flows', json: false },
+    { commands: { flows: async () => report }, write: (text) => writes.push(text) },
+  );
+  const output = writes.join('');
+  assert.match(output, /log-in/);
+  assert.match(output, /runnable/i);
+  assert.match(output, /place-order/);
+  assert.match(output, /pending approval/);
+});
+
+test('CLI main renders "no matching flows" for an empty find result', async () => {
+  const writes = [];
+  await main(
+    { command: 'flows', json: false },
+    {
+      commands: {
+        flows: async () => ({
+          command: 'flows', sub: 'find', candidates: [], warnings: [],
+        }),
+      },
+      write: (text) => writes.push(text),
+    },
+  );
+  assert.equal(writes.join(''), 'No matching flows found.\n');
+});
+
+test('CLI main renders flows list as a short readable block', async () => {
+  const report = {
+    command: 'flows',
+    sub: 'list',
+    flows: [
+      {
+        tier: 'ready',
+        name: 'log-in',
+        description: 'Logs in.',
+        origin: 'https://example.com',
+        health: { successRuns: 5, failStreak: 0 },
+      },
+      {
+        tier: 'pending',
+        name: 'place-order',
+        description: 'Places an order.',
+        origin: 'https://example.com',
+        health: { successRuns: 0, failStreak: 0 },
+      },
+    ],
+  };
+  const writes = [];
+  await main(
+    { command: 'flows', json: false },
+    { commands: { flows: async () => report }, write: (text) => writes.push(text) },
+  );
+  const output = writes.join('');
+  assert.match(output, /log-in/);
+  assert.match(output, /ready/);
+  assert.match(output, /place-order/);
+  assert.match(output, /pending/);
+});
+
+test('CLI main renders flows compile with distinct skip reasons summarized, not lumped', async () => {
+  const report = {
+    command: 'flows',
+    sub: 'compile',
+    compiled: [{ name: 'log-in', tier: 'ready' }],
+    updated: [],
+    sessionsProcessed: 2,
+    cursor: {},
+    skippedBySession: {
+      'trace-1': [{ reason: 'unreadable', seqRange: [null, null] }],
+      'trace-2': [{ reason: 'invalid: too short', seqRange: [0, 1] }],
+    },
+    replaysSeen: 3,
+  };
+  const writes = [];
+  await main(
+    { command: 'flows', json: false },
+    { commands: { flows: async () => report }, write: (text) => writes.push(text) },
+  );
+  const output = writes.join('');
+  assert.match(output, /Compiled 1/);
+  assert.match(output, /replays seen: 3/i);
+  assert.match(output, /Skipped 2/);
+});
+
+test('CLI main renders flows approve and reject confirmations as one-liners', async () => {
+  const writesApprove = [];
+  await main(
+    { command: 'flows', json: false },
+    {
+      commands: {
+        flows: async () => ({
+          command: 'flows', sub: 'approve', name: 'log-in', moved: true,
+        }),
+      },
+      write: (text) => writesApprove.push(text),
+    },
+  );
+  assert.equal(writesApprove.join(''), 'Approved log-in; moved to the ready tier.\n');
+
+  const writesReject = [];
+  await main(
+    { command: 'flows', json: false },
+    {
+      commands: {
+        flows: async () => ({
+          command: 'flows', sub: 'reject', name: 'place-order', rejected: true,
+        }),
+      },
+      write: (text) => writesReject.push(text),
+    },
+  );
+  assert.equal(writesReject.join(''), 'Rejected place-order; recorded in the rejected-flows ledger.\n');
 });

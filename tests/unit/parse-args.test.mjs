@@ -24,6 +24,11 @@ test('parses a two-host full setup', () => {
       out: null,
       fps: null,
       width: null,
+      sub: null,
+      intent: null,
+      origin: null,
+      url: null,
+      name: null,
     },
   );
 });
@@ -53,6 +58,11 @@ test('defaults setup to detected hosts and no profile choice', () => {
     out: null,
     fps: null,
     width: null,
+    sub: null,
+    intent: null,
+    origin: null,
+    url: null,
+    name: null,
   });
 });
 
@@ -260,4 +270,57 @@ test('annotate parses the same request regardless of flag/positional order', () 
   assert.equal(beforeJson.json, true);
   assert.equal(afterJson.config, 'shot.json');
   assert.equal(afterJson.json, true);
+});
+
+test('flows requires and validates its subcommand', () => {
+  assert.throws(() => parseArgs(['flows']), UsageError);
+  assert.throws(() => parseArgs(['flows', 'bogus']), UsageError);
+  assert.equal(parseArgs(['flows', 'list']).sub, 'list');
+  assert.equal(parseArgs(['flows', 'compile']).sub, 'compile');
+  assert.equal(parseArgs(['flows', 'find', '--intent', 'log in']).sub, 'find');
+});
+
+test('flows --help is parsed without requiring a subcommand', () => {
+  const parsed = parseArgs(['flows', '--help']);
+  assert.equal(parsed.command, 'flows');
+  assert.equal(parsed.help, true);
+});
+
+test('flows approve and reject require exactly one name; other subcommands forbid one', () => {
+  assert.throws(() => parseArgs(['flows', 'approve']), UsageError);
+  assert.throws(() => parseArgs(['flows', 'reject']), UsageError);
+  assert.equal(parseArgs(['flows', 'approve', 'my-flow']).name, 'my-flow');
+  assert.equal(parseArgs(['flows', 'reject', 'my-flow']).name, 'my-flow');
+  assert.throws(() => parseArgs(['flows', 'approve', 'my-flow', 'extra']), UsageError);
+  assert.throws(() => parseArgs(['flows', 'list', 'extra']), UsageError);
+  assert.throws(() => parseArgs(['flows', 'compile', 'extra']), UsageError);
+  assert.throws(() => parseArgs(['flows', 'find', '--intent', 'x', 'extra']), UsageError);
+});
+
+test('a duplicated flows name never echoes the name', () => {
+  assert.throws(
+    () => parseArgs(['flows', 'approve', '/Users/secret/x', '/Users/secret/x']),
+    (error) => error instanceof UsageError
+      && !error.message.includes('/Users/secret')
+      && /exactly one name argument/.test(error.message),
+  );
+});
+
+test('flows find requires --intent; other subcommands do not', () => {
+  assert.throws(() => parseArgs(['flows', 'find']), UsageError);
+  assert.throws(() => parseArgs(['flows', 'find', '--intent', '   ']), UsageError);
+  const request = parseArgs([
+    'flows', 'find', '--intent', 'log in', '--origin', 'https://example.com', '--url', '/login',
+  ]);
+  assert.equal(request.intent, 'log in');
+  assert.equal(request.origin, 'https://example.com');
+  assert.equal(request.url, '/login');
+  assert.doesNotThrow(() => parseArgs(['flows', 'list']));
+  assert.doesNotThrow(() => parseArgs(['flows', 'compile']));
+});
+
+test('--intent, --origin, and --url are allowlisted to flows only', () => {
+  assert.throws(() => parseArgs(['setup', '--intent', 'x']), UsageError);
+  assert.throws(() => parseArgs(['configure', '--origin', 'https://example.com']), UsageError);
+  assert.throws(() => parseArgs(['doctor', '--url', '/x']), UsageError);
 });

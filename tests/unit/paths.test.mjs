@@ -19,6 +19,7 @@ test('resolves every mutable path below the supplied home', () => {
   assert.equal(paths.macroIndexFile, '/tmp/fb-home/.fast-browser/macros/MACROS.md');
   assert.equal(paths.macroFailuresFile, '/tmp/fb-home/.fast-browser/macro-failures.md');
   assert.equal(paths.rejectedMacrosFile, '/tmp/fb-home/.fast-browser/rejected-macros.md');
+  assert.equal(paths.rejectedFlowsFile, '/tmp/fb-home/.fast-browser/rejected-flows.md');
   assert.equal(paths.pluginRoot, '/plugin');
 });
 

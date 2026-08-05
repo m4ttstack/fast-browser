@@ -29,6 +29,7 @@ const requiredEntries = [
   'package/lib/cli/parse-args.mjs',
   'package/lib/commands/configure.mjs',
   'package/lib/commands/doctor.mjs',
+  'package/lib/commands/flows.mjs',
   'package/lib/commands/migrate.mjs',
   'package/lib/commands/setup.mjs',
   'package/lib/commands/uninstall.mjs',
