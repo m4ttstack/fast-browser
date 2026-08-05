@@ -6,7 +6,9 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import { flowId } from '../../lib/flows/artifact.mjs';
+import {
+  flowId, parseFlow, serializeFlow,
+} from '../../lib/flows/artifact.mjs';
 import { resolvePaths } from '../../lib/core/paths.mjs';
 import { sweep } from '../../lib/flows/sweep.mjs';
 import { originDirName } from '../../lib/sites/store.mjs';
@@ -1573,4 +1575,142 @@ test('a drag step\'s replay failure never proposes a heal, even with a heal-wort
   assert.equal(onDisk.id, stored.id); // untouched -- proposeHeal never even returns a decision
   assert.deepEqual(onDisk.steps, stored.steps);
   assert.equal(onDisk.provenance.failStreak, 1);
+});
+
+// --- fix review round 1: a name shared by both tiers must never let a
+// replay resolved-by-id to the PENDING artifact adopt the READY artifact's
+// content as "fresher" ---
+
+// Builds a full, schema-valid flow object (not derived from a compile --
+// this test needs two DIFFERENT artifacts sharing one NAME, which the
+// sweep's own dedup-on-compile logic (ruling a) never produces on its own;
+// this simulates the same name existing in both tiers by some other means
+// -- manual placement, external tooling -- exactly the shape
+// `loadArtifactRegistry`'s first-key-wins scan has to tolerate).
+function rawFlow(overrides = {}) {
+  const base = {
+    schemaVersion: 1,
+    name: 'view-details',
+    description: 'On https://shop.example, this flow clicks "Buy now".',
+    origin: 'https://shop.example',
+    urlPattern: '/checkout',
+    sideEffects: 'mutating',
+    args: {},
+    result: { kind: 'completion', keys: [] },
+    steps: [
+      { op: 'goto', url: '/checkout' },
+      {
+        op: 'click',
+        target: {
+          locators: [{ kind: 'role', selector: 'internal:role=button[name="Buy now"i]' }],
+          description: 'Buy now',
+          role: 'button',
+          name: 'Buy now',
+        },
+        mutating: true,
+      },
+    ],
+    provenance: {
+      compiledAt: '2026-01-01T00:00:00.000Z',
+      traceDir: 'trace-manual',
+      seqRange: [0, 0],
+      productVersion: '0.1.0-test',
+      successRuns: 0,
+      failStreak: 0,
+      lastHealed: null,
+    },
+    ...overrides,
+  };
+  return parseFlow({ ...base, id: flowId(base) });
+}
+
+test('a name shared by both tiers: a replay resolved by id to the PENDING artifact heals the PENDING file, never adopts or overwrites the READY artifact sharing its name', async (t) => {
+  const paths = await tempPaths(t);
+
+  // The READY artifact, compiled normally -- lands in flowsDir, name
+  // 'view-details'.
+  await writeSession(paths, 37000, {
+    meta: baseMeta(),
+    records: [
+      record({ seq: 1, tool: 'browser_navigate', params: { url: 'https://shop.example/cart' } }),
+      record({ seq: 2, targets: [traceTarget({ name: 'View details' })], mutating: false }),
+    ],
+  });
+  const first = await sweep({ paths });
+  assert.deepEqual(first.compiled, [{ name: 'view-details', tier: 'ready' }]);
+  const readyBefore = await readFlow(paths.flowsDir, 'view-details.flow.json');
+
+  // A SEPARATE, genuinely different-content PENDING artifact that happens
+  // to share the SAME name -- placed directly, bypassing the sweep's own
+  // dedup entirely (this state can't arise from `sweep()` alone).
+  await mkdir(paths.flowsPendingDir, { recursive: true });
+  const pendingBefore = rawFlow();
+  assert.notEqual(pendingBefore.id, readyBefore.id); // genuinely different content
+  await writeFile(
+    path.join(paths.flowsPendingDir, 'view-details.flow.json'),
+    serializeFlow(pendingBefore),
+  );
+
+  // A failed replay naming the PENDING artifact by ID -- `loadArtifactRegistry`
+  // scans flowsDir first, so `registry.byName.get('view-details')` only
+  // ever remembers the READY one; resolving by id must still land on the
+  // PENDING artifact (ruling c, unchanged), and healing it must never pull
+  // in the READY artifact's content just because the names collide.
+  await writeSession(paths, 38000, {
+    meta: baseMeta(),
+    records: [
+      record({
+        seq: 1,
+        tool: 'browser_run_code_unsafe',
+        params: { filename: 'flow-runner.js', args: { flow: { id: pendingBefore.id, name: 'view-details' } } },
+        error: failurePayload(1, [{
+          role: 'button', name: 'Buy now', testid: 'buy-now-btn', text: 'Buy now',
+        }]),
+      }),
+    ],
+  });
+
+  const result = await sweep({ paths });
+  assert.equal(result.healed.length, 1);
+  assert.equal(result.healed[0].stepIndex, 1);
+  assert.deepEqual(result.healErrors, []);
+
+  // The PENDING file got the healed PENDING content.
+  const pendingAfter = await readFlow(paths.flowsPendingDir, 'view-details.flow.json');
+  assert.notEqual(pendingAfter.id, pendingBefore.id); // content changed -- id recomputed
+  assert.equal(pendingAfter.id, flowId(pendingAfter));
+  assert.equal(pendingAfter.origin, pendingBefore.origin); // PENDING content, not READY's
+  assert.equal(pendingAfter.steps[1].target.locators.length, 2);
+  assert.equal(
+    pendingAfter.steps[1].target.locators[1].selector,
+    'internal:testid=[data-testid="buy-now-btn"]',
+  );
+  assert.equal(pendingAfter.provenance.failStreak, 1);
+
+  // The READY file with the same NAME is completely untouched.
+  const readyAfter = await readFlow(paths.flowsDir, 'view-details.flow.json');
+  assert.deepEqual(readyAfter, readyBefore);
+
+  // byId still resolves the PENDING id to the PENDING path -- a follow-up
+  // successful replay against the (now healed) pending id updates the
+  // PENDING file only, never the ready one.
+  await writeSession(paths, 39000, {
+    meta: baseMeta(),
+    records: [
+      record({
+        seq: 1,
+        tool: 'browser_run_code_unsafe',
+        params: { filename: 'flow-runner.js', args: { flow: { id: pendingAfter.id, name: 'view-details' } } },
+      }),
+    ],
+  });
+  const followUp = await sweep({ paths });
+  // A success resets failStreak to 0 (unrelated to this fix -- ordinary
+  // replay-provenance semantics, unchanged).
+  assert.deepEqual(followUp.updated, [{ name: 'view-details', successRuns: 1, failStreak: 0 }]);
+
+  const pendingFinal = await readFlow(paths.flowsPendingDir, 'view-details.flow.json');
+  assert.equal(pendingFinal.provenance.successRuns, 1);
+  const readyFinal = await readFlow(paths.flowsDir, 'view-details.flow.json');
+  assert.deepEqual(readyFinal, readyBefore); // still fully untouched
 });
