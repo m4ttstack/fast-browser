@@ -638,9 +638,14 @@ test('a goto URL query value matching an already-lifted fill literal is tokenize
 });
 
 test('a lifted literal that is a prefix of an unrelated, longer query value is not partially replaced', () => {
+  // MAT-136 task 7: the unrelated param uses key "ref" rather than "code"
+  // here -- "code" is now a sensitive query key (SENSITIVE_QUERY_KEY) and
+  // would legitimately lift "SAVE100" on its own, which would defeat this
+  // test's actual point (substring-safety of the pre-existing lifted-
+  // literal match, unrelated to the new sensitivity feature).
   const records = [
     record({
-      seq: 1, tool: 'browser_navigate', params: { url: 'https://example.com/search?q=SAVE10&code=SAVE100' },
+      seq: 1, tool: 'browser_navigate', params: { url: 'https://example.com/search?q=SAVE10&ref=SAVE100' },
     }),
     record({
       seq: 2, tool: 'browser_type', params: { text: 'SAVE10' }, targets: [traceTarget({ name: 'Coupon code' })],
@@ -649,7 +654,7 @@ test('a lifted literal that is a prefix of an unrelated, longer query value is n
   const result = compileSession({ records, meta });
   const flow = result.flows[0];
   assert.equal(flow.urlPattern, '/search');
-  assert.equal(flow.steps[0].url, '/search?q={couponCode}&code=SAVE100');
+  assert.equal(flow.steps[0].url, '/search?q={couponCode}&ref=SAVE100');
 });
 
 test('fix-round-2 N1: a query-bearing nav with no click names from the path root only, urlPattern excludes the query entirely', () => {
@@ -662,6 +667,100 @@ test('fix-round-2 N1: a query-bearing nav with no click names from the path root
   assert.equal(flow.name, 'search'); // tier-2 path-root fallback, not 'search?q=:query'-derived
   assert.equal(flow.urlPattern, '/search');
   assert.equal(flow.steps[0].url, '/search?q=widgets');
+});
+
+// --- MAT-136 folded debt (Task 7): sensitive goto URL values (never seen
+// in a fill/select) lift into required args instead of baking verbatim
+// into the compiled artifact -- see the module-level Task 7 note in
+// compile.mjs above `SENSITIVE_QUERY_KEY` for the full rule. ---
+
+test('MAT-136 task 7: a sensitive query key ("token") lifts its never-filled value into a required arg; name still derives from the clean path root (N1 guard)', () => {
+  const records = [
+    record({
+      seq: 1,
+      tool: 'browser_navigate',
+      params: { url: 'https://example.com/reset?token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9' },
+    }),
+    record({ seq: 2, tool: 'browser_press_key', params: { key: 'Enter' } }),
+  ];
+  const result = compileSession({ records, meta });
+  const flow = result.flows[0];
+  // N1 guard: a sensitive query lift must never contaminate urlPattern or
+  // tier-2 naming -- the flow still names from the clean path root, and
+  // urlPattern stays path-only, exactly as an ordinary (non-sensitive)
+  // query-bearing nav does today.
+  assert.equal(flow.name, 'reset');
+  assert.equal(flow.urlPattern, '/reset');
+  assert.equal(flow.steps[0].url, '/reset?token={token}');
+  assert.deepEqual(flow.args, { token: { type: 'string', required: true } });
+  assert.equal(JSON.stringify(flow).includes('eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9'), false);
+});
+
+test('MAT-136 task 7: a high-entropy path segment lifts into a positional-fallback arg (no query key to name from)', () => {
+  const records = [
+    record({ seq: 1, tool: 'browser_navigate', params: { url: 'https://example.com/magic/dGhpc2lzYXNlY3JldDEyMw' } }),
+    record({ seq: 2, tool: 'browser_press_key', params: { key: 'Enter' } }),
+  ];
+  const result = compileSession({ records, meta });
+  const flow = result.flows[0];
+  assert.equal(flow.urlPattern, '/magic/:value');
+  assert.equal(flow.steps[0].url, '/magic/{value}');
+  assert.deepEqual(flow.args, { value: { type: 'string', required: true } });
+  assert.equal(JSON.stringify(flow).includes('dGhpc2lzYXNlY3JldDEyMw'), false);
+});
+
+test('MAT-136 task 7: a short numeric path segment ("/orders/42") is not sensitive and is left untouched', () => {
+  const records = [
+    record({ seq: 1, tool: 'browser_navigate', params: { url: 'https://example.com/orders/42' } }),
+    record({ seq: 2, tool: 'browser_press_key', params: { key: 'Enter' } }),
+  ];
+  const result = compileSession({ records, meta });
+  const flow = result.flows[0];
+  assert.equal(flow.urlPattern, '/orders/42');
+  assert.equal(flow.steps[0].url, '/orders/42');
+  assert.deepEqual(flow.args, {});
+});
+
+test('MAT-136 task 7: an ordinary query value under a non-sensitive key ("q") is left untouched', () => {
+  const records = [
+    record({ seq: 1, tool: 'browser_navigate', params: { url: 'https://example.com/search?q=widgets' } }),
+    record({ seq: 2, tool: 'browser_press_key', params: { key: 'Enter' } }),
+  ];
+  const result = compileSession({ records, meta });
+  const flow = result.flows[0];
+  assert.equal(flow.steps[0].url, '/search?q=widgets');
+  assert.deepEqual(flow.args, {});
+});
+
+test('MAT-136 task 7: a sensitive query key with a SHORT value ("?code=abc123") still lifts -- the key rule alone is sufficient', () => {
+  const records = [
+    record({ seq: 1, tool: 'browser_navigate', params: { url: 'https://example.com/verify?code=abc123' } }),
+    record({ seq: 2, tool: 'browser_press_key', params: { key: 'Enter' } }),
+  ];
+  const result = compileSession({ records, meta });
+  const flow = result.flows[0];
+  assert.equal(flow.steps[0].url, '/verify?code={code}');
+  assert.deepEqual(flow.args, { code: { type: 'string', required: true } });
+});
+
+test('MAT-136 task 7: a value already lifted from a fill reuses that arg name in a goto URL rather than re-lifting under the query-key/positional name', () => {
+  const records = [
+    record({
+      seq: 1,
+      tool: 'browser_navigate',
+      params: { url: 'https://example.com/confirm?token=abcDEF1234567890ghijK' },
+    }),
+    record({
+      seq: 2,
+      tool: 'browser_type',
+      params: { text: 'abcDEF1234567890ghijK' },
+      targets: [traceTarget({ name: 'Confirmation code' })],
+    }),
+  ];
+  const result = compileSession({ records, meta });
+  const flow = result.flows[0];
+  assert.deepEqual(flow.args, { confirmationCode: { type: 'string', required: true } });
+  assert.equal(flow.steps[0].url, '/confirm?token={confirmationCode}');
 });
 
 test('browser_file_upload paths are always lifted into sequential file/file2/... args, never baked as literal paths', () => {
