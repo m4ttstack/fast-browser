@@ -3923,6 +3923,57 @@ test('CLI main renders "no matching flows" for an empty find result', async () =
   assert.equal(writes.join(''), 'No matching flows found.\n');
 });
 
+// Fix round 1, item 6: `warnings` used to be --json-only; a human running
+// `flows find` interactively had no other way to learn an artifact file
+// failed to load at all.
+test('CLI main surfaces find warnings in human output, not only --json', async () => {
+  const report = {
+    command: 'flows',
+    sub: 'find',
+    candidates: [],
+    warnings: [{ file: 'broken.flow.json', tier: 'ready', reason: 'invalid: bad json' }],
+  };
+  const writes = [];
+  await main(
+    { command: 'flows', json: false },
+    { commands: { flows: async () => report }, write: (text) => writes.push(text) },
+  );
+  const output = writes.join('');
+  assert.match(output, /No matching flows found\./);
+  assert.match(output, /1 flow artifact file could not be loaded/i);
+});
+
+// Fix round 1, item 6: `description` traces back to page-derived content
+// artifact.mjs never format-validates, so it must not reach the terminal
+// carrying raw escape bytes.
+test('CLI main strips control characters from a find candidate description before printing', async () => {
+  const report = {
+    command: 'flows',
+    sub: 'find',
+    candidates: [{
+      name: 'log-in',
+      description: 'Logs in.\x1b[31mFAKE ERROR\x1b[0m',
+      origin: 'https://example.com',
+      sideEffects: 'read-only',
+      runnable: true,
+      reasons: [],
+      invocation: {
+        tool: 'browser_run_code_unsafe',
+        arguments: { filename: '/x/flow-runner.js', args: { flow: {}, args: {} } },
+      },
+    }],
+    warnings: [],
+  };
+  const writes = [];
+  await main(
+    { command: 'flows', json: false },
+    { commands: { flows: async () => report }, write: (text) => writes.push(text) },
+  );
+  const output = writes.join('');
+  assert.doesNotMatch(output, /\x1b/);
+  assert.match(output, /FAKE ERROR/);
+});
+
 test('CLI main renders flows list as a short readable block', async () => {
   const report = {
     command: 'flows',

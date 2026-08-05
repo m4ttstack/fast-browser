@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {
-  mkdir, mkdtemp, readFile, rm, writeFile,
+  lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile,
 } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -217,6 +217,43 @@ test('find reports an unreadable artifact file distinctly from an invalid one', 
   assert.deepEqual(report.warnings, [{ file: 'gone.flow.json', tier: 'ready', reason: 'unreadable' }]);
 });
 
+// Fix round 1, item 5: the invocation's arg placeholder must be derived
+// from each arg's own `required`/`type`, never a single hardcoded literal
+// applied uniformly -- otherwise the placeholder could lie once an
+// optional arg (or a future non-string type) exists.
+test('find derives each arg placeholder from its own required flag and type', async () => {
+  const paths = {
+    flowsDir: '/h/flows', flowsPendingDir: '/h/pending', macrosDir: '/h/macros',
+  };
+  const flow = validFlow({
+    name: 'search',
+    args: {
+      query: { type: 'string', required: true },
+      filter: { type: 'string', required: false },
+    },
+  });
+
+  const report = await flows(
+    {
+      sub: 'find', intent: 'search', origin: null, url: null, json: true,
+    },
+    {
+      paths,
+      sweep: async () => ({}),
+      listFlowFiles: async (dir) => (dir === paths.flowsDir ? ['search.flow.json'] : []),
+      readFlowFile: async () => JSON.stringify(flow),
+      matchFlows: () => [{
+        flow, score: 100, runnable: true, reasons: [],
+      }],
+    },
+  );
+
+  assert.deepEqual(report.candidates[0].invocation.arguments.args.args, {
+    query: '<REQUIRED: string>',
+    filter: '<OPTIONAL: string>',
+  });
+});
+
 // --- list ---
 
 test('list reports both tiers with health, ready sorted before pending', async () => {
@@ -319,7 +356,7 @@ test('approve fails when no pending flow exists under that name', async () => {
     flows(
       { sub: 'approve', name: 'ghost', json: false },
       {
-        paths: { flowsPendingDir: '/h/pending', flowsDir: '/h/flows' },
+        paths: { flowsPendingDir: '/h/pending', flowsDir: '/h/flows', dataDir: '/h' },
         interactive: true,
         readFlowFile: async () => {
           const error = new Error('nope');
@@ -338,9 +375,38 @@ test('approve refuses when a flow already exists in the ready tier under that na
     flows(
       { sub: 'approve', name: 'log-in', json: false },
       {
-        paths: { flowsPendingDir: '/h/pending', flowsDir: '/h/flows' },
+        paths: { flowsPendingDir: '/h/pending', flowsDir: '/h/flows', dataDir: '/h' },
         interactive: true,
         readFlowFile: async () => JSON.stringify(pendingFlow),
+        pathExists: async (filePath) => filePath === '/h/flows/log-in.flow.json',
+        confirmApprove: async () => { throw new Error('must not prompt on collision'); },
+        moveFlow: async () => { throw new Error('must not move on collision'); },
+      },
+    ),
+    (error) => error.name === 'LifecycleError' && /already exists/i.test(error.message),
+  );
+});
+
+// Fail-closed collision probe (fix round 1, item 3): a target that exists
+// but cannot be *read* (a directory, a permission-denied file) must still
+// count as a collision. The old design probed via `readFlowFile`, so a
+// thrown read failure at the ready path was indistinguishable from "does
+// not exist" and `moveFlow` would have renamed straight over it.
+test('approve treats any existing entry at the ready path as a collision, even one it cannot read', async () => {
+  const pendingFlow = validFlow({ name: 'log-in' });
+  await assert.rejects(
+    flows(
+      { sub: 'approve', name: 'log-in', json: false },
+      {
+        paths: { flowsPendingDir: '/h/pending', flowsDir: '/h/flows', dataDir: '/h' },
+        interactive: true,
+        readFlowFile: async (filePath) => {
+          if (filePath === '/h/flows/log-in.flow.json') {
+            throw new Error('EACCES: permission denied, open');
+          }
+          return JSON.stringify(pendingFlow);
+        },
+        pathExists: async (filePath) => filePath === '/h/flows/log-in.flow.json',
         confirmApprove: async () => { throw new Error('must not prompt on collision'); },
         moveFlow: async () => { throw new Error('must not move on collision'); },
       },
@@ -365,7 +431,7 @@ test('approve prints flow details, requires typed APPROVE, then moves pending to
   const report = await flows(
     { sub: 'approve', name: 'log-in', json: false },
     {
-      paths: { flowsPendingDir: '/h/pending', flowsDir: '/h/flows' },
+      paths: { flowsPendingDir: '/h/pending', flowsDir: '/h/flows', dataDir: '/h' },
       interactive: true,
       readFlowFile: async (filePath) => {
         if (filePath === '/h/flows/log-in.flow.json') {
@@ -375,6 +441,7 @@ test('approve prints flow details, requires typed APPROVE, then moves pending to
         }
         return JSON.stringify(pendingFlow);
       },
+      pathExists: async () => false,
       print: (line) => prints.push(line),
       confirmApprove: async () => {
         confirmCalled = true;
@@ -401,7 +468,7 @@ test('approve fails when confirmation is not exactly APPROVE', async () => {
     flows(
       { sub: 'approve', name: 'log-in', json: false },
       {
-        paths: { flowsPendingDir: '/h/pending', flowsDir: '/h/flows' },
+        paths: { flowsPendingDir: '/h/pending', flowsDir: '/h/flows', dataDir: '/h' },
         interactive: true,
         readFlowFile: async (filePath) => {
           if (filePath === '/h/flows/log-in.flow.json') {
@@ -411,12 +478,154 @@ test('approve fails when confirmation is not exactly APPROVE', async () => {
           }
           return JSON.stringify(pendingFlow);
         },
+        pathExists: async () => false,
         print: () => {},
         confirmApprove: async () => false,
         moveFlow: async () => { throw new Error('must not move without confirmation'); },
       },
     ),
     (error) => error.name === 'LifecycleError' && /APPROVE/.test(error.message),
+  );
+});
+
+// TOCTOU (fix round 1, item 4): a fake `confirmApprove` that mutates what
+// the NEXT `readFlowFile(pendingPath)` call returns simulates a swap
+// happening during the human's think-time at the prompt. The pre-rename
+// recheck must catch the id mismatch and refuse, never rename the swapped
+// content into the ready tier.
+test('approve refuses when the pending flow changes between the prompt and the rename', async () => {
+  const original = validFlow({ name: 'log-in', description: 'Original.' });
+  const swapped = validFlow({ name: 'log-in', description: 'Swapped!', id: 'b'.repeat(64) });
+  let pendingReadCount = 0;
+  const moved = [];
+
+  await assert.rejects(
+    flows(
+      { sub: 'approve', name: 'log-in', json: false },
+      {
+        paths: { flowsPendingDir: '/h/pending', flowsDir: '/h/flows', dataDir: '/h' },
+        interactive: true,
+        readFlowFile: async (filePath) => {
+          if (filePath === '/h/flows/log-in.flow.json') {
+            const error = new Error('nope');
+            error.code = 'ENOENT';
+            throw error;
+          }
+          pendingReadCount += 1;
+          return JSON.stringify(pendingReadCount === 1 ? original : swapped);
+        },
+        pathExists: async () => false,
+        print: () => {},
+        confirmApprove: async () => true,
+        moveFlow: async (from, to) => moved.push([from, to]),
+      },
+    ),
+    (error) => error.name === 'LifecycleError' && /changed since approval prompt/i.test(error.message),
+  );
+  assert.equal(pendingReadCount, 2);
+  assert.deepEqual(moved, []);
+});
+
+test('approve strips control characters from arg names before printing them', async () => {
+  const pendingFlow = validFlow({
+    name: 'log-in',
+    args: { 'user\x1b[31mname': { type: 'string', required: true } },
+  });
+  const prints = [];
+
+  await flows(
+    { sub: 'approve', name: 'log-in', json: false },
+    {
+      paths: { flowsPendingDir: '/h/pending', flowsDir: '/h/flows', dataDir: '/h' },
+      interactive: true,
+      readFlowFile: async (filePath) => {
+        if (filePath === '/h/flows/log-in.flow.json') {
+          const error = new Error('nope');
+          error.code = 'ENOENT';
+          throw error;
+        }
+        return JSON.stringify(pendingFlow);
+      },
+      pathExists: async () => false,
+      print: (line) => prints.push(line),
+      confirmApprove: async () => true,
+      moveFlow: async () => {},
+    },
+  );
+
+  // Only the raw ESC byte (0x1b) is stripped -- the printable characters
+  // that followed it in the crafted key ("[31m") are left as inert literal
+  // text, no longer capable of being interpreted as a terminal escape once
+  // the ESC byte that introduces it is gone.
+  const joined = prints.join('\n');
+  assert.doesNotMatch(joined, /\x1b/);
+  assert.match(joined, /Args: user\[31mname/);
+});
+
+test('the default confirmApprove gate requires typing the exact literal APPROVE', async () => {
+  const pendingFlow = validFlow({ name: 'log-in' });
+  const basePaths = {
+    flowsPendingDir: '/h/pending', flowsDir: '/h/flows', dataDir: '/h',
+  };
+  const baseReadFlowFile = async (filePath) => {
+    if (filePath === '/h/flows/log-in.flow.json') {
+      const error = new Error('nope');
+      error.code = 'ENOENT';
+      throw error;
+    }
+    return JSON.stringify(pendingFlow);
+  };
+
+  for (const answer of ['approve', '', 'APPROVE ']) {
+    await assert.rejects(
+      flows(
+        { sub: 'approve', name: 'log-in', json: false },
+        {
+          paths: basePaths,
+          input: { isTTY: true },
+          output: { isTTY: true, write: () => {} },
+          createInterface: () => ({
+            question: async () => answer,
+            close: () => {},
+          }),
+          readFlowFile: baseReadFlowFile,
+          pathExists: async () => false,
+          moveFlow: async () => { throw new Error(`must not move on answer ${JSON.stringify(answer)}`); },
+        },
+      ),
+      (error) => error.name === 'LifecycleError' && /APPROVE/.test(error.message),
+    );
+  }
+
+  const moved = [];
+  const report = await flows(
+    { sub: 'approve', name: 'log-in', json: false },
+    {
+      paths: basePaths,
+      input: { isTTY: true },
+      output: { isTTY: true, write: () => {} },
+      createInterface: () => ({
+        question: async () => 'APPROVE',
+        close: () => {},
+      }),
+      readFlowFile: baseReadFlowFile,
+      pathExists: async () => false,
+      moveFlow: async (from, to) => moved.push([from, to]),
+    },
+  );
+  assert.deepEqual(moved, [['/h/pending/log-in.flow.json', '/h/flows/log-in.flow.json']]);
+  assert.deepEqual(report, {
+    command: 'flows', sub: 'approve', name: 'log-in', moved: true,
+  });
+});
+
+test('flows refuses an unrecognised subcommand', async () => {
+  await assert.rejects(
+    flows(
+      { sub: 'bogus', json: false },
+      { paths: { flowsDir: '/h/flows', flowsPendingDir: '/h/pending', dataDir: '/h' } },
+    ),
+    (error) => error.name === 'LifecycleError' && /subcommand/i.test(error.message) && error.exitCode === 2,
   );
 });
 
@@ -427,7 +636,7 @@ test('reject fails when no pending flow exists under that name', async () => {
     flows(
       { sub: 'reject', name: 'ghost', json: false },
       {
-        paths: { flowsPendingDir: '/h/pending' },
+        paths: { flowsPendingDir: '/h/pending', dataDir: '/h' },
         readFlowFile: async () => {
           const error = new Error('nope');
           error.code = 'ENOENT';
@@ -567,4 +776,48 @@ test('[real fs] reject appends to an existing ledger rather than overwriting it'
     ledger,
     'old-flow | 2026-01-01 | rejected via CLI\nlog-in | 2026-08-05 | rejected via CLI\n',
   );
+});
+
+// --- real-fs: symlink confinement (fix round 1, item 2) ---
+
+test('[real fs] approve refuses a symlink planted at the pending path, leaving it untouched', async (t) => {
+  const paths = await tempPaths(t);
+  await mkdir(paths.flowsPendingDir, { recursive: true });
+  const outside = path.join(paths.homeDir, 'outside.flow.json');
+  const flow = validFlow({ name: 'log-in' });
+  await writeFile(outside, JSON.stringify(flow));
+  const linkPath = path.join(paths.flowsPendingDir, 'log-in.flow.json');
+  await symlink(outside, linkPath);
+
+  await assert.rejects(
+    flows(
+      { sub: 'approve', name: 'log-in', json: false },
+      {
+        paths, interactive: true, confirmApprove: async () => true, print: () => {},
+      },
+    ),
+    (error) => error.name === 'LifecycleError',
+  );
+  // The symlink itself must survive an aborted approval -- never renamed
+  // into the ready tier as a live link.
+  const linkStat = await lstat(linkPath);
+  assert.equal(linkStat.isSymbolicLink(), true);
+  await assert.rejects(readFile(path.join(paths.flowsDir, 'log-in.flow.json')));
+});
+
+test('[real fs] reject refuses a symlink planted at the pending path, leaving it untouched', async (t) => {
+  const paths = await tempPaths(t);
+  await mkdir(paths.flowsPendingDir, { recursive: true });
+  const outside = path.join(paths.homeDir, 'outside.flow.json');
+  const flow = validFlow({ name: 'log-in' });
+  await writeFile(outside, JSON.stringify(flow));
+  const linkPath = path.join(paths.flowsPendingDir, 'log-in.flow.json');
+  await symlink(outside, linkPath);
+
+  await assert.rejects(
+    flows({ sub: 'reject', name: 'log-in', json: false }, { paths }),
+    (error) => error.name === 'LifecycleError',
+  );
+  const linkStat = await lstat(linkPath);
+  assert.equal(linkStat.isSymbolicLink(), true);
 });
