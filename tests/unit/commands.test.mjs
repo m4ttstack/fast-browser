@@ -23,6 +23,7 @@ import {
 import { flows } from '../../lib/commands/flows.mjs';
 import { migrate } from '../../lib/commands/migrate.mjs';
 import { setup } from '../../lib/commands/setup.mjs';
+import { sites } from '../../lib/commands/sites.mjs';
 import { uninstall } from '../../lib/commands/uninstall.mjs';
 import {
   DOCTOR_CHECK_IDS,
@@ -54,6 +55,7 @@ test('exports dependency-injected lifecycle command functions', () => {
   assert.equal(typeof migrate, 'function');
   assert.equal(typeof uninstall, 'function');
   assert.equal(typeof flows, 'function');
+  assert.equal(typeof sites, 'function');
 });
 
 function validConfig(overrides = {}) {
@@ -4101,4 +4103,248 @@ test('CLI main renders flows approve and reject confirmations as one-liners', as
     },
   );
   assert.equal(writesReject.join(''), 'Rejected place-order; recorded in the rejected-flows ledger.\n');
+});
+
+// --- sites ---
+
+test('CLI help mentions the sites command and its subcommands', async () => {
+  const writes = [];
+  const commands = new Proxy({}, { get: () => () => assert.fail('command invoked') });
+  await main({ help: true }, { commands, write: (text) => writes.push(text) });
+  const output = writes.join('');
+  assert.match(output, /\bsites\b/);
+  assert.match(output, /sites subcommands: show\|affordances\|digest\|quirk/);
+});
+
+test('CLI main dispatches to the sites command and renders JSON', async () => {
+  const report = {
+    command: 'sites', sub: 'show', origin: 'https://example.com', edges: [], patterns: [], quirks: [], digests: [],
+  };
+  const writes = [];
+  const exitCode = await main(
+    { command: 'sites', json: true },
+    {
+      commands: {
+        sites: async (request) => {
+          assert.equal(request.command, 'sites');
+          return report;
+        },
+      },
+      write: (text) => writes.push(text),
+    },
+  );
+  assert.equal(exitCode, 0);
+  assert.deepEqual(JSON.parse(writes.join('')), report);
+});
+
+test('CLI main renders sites show as a short route table with target counts and quirk/digest tallies', async () => {
+  const report = {
+    command: 'sites',
+    sub: 'show',
+    origin: 'https://example.com',
+    edges: [],
+    patterns: [
+      { pattern: '/cart', targets: [{ role: 'button', name: 'Place order' }], lastSeenAt: '2026-08-05T00:00:00.000Z' },
+      { pattern: '/orders/:id', targets: [], lastSeenAt: '2026-08-05T00:00:00.000Z' },
+    ],
+    quirks: [{ name: 'cookie-banner' }],
+    digests: [
+      { pattern: '/cart', savedAt: '2026-08-05T00:00:00.000Z', ttlHours: 72, stale: false },
+      { pattern: '/orders/:id', savedAt: '2026-01-01T00:00:00.000Z', ttlHours: 72, stale: true },
+    ],
+  };
+  const writes = [];
+  await main(
+    { command: 'sites', json: false },
+    { commands: { sites: async () => report }, write: (text) => writes.push(text) },
+  );
+  const output = writes.join('');
+  assert.match(output, /https:\/\/example\.com/);
+  assert.match(output, /\/cart.*1 target/);
+  assert.match(output, /\/orders\/:id.*0 targets/);
+  assert.match(output, /Quirks: 1/);
+  assert.match(output, /Digests: 2 \(1 stale\)/);
+});
+
+test('CLI main renders sites show with "No mined routes yet." when patterns is empty', async () => {
+  const report = {
+    command: 'sites', sub: 'show', origin: 'https://example.com', edges: [], patterns: [], quirks: [], digests: [],
+  };
+  const writes = [];
+  await main(
+    { command: 'sites', json: false },
+    { commands: { sites: async () => report }, write: (text) => writes.push(text) },
+  );
+  assert.match(writes.join(''), /No mined routes yet\./);
+});
+
+test('CLI main renders sites affordances listing each mined target, and the digest freshness', async () => {
+  const found = {
+    command: 'sites',
+    sub: 'affordances',
+    found: true,
+    stale: false,
+    savedAt: '2026-08-05T00:00:00.000Z',
+    pattern: '/cart',
+    digest: { affordances: ['button:Place order'] },
+    inventory: [{ role: 'button', name: 'Place order' }],
+  };
+  const writes = [];
+  await main(
+    { command: 'sites', json: false },
+    { commands: { sites: async () => found }, write: (text) => writes.push(text) },
+  );
+  const output = writes.join('');
+  assert.match(output, /\/cart/);
+  assert.match(output, /saved 2026-08-05T00:00:00\.000Z/);
+  assert.match(output, /button Place order/);
+
+  const notFound = {
+    command: 'sites',
+    sub: 'affordances',
+    found: false,
+    stale: null,
+    savedAt: null,
+    pattern: '/cart',
+    digest: null,
+    inventory: [],
+  };
+  const writesNotFound = [];
+  await main(
+    { command: 'sites', json: false },
+    { commands: { sites: async () => notFound }, write: (text) => writesNotFound.push(text) },
+  );
+  const outputNotFound = writesNotFound.join('');
+  assert.match(outputNotFound, /none saved yet/i);
+  assert.match(outputNotFound, /Mined inventory: none yet\./);
+});
+
+// The brief's own pinned scenario: a mined target NAME is page-derived free
+// text (an accessible name an agent never validated), so an ESC byte
+// planted in it must be stripped before `sites affordances`'s human arm
+// ever prints it -- exactly like flows find's candidate description.
+test('CLI main strips control characters from an affordances target name before printing', async () => {
+  const report = {
+    command: 'sites',
+    sub: 'affordances',
+    found: false,
+    stale: null,
+    savedAt: null,
+    pattern: '/cart',
+    digest: null,
+    inventory: [{ role: 'button', name: 'Place order\x1b[31mFAKE ERROR\x1b[0m' }],
+  };
+  const writes = [];
+  await main(
+    { command: 'sites', json: false },
+    { commands: { sites: async () => report }, write: (text) => writes.push(text) },
+  );
+  const output = writes.join('');
+  assert.doesNotMatch(output, /\x1b/);
+  assert.match(output, /FAKE ERROR/);
+});
+
+test('CLI main renders sites digest confirmation as a one-liner', async () => {
+  const writes = [];
+  await main(
+    { command: 'sites', json: false },
+    {
+      commands: {
+        sites: async () => ({
+          command: 'sites', sub: 'digest', saved: true, pattern: '/cart', stale: false,
+        }),
+      },
+      write: (text) => writes.push(text),
+    },
+  );
+  assert.equal(writes.join(''), 'Saved digest for /cart.\n');
+});
+
+test('CLI main renders sites quirk add/remove confirmations and a list block', async () => {
+  const writesAdd = [];
+  await main(
+    { command: 'sites', json: false },
+    {
+      commands: {
+        sites: async () => ({
+          command: 'sites',
+          sub: 'quirk',
+          verb: 'add',
+          origin: 'https://example.com',
+          name: 'cookie-banner',
+          quirk: { name: 'cookie-banner' },
+        }),
+      },
+      write: (text) => writesAdd.push(text),
+    },
+  );
+  assert.equal(writesAdd.join(''), 'Added quirk cookie-banner for https://example.com.\n');
+
+  const writesRemove = [];
+  await main(
+    { command: 'sites', json: false },
+    {
+      commands: {
+        sites: async () => ({
+          command: 'sites', sub: 'quirk', verb: 'remove', origin: 'https://example.com', name: 'cookie-banner', removed: true,
+        }),
+      },
+      write: (text) => writesRemove.push(text),
+    },
+  );
+  assert.equal(writesRemove.join(''), 'Removed quirk cookie-banner.\n');
+
+  const writesList = [];
+  await main(
+    { command: 'sites', json: false },
+    {
+      commands: {
+        sites: async () => ({
+          command: 'sites',
+          sub: 'quirk',
+          verb: 'list',
+          origin: 'https://example.com',
+          quirks: [{ name: 'cookie-banner', target: { description: 'Accept all cookies', locators: [{ kind: 'css', selector: '#accept' }] } }],
+        }),
+      },
+      write: (text) => writesList.push(text),
+    },
+  );
+  assert.match(writesList.join(''), /cookie-banner - Accept all cookies/);
+
+  const writesEmptyList = [];
+  await main(
+    { command: 'sites', json: false },
+    {
+      commands: {
+        sites: async () => ({
+          command: 'sites', sub: 'quirk', verb: 'list', origin: 'https://example.com', quirks: [],
+        }),
+      },
+      write: (text) => writesEmptyList.push(text),
+    },
+  );
+  assert.equal(writesEmptyList.join(''), 'No quirks recorded yet.\n');
+});
+
+test('CLI main strips control characters from a quirk list detail line before printing', async () => {
+  const writes = [];
+  await main(
+    { command: 'sites', json: false },
+    {
+      commands: {
+        sites: async () => ({
+          command: 'sites',
+          sub: 'quirk',
+          verb: 'list',
+          origin: 'https://example.com',
+          quirks: [{ name: 'cookie-banner', target: { description: 'Accept\x1b[31mFAKE\x1b[0m cookies', locators: [] } }],
+        }),
+      },
+      write: (text) => writes.push(text),
+    },
+  );
+  const output = writes.join('');
+  assert.doesNotMatch(output, /\x1b/);
+  assert.match(output, /FAKE/);
 });

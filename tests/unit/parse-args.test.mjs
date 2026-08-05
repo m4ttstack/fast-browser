@@ -29,6 +29,11 @@ test('parses a two-host full setup', () => {
       origin: null,
       url: null,
       name: null,
+      verb: null,
+      selector: null,
+      description: null,
+      urlPattern: null,
+      ttlHours: null,
     },
   );
 });
@@ -63,6 +68,11 @@ test('defaults setup to detected hosts and no profile choice', () => {
     origin: null,
     url: null,
     name: null,
+    verb: null,
+    selector: null,
+    description: null,
+    urlPattern: null,
+    ttlHours: null,
   });
 });
 
@@ -323,4 +333,152 @@ test('--intent, --origin, and --url are allowlisted to flows only', () => {
   assert.throws(() => parseArgs(['setup', '--intent', 'x']), UsageError);
   assert.throws(() => parseArgs(['configure', '--origin', 'https://example.com']), UsageError);
   assert.throws(() => parseArgs(['doctor', '--url', '/x']), UsageError);
+});
+
+// --- sites ---
+
+test('sites requires and validates its subcommand', () => {
+  assert.throws(() => parseArgs(['sites']), UsageError);
+  assert.throws(() => parseArgs(['sites', 'bogus']), UsageError);
+  assert.equal(parseArgs(['sites', 'show', 'https://example.com']).sub, 'show');
+  assert.equal(parseArgs(['sites', 'affordances', '--url', 'https://example.com/x']).sub, 'affordances');
+  assert.equal(parseArgs(['sites', 'quirk', 'list', '--origin', 'https://example.com']).sub, 'quirk');
+});
+
+test('sites --help is parsed without requiring a subcommand', () => {
+  const parsed = parseArgs(['sites', '--help']);
+  assert.equal(parsed.command, 'sites');
+  assert.equal(parsed.help, true);
+});
+
+test('sites show takes exactly one origin positional', () => {
+  const request = parseArgs(['sites', 'show', 'https://example.com']);
+  assert.equal(request.origin, 'https://example.com');
+
+  assert.throws(() => parseArgs(['sites', 'show']), UsageError);
+  assert.throws(
+    () => parseArgs(['sites', 'show', 'https://example.com', 'https://other.example']),
+    UsageError,
+  );
+});
+
+test('a duplicated sites show origin never echoes the origin', () => {
+  assert.throws(
+    () => parseArgs(['sites', 'show', 'https://secret.example', 'https://secret.example']),
+    (error) => error instanceof UsageError
+      && !error.message.includes('secret.example')
+      && /exactly one origin argument/.test(error.message),
+  );
+});
+
+test('sites show accepts --json alongside the origin positional', () => {
+  const request = parseArgs(['sites', 'show', 'https://example.com', '--json']);
+  assert.equal(request.origin, 'https://example.com');
+  assert.equal(request.json, true);
+});
+
+test('sites affordances and digest require --url', () => {
+  assert.throws(() => parseArgs(['sites', 'affordances']), UsageError);
+  assert.throws(() => parseArgs(['sites', 'affordances', '--url', '   ']), UsageError);
+  assert.throws(() => parseArgs(['sites', 'digest']), UsageError);
+
+  const affordances = parseArgs(['sites', 'affordances', '--url', 'https://example.com/cart']);
+  assert.equal(affordances.url, 'https://example.com/cart');
+
+  const digest = parseArgs(['sites', 'digest', '--url', 'https://example.com/cart', '--ttl-hours', '48']);
+  assert.equal(digest.url, 'https://example.com/cart');
+  assert.equal(digest.ttlHours, 48);
+});
+
+test('sites affordances and digest reject a positional argument', () => {
+  assert.throws(() => parseArgs(['sites', 'affordances', '--url', 'https://example.com', 'extra']), UsageError);
+  assert.throws(() => parseArgs(['sites', 'digest', '--url', 'https://example.com', 'extra']), UsageError);
+});
+
+test('--ttl-hours is a bounded positive integer', () => {
+  for (const value of ['0', '-1', '8761', 'soon', '3.5']) {
+    assert.throws(
+      () => parseArgs(['sites', 'digest', '--url', 'https://example.com', '--ttl-hours', value]),
+      UsageError,
+    );
+  }
+  assert.equal(
+    parseArgs(['sites', 'digest', '--url', 'https://example.com', '--ttl-hours', '8760']).ttlHours,
+    8760,
+  );
+});
+
+test('sites quirk requires a verb, then a name for add/remove but not list', () => {
+  assert.throws(() => parseArgs(['sites', 'quirk']), UsageError);
+  assert.throws(() => parseArgs(['sites', 'quirk', 'bogus']), UsageError);
+  assert.throws(() => parseArgs(['sites', 'quirk', 'add']), UsageError);
+  assert.throws(() => parseArgs(['sites', 'quirk', 'remove']), UsageError);
+
+  const add = parseArgs([
+    'sites', 'quirk', 'add', 'cookie-banner', '--origin', 'https://example.com', '--selector', '#accept',
+  ]);
+  assert.equal(add.verb, 'add');
+  assert.equal(add.name, 'cookie-banner');
+  assert.equal(add.selector, '#accept');
+
+  const remove = parseArgs(['sites', 'quirk', 'remove', 'cookie-banner', '--origin', 'https://example.com']);
+  assert.equal(remove.verb, 'remove');
+  assert.equal(remove.name, 'cookie-banner');
+
+  const list = parseArgs(['sites', 'quirk', 'list', '--origin', 'https://example.com']);
+  assert.equal(list.verb, 'list');
+  assert.equal(list.name, null);
+
+  assert.throws(() => parseArgs(['sites', 'quirk', 'list', 'extra']), UsageError);
+  assert.throws(
+    () => parseArgs(['sites', 'quirk', 'add', 'a-name', 'b-name', '--origin', 'https://example.com', '--selector', 'x']),
+    UsageError,
+  );
+});
+
+test('a duplicated sites quirk name never echoes the name', () => {
+  assert.throws(
+    () => parseArgs(['sites', 'quirk', 'add', '/Users/secret/x', '/Users/secret/x']),
+    (error) => error instanceof UsageError
+      && !error.message.includes('/Users/secret')
+      && /exactly one name argument/.test(error.message),
+  );
+});
+
+test('sites quirk requires --origin for add, list, and remove', () => {
+  assert.throws(() => parseArgs(['sites', 'quirk', 'add', 'cookie-banner', '--selector', '#accept']), UsageError);
+  assert.throws(() => parseArgs(['sites', 'quirk', 'list']), UsageError);
+  assert.throws(() => parseArgs(['sites', 'quirk', 'remove', 'cookie-banner']), UsageError);
+});
+
+test('sites quirk add requires --selector', () => {
+  assert.throws(
+    () => parseArgs(['sites', 'quirk', 'add', 'cookie-banner', '--origin', 'https://example.com']),
+    UsageError,
+  );
+});
+
+test('sites quirk add accepts optional --description and --url-pattern', () => {
+  const request = parseArgs([
+    'sites', 'quirk', 'add', 'cookie-banner',
+    '--origin', 'https://example.com',
+    '--selector', '#accept',
+    '--description', 'Accept all cookies',
+    '--url-pattern', '/cart',
+  ]);
+  assert.equal(request.description, 'Accept all cookies');
+  assert.equal(request.urlPattern, '/cart');
+});
+
+test('--selector, --description, --url-pattern, and --ttl-hours are allowlisted to sites only', () => {
+  assert.throws(() => parseArgs(['flows', 'find', '--intent', 'x', '--selector', '#y']), UsageError);
+  assert.throws(() => parseArgs(['setup', '--description', 'x']), UsageError);
+  assert.throws(() => parseArgs(['configure', '--url-pattern', '/x']), UsageError);
+  assert.throws(() => parseArgs(['doctor', '--ttl-hours', '10']), UsageError);
+});
+
+test('--origin and --url are allowlisted to both flows and sites', () => {
+  assert.doesNotThrow(() => parseArgs(['flows', 'find', '--intent', 'x', '--origin', 'https://example.com']));
+  assert.doesNotThrow(() => parseArgs(['sites', 'quirk', 'list', '--origin', 'https://example.com']));
+  assert.doesNotThrow(() => parseArgs(['sites', 'affordances', '--url', 'https://example.com/x']));
 });

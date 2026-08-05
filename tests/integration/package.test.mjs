@@ -33,6 +33,7 @@ const requiredEntries = [
   'package/lib/commands/flows.mjs',
   'package/lib/commands/migrate.mjs',
   'package/lib/commands/setup.mjs',
+  'package/lib/commands/sites.mjs',
   'package/lib/commands/uninstall.mjs',
   'package/lib/doctor/checks.mjs',
   'package/lib/flows/artifact.mjs',
