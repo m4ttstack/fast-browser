@@ -8,7 +8,6 @@ import test from 'node:test';
 
 import { flows } from '../../lib/commands/flows.mjs';
 import { sites } from '../../lib/commands/sites.mjs';
-import { originDirName } from '../../lib/sites/store.mjs';
 import { startOrderFixture } from '../fixtures/order-flow/server.mjs';
 import { startMcpClient } from './helpers/mcp-client.mjs';
 
@@ -45,6 +44,15 @@ import { startMcpClient } from './helpers/mcp-client.mjs';
 // validated) is what already guarantees any `lastSeenAt` that survived a
 // `sites show` call is a real ISO date, so no separate format check is
 // needed on top of that.
+//
+// KNOWN BLIND SPOTS of this acceptance test (all unit-covered, none
+// exercised end to end because the order-flow fixture is a single-page app
+// that never changes URL mid-flow): multi-pattern inventory, navigation
+// edges with a non-null `from`, cross-origin record grouping, non-root
+// patternSlug digest filenames, eviction bounds (evicted is always 0
+// here), replay-record exclusion inside the miners, and non-default
+// ttlHours/domHash. A future fixture with a second routed page closes
+// most of these in one go.
 
 // Same hand-built paths shape as flows.test.mjs's `pathsForOutputDir`
 // (rooted at outputDir itself, matching mcp-client.mjs's --output-dir
@@ -163,13 +171,20 @@ test('site memory: record to mined graph to warm-start round trip', async (t) =>
   // into graph/inventory, non-zero, attributed to exactly this origin;
   // the origin's on-disk directory exists under the ENCODED origin. ---
   const compileReport = await flows({ sub: 'compile', json: true }, { paths });
-  assert.deepEqual(compileReport.sites.origins, [origin]);
-  assert.ok(compileReport.sites.edges > 0, `expected edges > 0, got ${compileReport.sites.edges}`);
-  assert.ok(compileReport.sites.targets > 0, `expected targets > 0, got ${compileReport.sites.targets}`);
-  assert.equal(compileReport.sites.evicted, 0);
-  assert.deepEqual(compileReport.sites.errors, []);
+  // Exact counts, not just non-zero: step 3 pins 1 entry edge and 7
+  // targets, so the report must agree with what lands on disk.
+  assert.deepEqual(compileReport.sites, {
+    origins: [origin],
+    edges: 1,
+    targets: EXPECTED_ROOT_TARGETS.length,
+    evicted: 0,
+    errors: [],
+  });
 
-  const originDir = path.join(paths.sitesDir, originDirName(origin));
+  // Independent encoding pin: build the expected dir name with
+  // encodeURIComponent directly, not with the SUT's own originDirName,
+  // so an encoding change in the store fails here.
+  const originDir = path.join(paths.sitesDir, encodeURIComponent(origin));
   await assert.doesNotReject(access(originDir));
 
   // --- 3. show: the mined graph/inventory read back through the command
@@ -292,6 +307,12 @@ test('site memory: record to mined graph to warm-start round trip', async (t) =>
   const showAfterResweep = await sites({ sub: 'show', origin, json: true }, { paths });
   assert.deepEqual(showAfterResweep.edges, showReport.edges);
   assert.deepEqual(showAfterResweep.patterns, showReport.patterns);
+  // The digest summary path (readDigestSummaries) gets its one e2e
+  // exercise here: the digest saved in step 5 must survive the re-sweep
+  // and read back as the only entry, stale under the far-future clock.
+  assert.equal(showAfterResweep.digests.length, 1);
+  assert.equal(showAfterResweep.digests[0].pattern, '/');
+  assert.deepEqual(showAfterResweep.quirks, []);
 
   // --- hygiene: best-effort outputDir cleanup, registered LAST so it runs
   // LAST -- node:test runs `t.after` hooks in registration (FIFO) order,
