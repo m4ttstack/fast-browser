@@ -57,6 +57,13 @@ function pathsForOutputDir(outputDir) {
     flowsStateFile: path.join(outputDir, 'flows-state.json'),
     macrosDir: path.join(outputDir, 'macros'),
     rejectedFlowsFile: path.join(outputDir, 'rejected-flows.md'),
+    // WS3a Task 4: `flows find` now looks up the flow's own origin's stored
+    // quirks via lib/sites/store.mjs's `readSite(paths, origin)`, which
+    // requires `paths.sitesDir` (lib/core/paths.mjs's real shape). This
+    // fixture never writes anything under it -- readSite degrades a
+    // never-seen origin to `{ quirks: [] }` on its own -- but the key must
+    // be a string or `path.join(paths.sitesDir, ...)` throws.
+    sitesDir: path.join(outputDir, 'sites'),
   };
 }
 

@@ -3880,7 +3880,7 @@ test('CLI main renders flows find as a short readable block', async () => {
         reasons: [],
         invocation: {
           tool: 'browser_run_code_unsafe',
-          arguments: { filename: '/x/flow-runner.js', args: { flow: {}, args: {} } },
+          arguments: { filename: '/x/flow-runner.js', args: { flow: {}, args: {}, quirks: [] } },
         },
       },
       {
@@ -3892,7 +3892,10 @@ test('CLI main renders flows find as a short readable block', async () => {
         reasons: ['pending approval: fast-browser flows approve place-order'],
         invocation: {
           tool: 'browser_run_code_unsafe',
-          arguments: { filename: '/x/flow-runner.js', args: { flow: {}, args: {} } },
+          arguments: {
+            filename: '/x/flow-runner.js',
+            args: { flow: {}, args: {}, quirks: [{ name: 'cookie-banner' }, { name: 'age-gate' }] },
+          },
         },
       },
     ],
@@ -3908,6 +3911,11 @@ test('CLI main renders flows find as a short readable block', async () => {
   assert.match(output, /runnable/i);
   assert.match(output, /place-order/);
   assert.match(output, /pending approval/);
+  // WS3a Task 4: the quirk count is mentioned only for the candidate that
+  // actually has embedded quirks (place-order, 2), never for log-in (0).
+  const [logInLine, placeOrderLine] = output.split('\n');
+  assert.doesNotMatch(logInLine, /quirk/i);
+  assert.match(placeOrderLine, /quirks: 2/i);
 });
 
 test('CLI main renders "no matching flows" for an empty find result', async () => {
@@ -3962,7 +3970,7 @@ test('CLI main strips control characters from a find candidate description befor
       reasons: [],
       invocation: {
         tool: 'browser_run_code_unsafe',
-        arguments: { filename: '/x/flow-runner.js', args: { flow: {}, args: {} } },
+        arguments: { filename: '/x/flow-runner.js', args: { flow: {}, args: {}, quirks: [] } },
       },
     }],
     warnings: [],
@@ -3997,7 +4005,7 @@ test('CLI main strips the extended control/bidi character set from a find descri
       reasons: [],
       invocation: {
         tool: 'browser_run_code_unsafe',
-        arguments: { filename: '/x/flow-runner.js', args: { flow: {}, args: {} } },
+        arguments: { filename: '/x/flow-runner.js', args: { flow: {}, args: {}, quirks: [] } },
       },
     }],
     warnings: [],
