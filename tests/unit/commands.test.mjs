@@ -3974,6 +3974,47 @@ test('CLI main strips control characters from a find candidate description befor
   assert.match(output, /FAKE ERROR/);
 });
 
+// Fix round 2, item 4: the denylist grew past raw C0 controls to cover
+// line-breaking (NEL/LS/PS), invisible (ZWSP), and bidi
+// embedding/override/isolate controls (RLO can visually REVERSE text) --
+// while still leaving ordinary Unicode (NBSP, emoji, CJK) untouched. Every
+// non-ASCII character below is a \uXXXX/\u{XXXX} escape, deliberately,
+// never a literal, so the pattern under test stays reviewable in a diff.
+test('CLI main strips the extended control/bidi character set from a find description, preserving emoji/CJK/NBSP', async () => {
+  const description = 'Logs in.\u00a0\u200b\u202eFAKE \u00a0\u{1F600}\u6f22';
+  const report = {
+    command: 'flows',
+    sub: 'find',
+    candidates: [{
+      name: 'log-in',
+      description,
+      origin: 'https://example.com',
+      sideEffects: 'read-only',
+      runnable: true,
+      reasons: [],
+      invocation: {
+        tool: 'browser_run_code_unsafe',
+        arguments: { filename: '/x/flow-runner.js', args: { flow: {}, args: {} } },
+      },
+    }],
+    warnings: [],
+  };
+  const writes = [];
+  await main(
+    { command: 'flows', json: false },
+    { commands: { flows: async () => report }, write: (text) => writes.push(text) },
+  );
+  const output = writes.join('');
+  const extendedControlPattern = new RegExp(
+    '[\\x00-\\x08\\x0b-\\x1f\\x7f\\u0085\\u2028\\u2029\\u200b\\u202a-\\u202e\\u2066-\\u2069]',
+  );
+  assert.doesNotMatch(output, extendedControlPattern);
+  assert.match(output, /FAKE/);
+  assert.match(output, /\u00a0/);
+  assert.match(output, /\u{1F600}/u);
+  assert.match(output, /\u6f22/);
+});
+
 test('CLI main renders flows list as a short readable block', async () => {
   const report = {
     command: 'flows',

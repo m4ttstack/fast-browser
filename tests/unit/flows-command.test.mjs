@@ -562,6 +562,95 @@ test('approve strips control characters from arg names before printing them', as
   assert.match(joined, /Args: user\[31mname/);
 });
 
+// Fix round 2, item 4: the denylist grew past raw C0 controls to cover
+// line-breaking (NEL/LS/PS), invisible (ZWSP), and bidi
+// embedding/override/isolate controls (RLO can visually REVERSE text) --
+// while still leaving ordinary Unicode (NBSP, emoji, CJK) untouched. Every
+// non-ASCII character below is a \uXXXX/\u{XXXX} escape, deliberately,
+// never a literal: several ARE the exact invisible/reordering bytes under
+// test, so writing them literally would make this file unreviewable in a
+// diff (and at the mercy of any tool that "helpfully" normalizes them).
+test('approve strips the extended control/bidi character set from arg names, preserving emoji/CJK/NBSP', async () => {
+  const trickyName = 'user\u00a0\u200b\u202ename\u00a0\u{1F600}\u6f22';
+  const pendingFlow = validFlow({
+    name: 'log-in',
+    args: { [trickyName]: { type: 'string', required: true } },
+  });
+  const prints = [];
+
+  await flows(
+    { sub: 'approve', name: 'log-in', json: false },
+    {
+      paths: { flowsPendingDir: '/h/pending', flowsDir: '/h/flows', dataDir: '/h' },
+      interactive: true,
+      readFlowFile: async (filePath) => {
+        if (filePath === '/h/flows/log-in.flow.json') {
+          const error = new Error('nope');
+          error.code = 'ENOENT';
+          throw error;
+        }
+        return JSON.stringify(pendingFlow);
+      },
+      pathExists: async () => false,
+      print: (line) => prints.push(line),
+      confirmApprove: async () => true,
+      moveFlow: async () => {},
+    },
+  );
+
+  const joined = prints.join('\n');
+  const extendedControlPattern = new RegExp(
+    '[\\x00-\\x08\\x0b-\\x1f\\x7f\\u0085\\u2028\\u2029\\u200b\\u202a-\\u202e\\u2066-\\u2069]',
+  );
+  assert.doesNotMatch(joined, extendedControlPattern);
+  assert.match(joined, /Args: user/);
+  assert.match(joined, /name/);
+  assert.match(joined, /\u00a0/);
+  assert.match(joined, /\u{1F600}/u);
+  assert.match(joined, /\u6f22/);
+});
+
+// Fix round 2, item 2: a reviewer reproduced a scenario where the ORIGINAL
+// (pre-prompt-only) ready-tier check missed a file that appeared at
+// readyPath during the human's think-time at the confirm prompt --
+// `moveFlow` would have silently overwritten it. The fake `confirmApprove`
+// below simulates exactly that: it "plants" the collision as a side effect
+// of confirming, which only the pre-rename recheck can catch.
+test('approve refuses when a file appears at the ready path during the confirm prompt', async () => {
+  const pendingFlow = validFlow({ name: 'log-in' });
+  let readyPlanted = false;
+  const moved = [];
+
+  await assert.rejects(
+    flows(
+      { sub: 'approve', name: 'log-in', json: false },
+      {
+        paths: { flowsPendingDir: '/h/pending', flowsDir: '/h/flows', dataDir: '/h' },
+        interactive: true,
+        readFlowFile: async (filePath) => {
+          if (filePath === '/h/flows/log-in.flow.json') {
+            const error = new Error('nope');
+            error.code = 'ENOENT';
+            throw error;
+          }
+          return JSON.stringify(pendingFlow);
+        },
+        pathExists: async (filePath) => (
+          filePath === '/h/flows/log-in.flow.json' ? readyPlanted : false
+        ),
+        print: () => {},
+        confirmApprove: async () => {
+          readyPlanted = true;
+          return true;
+        },
+        moveFlow: async (from, to) => moved.push([from, to]),
+      },
+    ),
+    (error) => error.name === 'LifecycleError' && /already exists/i.test(error.message),
+  );
+  assert.deepEqual(moved, []);
+});
+
 test('the default confirmApprove gate requires typing the exact literal APPROVE', async () => {
   const pendingFlow = validFlow({ name: 'log-in' });
   const basePaths = {
@@ -656,6 +745,7 @@ test('reject deletes the pending flow and appends a ledger line in the rejected-
     { sub: 'reject', name: 'log-in', json: false },
     {
       paths: { flowsPendingDir: '/h/pending', rejectedFlowsFile: '/h/rejected-flows.md', dataDir: '/h' },
+      pathExists: async () => true,
       readFlowFile: async () => JSON.stringify(validFlow({ name: 'log-in' })),
       deleteFlow: async (filePath) => deleted.push(filePath),
       appendRejectedFlow: async (paths, line) => appended.push([paths.rejectedFlowsFile, line]),
@@ -670,6 +760,62 @@ test('reject deletes the pending flow and appends a ledger line in the rejected-
   assert.deepEqual(report, {
     command: 'flows', sub: 'reject', name: 'log-in', rejected: true,
   });
+});
+
+// Fix round 2, item 3: reject parity with approve's fail-closed collision
+// probe. `pathExists` (lstat) is now checked BEFORE `readFlowFile`, so the
+// two failure modes get honest, distinct messages instead of collapsing
+// "nothing there" and "something there but unreadable" (a directory, a
+// permission-denied file, a planted entry this process cannot open) into
+// the same blanket "not found". Nothing is unlinked on either error path.
+test('reject reports an honest error when the pending entry exists but cannot be read', async () => {
+  const deleted = [];
+  await assert.rejects(
+    flows(
+      { sub: 'reject', name: 'log-in', json: false },
+      {
+        paths: { flowsPendingDir: '/h/pending', dataDir: '/h' },
+        pathExists: async () => true,
+        readFlowFile: async () => {
+          throw new Error('EACCES: permission denied, open');
+        },
+        deleteFlow: async (filePath) => deleted.push(filePath),
+      },
+    ),
+    (error) => error.name === 'LifecycleError' && /exists but cannot be read/i.test(error.message),
+  );
+  assert.deepEqual(deleted, []);
+});
+
+test('reject still reports "not found" when pathExists confirms nothing is there', async () => {
+  await assert.rejects(
+    flows(
+      { sub: 'reject', name: 'ghost', json: false },
+      {
+        paths: { flowsPendingDir: '/h/pending', dataDir: '/h' },
+        pathExists: async () => false,
+        readFlowFile: async () => { throw new Error('must not be called when pathExists says absent'); },
+      },
+    ),
+    (error) => error.name === 'LifecycleError' && /no pending flow/i.test(error.message),
+  );
+});
+
+test('reject refuses, never silently proceeding, when existence itself cannot be verified', async () => {
+  const deleted = [];
+  await assert.rejects(
+    flows(
+      { sub: 'reject', name: 'log-in', json: false },
+      {
+        paths: { flowsPendingDir: '/h/pending', dataDir: '/h' },
+        pathExists: async () => { throw new Error('EIO: unexpected'); },
+        readFlowFile: async () => { throw new Error('must not be reached'); },
+        deleteFlow: async (filePath) => deleted.push(filePath),
+      },
+    ),
+    (error) => error.name === 'LifecycleError' && /could not be verified/i.test(error.message),
+  );
+  assert.deepEqual(deleted, []);
 });
 
 // --- name validation: guards against path traversal through the CLI's
@@ -816,6 +962,75 @@ test('[real fs] reject refuses a symlink planted at the pending path, leaving it
 
   await assert.rejects(
     flows({ sub: 'reject', name: 'log-in', json: false }, { paths }),
+    (error) => error.name === 'LifecycleError',
+  );
+  const linkStat = await lstat(linkPath);
+  assert.equal(linkStat.isSymbolicLink(), true);
+});
+
+// --- real-fs: an ancestor-symlinked dataDir (fix round 2, item 1) ---
+//
+// A dataDir REACHED via an ancestor symlink (a dotfile-managed home, a
+// relocated data directory -- `~/.fast-browser -> /elsewhere`) is a
+// legitimate, common setup, not an attack; round 1's confinement fix
+// regressed it, since the containment walk's own first hop IS dataDir
+// itself. These two tests pin both halves of the round-2 fix: the
+// legitimate ancestor-symlink case now works, and a symlink planted BELOW
+// that same (now-permitted) dataDir is still refused exactly as before.
+
+async function tempPathsWithSymlinkedDataDir(t) {
+  const homeDir = await mkdtemp(path.join(os.tmpdir(), 'fast-browser-flows-symhome-'));
+  t.after(() => rm(homeDir, { recursive: true, force: true }));
+  const realDataDir = await mkdtemp(path.join(os.tmpdir(), 'fast-browser-flows-realdata-'));
+  t.after(() => rm(realDataDir, { recursive: true, force: true }));
+
+  const paths = resolvePaths({ homeDir, pluginRoot: '/plugin' });
+  await symlink(realDataDir, paths.dataDir);
+  return { paths, realDataDir };
+}
+
+test('[real fs] approve succeeds when dataDir itself is reached through an ancestor symlink', async (t) => {
+  const { paths, realDataDir } = await tempPathsWithSymlinkedDataDir(t);
+  await mkdir(paths.flowsPendingDir, { recursive: true });
+  const flow = validFlow({ name: 'log-in' });
+  const raw = JSON.stringify(flow, null, 2);
+  await writeFile(path.join(paths.flowsPendingDir, 'log-in.flow.json'), raw);
+
+  const report = await flows(
+    { sub: 'approve', name: 'log-in', json: false },
+    {
+      paths, interactive: true, confirmApprove: async () => true, print: () => {},
+    },
+  );
+
+  assert.deepEqual(report, {
+    command: 'flows', sub: 'approve', name: 'log-in', moved: true,
+  });
+  // Read back through the REAL (non-symlink) target to confirm the file
+  // actually landed in the physical ready tier, not merely somewhere the
+  // logical/symlinked path also happens to resolve.
+  assert.equal(
+    await readFile(path.join(realDataDir, 'flows', 'log-in.flow.json'), 'utf8'),
+    raw,
+  );
+});
+
+test('[real fs] a leaf symlink planted under a symlinked dataDir is still refused', async (t) => {
+  const { paths, realDataDir } = await tempPathsWithSymlinkedDataDir(t);
+  await mkdir(paths.flowsPendingDir, { recursive: true });
+  const outside = path.join(realDataDir, 'outside.flow.json');
+  const flow = validFlow({ name: 'log-in' });
+  await writeFile(outside, JSON.stringify(flow));
+  const linkPath = path.join(paths.flowsPendingDir, 'log-in.flow.json');
+  await symlink(outside, linkPath);
+
+  await assert.rejects(
+    flows(
+      { sub: 'approve', name: 'log-in', json: false },
+      {
+        paths, interactive: true, confirmApprove: async () => true, print: () => {},
+      },
+    ),
     (error) => error.name === 'LifecycleError',
   );
   const linkStat = await lstat(linkPath);
