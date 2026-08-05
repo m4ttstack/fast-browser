@@ -1140,3 +1140,63 @@ test('flow-runner.js treats a quirk click failure as best-effort: never attempte
   );
   assert.equal(quirkClickCount, 1, 'a failed click must never be attempted a second time');
 });
+
+test('flow-runner.js degrades a quirk with a malformed locator element to no dismissal, never masking the original failure (WS3a Task 3, fix round 1)', async () => {
+  // `target.locators` passes the shape check (it IS an array), but the one
+  // element in it is `null` -- a quirk is advisory data this runner does
+  // not otherwise trust, so a malformed ELEMENT inside an otherwise
+  // shape-valid quirk must degrade to "this quirk doesn't work, no
+  // dismissal happened" rather than throwing a raw TypeError out of the
+  // step's catch block and losing the FLOW_RUNNER_FAILURE contract
+  // entirely (reviewer finding, fix round 1).
+  const source = await readSource();
+  const sandbox = {};
+  vm.createContext(sandbox);
+  const script = new vm.Script(`(${source})`);
+  const macro = script.runInContext(sandbox);
+
+  const stepSelector = 'role=button[name="Buy now"]';
+  const stubPage = {
+    url: () => 'http://x/checkout',
+    on: () => {},
+    off: () => {},
+    locator: (selector) => {
+      if (typeof selector === 'string' && selector.indexOf(',') >= 0) {
+        return { all: async () => [] };
+      }
+      return {
+        waitFor: async () => {
+          throw new Error('not found');
+        },
+      };
+    },
+  };
+
+  const flow = {
+    schemaVersion: 1,
+    name: 'quirk-malformed-locator-element',
+    steps: [
+      { op: 'click', target: { locators: [{ kind: 'role', selector: stepSelector }] } },
+    ],
+  };
+  const quirks = [
+    {
+      name: 'cookie-banner',
+      urlPattern: null,
+      target: { locators: [null] },
+      action: 'click',
+    },
+  ];
+
+  await assert.rejects(
+    () => macro(stubPage, { flow, args: {}, quirks }),
+    (error) => {
+      assert.match(error.message, /^FLOW_RUNNER_FAILURE: /);
+      const payload = JSON.parse(error.message.slice('FLOW_RUNNER_FAILURE: '.length));
+      assert.equal(payload.failedStep, 0);
+      assert.equal(payload.error, 'no locator candidate matched', 'the ORIGINAL error, not a raw TypeError from the malformed quirk element');
+      assert.equal(Object.prototype.hasOwnProperty.call(payload, 'quirkAttempted'), false);
+      return true;
+    },
+  );
+});

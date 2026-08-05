@@ -393,13 +393,23 @@ async (page, args) => {
   // consent ruling above -- and no later quirk is considered once one has
   // been chosen, even when the click itself failed. Returns null, no
   // click performed at all, when nothing matches or nothing is present.
+  //
+  // The shape check above only proves `target.locators` is an ARRAY, not
+  // that every element in it is well-formed -- a quirk is advisory data
+  // this runner does not otherwise trust (fix round, reviewer finding),
+  // so `dedupeLocators` (which reads `.kind`/`.selector` off each element)
+  // runs inside the SAME try as the probe below: a malformed element
+  // (`null`, a non-object, one missing `.selector`) is treated exactly
+  // like a probe miss -- this quirk does not pan out, move on -- rather
+  // than throwing a raw error out of a dismissal this whole function's
+  // caller expects to only ever return a name or null.
   const dismissInterrupt = async () => {
     for (const quirk of quirks) {
       if (!quirkMatchesUrl(quirk)) continue;
-      const deduped = dedupeLocators(quirk.target);
-      if (deduped.length === 0) continue;
       let hit;
       try {
+        const deduped = dedupeLocators(quirk.target);
+        if (deduped.length === 0) continue;
         hit = await probeCandidates(quirk.target, deduped, 1500, undefined);
       } catch {
         continue;
@@ -666,7 +676,20 @@ async (page, args) => {
         let recovered = false;
         let finalMessage = message;
         if (message === 'no locator candidate matched' && quirks.length > 0) {
-          const dismissedQuirk = await dismissInterrupt();
+          // `dismissInterrupt` itself degrades malformed quirk data to "no
+          // dismissal" internally (see its own doc comment), but this call
+          // site is guarded too, defense in depth: ANY throw here -- from
+          // this function or a future change to it -- must never mask the
+          // step's ORIGINAL failure. `dismissedQuirk` stays null exactly
+          // like the no-match/nothing-present case, and control falls
+          // through to the normal (pre-rung-3) failure path below with
+          // `finalMessage` untouched.
+          let dismissedQuirk = null;
+          try {
+            dismissedQuirk = await dismissInterrupt();
+          } catch {
+            dismissedQuirk = null;
+          }
           if (dismissedQuirk) {
             quirkAttempted = dismissedQuirk;
             forcedEscalatedOnly = true;
