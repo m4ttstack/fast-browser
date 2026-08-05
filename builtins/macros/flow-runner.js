@@ -261,10 +261,8 @@ async (page, args) => {
     let startIndex = 0;
     if (origin && originOf(page.url()) !== origin) {
       const first = steps[0];
-      const usesStepZero = !!(first && first.op === 'goto');
-      const preconditionPath = usesStepZero && typeof first.url === 'string'
-        ? template(first.url)
-        : '/';
+      const usesStepZero = !!(first && first.op === 'goto' && typeof first.url === 'string');
+      const preconditionPath = usesStepZero ? template(first.url) : '/';
       try {
         await page.goto(`${origin}${preconditionPath}`);
         await page.waitForLoadState('domcontentloaded');
