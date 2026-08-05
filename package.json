@@ -37,6 +37,7 @@
     "test:unit": "node --test tests/unit/*.test.mjs",
     "test:integration": "node --test tests/integration/*.test.mjs",
     "test:e2e": "node --test tests/e2e/direct-mcp.test.mjs",
+    "test:flows": "node --test tests/e2e/flows.test.mjs",
     "test:host": "node --test tests/e2e/host-parity.test.mjs",
     "test:simultaneous": "node --test tests/e2e/simultaneous.test.mjs",
     "test:annotate": "node --test tests/e2e/annotate.test.mjs",
