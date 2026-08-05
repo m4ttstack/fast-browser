@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {
-  chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile,
+  chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, unlink, writeFile,
 } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -865,6 +865,102 @@ test('a session whose actions.jsonl becomes unreadable is left completely untouc
   const finalFlow = await readFlow(paths.flowsDir, 'view-details.flow.json');
   assert.equal(finalFlow.provenance.successRuns, 1); // still just the one real application
   assert.deepEqual(await listFlowFiles(paths.flowsDir), ['view-details.flow.json']);
+});
+
+// --- shrunk session (Task 8, folded MAT-136 debt #2): actions.jsonl itself
+// vanishes (ENOENT) inside a still-present session dir, which now reads as
+// readable: true, records: [] (trace-reader.mjs's ENOENT carve-out) rather
+// than readable: false -- so this session does NOT take the N1
+// "leave completely untouched" early-continue path above. Its records array
+// genuinely shrinks below the saved cursor, which the OLD `nextLines =
+// records.length` / `nextProvenanceLines = records.length` assignments would
+// have written straight back into state, rewinding the cursor and
+// re-counting the replay above on the very next sweep that finds the file
+// restored. The chosen behavior (documented in sweep.mjs): treat a
+// records.length below the saved cursor as "no new lines this sweep" and
+// leave the cursor exactly where it was -- never write a SMALLER cursor than
+// is already on disk. State pruning (F8) is a separate mechanism that only
+// fires for a deleted trace DIRECTORY (`listTraceSessions` no longer seeing
+// it at all); this is a file missing from a dir that's still there, so F8
+// does not apply and the shrink guard is what protects the cursor instead.
+test('a session whose actions.jsonl vanishes (file deleted, dir still present) reads as empty/readable but leaves its cursor untouched: no crash, no rewind, no re-counted replay on restore', async (t) => {
+  const paths = await tempPaths(t);
+  await writeSession(paths, 15000, {
+    meta: baseMeta(),
+    records: [
+      record({ seq: 1, tool: 'browser_navigate', params: { url: 'https://shop.example/cart' } }),
+      record({ seq: 2, targets: [traceTarget({ name: 'View details' })], mutating: false }),
+    ],
+  });
+  const first = await sweep({ paths });
+  const [{ name }] = first.compiled;
+  const stored = await readFlow(paths.flowsDir, 'view-details.flow.json');
+
+  // Counted replay at cursor n=3, exactly the N1 regression's setup.
+  await appendRecords(paths, 15000, [
+    record({
+      seq: 3,
+      tool: 'browser_run_code_unsafe',
+      params: { filename: 'flow-runner.js', args: { flow: { id: stored.id, name } } },
+    }),
+  ]);
+  const second = await sweep({ paths });
+  assert.deepEqual(second.updated, [{ name, successRuns: 1, failStreak: 0 }]);
+  const cursorBeforeVanish = second.cursor['trace-15000'];
+  assert.deepEqual(cursorBeforeVanish, { lines: 3, provenanceLines: 3 });
+
+  // The file itself vanishes -- the session DIRECTORY (and its meta.json)
+  // stays put, so this is not the F8 stale-directory-pruning case.
+  await unlink(path.join(paths.dataDir, 'trace-15000', 'actions.jsonl'));
+
+  const third = await sweep({ paths });
+  assert.deepEqual(third.compiled, []);
+  assert.deepEqual(third.updated, []);
+  // readable: true now (ENOENT carve-out), so this is NOT reported as
+  // 'unreadable' -- it genuinely read as an (honest, if surprising) empty
+  // session, and the shrink guard is what keeps that from mangling state.
+  assert.deepEqual(third.skippedBySession, {});
+  assert.deepEqual(third.cursor['trace-15000'], cursorBeforeVanish); // cursor NOT rewound to 0
+
+  const stateWhileVanished = await readState(paths);
+  assert.deepEqual(stateWhileVanished.processed['trace-15000'], cursorBeforeVanish);
+
+  // Restored with EXACTLY its prior content: records.length (3) is no
+  // longer less than the saved cursor (3), so nothing new is (re-)sliced.
+  await writeFile(
+    path.join(paths.dataDir, 'trace-15000', 'actions.jsonl'),
+    jsonl([
+      record({ seq: 1, tool: 'browser_navigate', params: { url: 'https://shop.example/cart' } }),
+      record({ seq: 2, targets: [traceTarget({ name: 'View details' })], mutating: false }),
+      record({
+        seq: 3,
+        tool: 'browser_run_code_unsafe',
+        params: { filename: 'flow-runner.js', args: { flow: { id: stored.id, name } } },
+      }),
+    ]),
+  );
+  const fourth = await sweep({ paths });
+  assert.deepEqual(fourth.compiled, []); // no fresh compile duplicate
+  assert.deepEqual(fourth.updated, []); // no re-counted replay
+  assert.deepEqual(fourth.cursor['trace-15000'], cursorBeforeVanish);
+
+  const restoredFlow = await readFlow(paths.flowsDir, 'view-details.flow.json');
+  assert.equal(restoredFlow.provenance.successRuns, 1); // still just the one real application
+
+  // Restored with MORE than its prior content: only the genuinely new
+  // record (seq 4) is processed -- the shrink guard doesn't also block
+  // legitimate growth once the cursor has caught back up.
+  await appendRecords(paths, 15000, [
+    record({
+      seq: 4,
+      tool: 'browser_run_code_unsafe',
+      params: { filename: 'flow-runner.js', args: { flow: { id: stored.id, name } } },
+      error: 'replay failed',
+    }),
+  ]);
+  const fifth = await sweep({ paths });
+  assert.deepEqual(fifth.updated, [{ name, successRuns: 1, failStreak: 1 }]);
+  assert.deepEqual(fifth.cursor['trace-15000'], { lines: 4, provenanceLines: 4 });
 });
 
 // --- site memory mining (WS2b plan, Task 4) ---

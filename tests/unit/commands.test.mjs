@@ -4050,7 +4050,35 @@ test('CLI main renders flows list as a short readable block', async () => {
   assert.match(output, /pending/);
 });
 
-test('CLI main renders flows compile with distinct skip reasons summarized, not lumped', async () => {
+test('CLI main renders flows compile with no skips as just the summary line', async () => {
+  const report = {
+    command: 'flows',
+    sub: 'compile',
+    compiled: [{ name: 'log-in', tier: 'ready' }],
+    updated: [],
+    sessionsProcessed: 1,
+    cursor: {},
+    skippedBySession: {},
+    replaysSeen: 0,
+  };
+  const writes = [];
+  await main(
+    { command: 'flows', json: false },
+    { commands: { flows: async () => report }, write: (text) => writes.push(text) },
+  );
+  assert.equal(
+    writes.join(''),
+    'Compiled 1 new flow(s); updated 0; sessions processed: 1; replays seen: 0.\n',
+  );
+});
+
+// Task 8 (folded MAT-136 debt #3): the exact grouped rendering, pinned line
+// by line. One session of each reason class -- 'unreadable' (called out
+// loudly, by name, ahead of everything else), two DIAGNOSABLE reasons
+// ('invalid: ...' and 'unsupported: ...') listed individually with their
+// own session and seqRange, and two routine 'too-short' skips in the SAME
+// session rolled up into one per-session count rather than two lines.
+test('CLI main renders flows compile grouped by skip-reason class: unreadable called out, invalid/unsupported listed individually, too-short/error-truncated counted per session', async () => {
   const report = {
     command: 'flows',
     sub: 'compile',
@@ -4060,7 +4088,12 @@ test('CLI main renders flows compile with distinct skip reasons summarized, not 
     cursor: {},
     skippedBySession: {
       'trace-1': [{ reason: 'unreadable', seqRange: [null, null] }],
-      'trace-2': [{ reason: 'invalid: too short', seqRange: [0, 1] }],
+      'trace-2': [
+        { reason: 'invalid: too short', seqRange: [0, 1] },
+        { reason: 'too-short', seqRange: [2, 2] },
+        { reason: 'too-short', seqRange: [3, 3] },
+      ],
+      'trace-3': [{ reason: 'unsupported: browser_tabs', seqRange: [5, 5] }],
     },
     replaysSeen: 3,
   };
@@ -4069,10 +4102,47 @@ test('CLI main renders flows compile with distinct skip reasons summarized, not 
     { command: 'flows', json: false },
     { commands: { flows: async () => report }, write: (text) => writes.push(text) },
   );
+  assert.equal(
+    writes.join(''),
+    [
+      'Compiled 1 new flow(s); updated 0; sessions processed: 2; replays seen: 3.',
+      'Skipped 5 segment(s) across 3 session(s).',
+      'UNREADABLE -- needs attention: trace-1',
+      'invalid: too short (trace-2, seq 0-1)',
+      'unsupported: browser_tabs (trace-3, seq 5-5)',
+      '2 too-short/error-truncated skip(s) in trace-2',
+      'Rerun with --json for full details.',
+      '',
+    ].join('\n'),
+  );
+});
+
+// error-truncated skips (an error record cutting a segment short) count
+// alongside too-short in the same per-session rollup, not a fourth bucket.
+test('CLI main renders flows compile counting too-short and error-truncated together in one per-session rollup', async () => {
+  const report = {
+    command: 'flows',
+    sub: 'compile',
+    compiled: [],
+    updated: [],
+    sessionsProcessed: 1,
+    cursor: {},
+    skippedBySession: {
+      'trace-9': [
+        { reason: 'error-truncated', seqRange: [1, 1] },
+        { reason: 'too-short', seqRange: [2, 2] },
+      ],
+    },
+    replaysSeen: 0,
+  };
+  const writes = [];
+  await main(
+    { command: 'flows', json: false },
+    { commands: { flows: async () => report }, write: (text) => writes.push(text) },
+  );
   const output = writes.join('');
-  assert.match(output, /Compiled 1/);
-  assert.match(output, /replays seen: 3/i);
-  assert.match(output, /Skipped 2/);
+  assert.match(output, /2 too-short\/error-truncated skip\(s\) in trace-9/);
+  assert.doesNotMatch(output, /error-truncated \(trace-9/); // never listed individually
 });
 
 test('CLI main renders flows approve and reject confirmations as one-liners', async () => {

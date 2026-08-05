@@ -146,14 +146,20 @@ test('readTraceRecords counts hostile lines in the session-truncated fixture wit
   assert.deepEqual(cleanedScript, { items: [], truncated: true });
 });
 
-test('readTraceRecords never throws when actions.jsonl is missing, and reports readable: false', async (t) => {
+test('readTraceRecords never throws when actions.jsonl is missing, and reports it as an honest empty session (readable: true)', async (t) => {
   const dataDir = await tempDataDir();
   t.after(() => rm(dataDir, { recursive: true, force: true }));
   const sessionDir = path.join(dataDir, 'trace-9999999999999');
   await mkdir(sessionDir);
 
   const result = await readTraceRecords(sessionDir);
-  assert.deepEqual(result, { records: [], skipped: 0, readable: false });
+  // ENOENT specifically: no actions.jsonl at all is a session that
+  // genuinely has nothing in it yet (or ever will -- a meta-only live
+  // session), not a read fault. Reporting readable: false here (as this
+  // reader used to, folding ENOENT into "any fs error") made
+  // lib/flows/sweep.mjs report 'unreadable' on every sweep of such a
+  // session even though nothing is actually wrong.
+  assert.deepEqual(result, { records: [], skipped: 0, readable: true });
 });
 
 test('readTraceRecords never throws when actions.jsonl exists but is unreadable (permissions), and reports readable: false', async (t) => {
@@ -171,12 +177,40 @@ test('readTraceRecords never throws when actions.jsonl exists but is unreadable 
   await chmod(actionsFile, 0o000);
 
   const result = await readTraceRecords(sessionDir);
-  // Distinguished from the missing-file case above ONLY by NOT being a
-  // parse-hostile empty read: both report readable: false, records: [],
-  // skipped: 0 -- the point is that a caller can never tell "unreadable"
-  // apart from "genuinely empty" via records/skipped alone, which is
-  // exactly why `readable` exists.
+  // EACCES (and every other fs error besides ENOENT) is genuinely unknown,
+  // not empty: the file's actual content might hold records this reader
+  // just couldn't see this attempt, so it stays readable: false -- pinned
+  // distinctly from the ENOENT case above, which now reports readable: true.
   assert.deepEqual(result, { records: [], skipped: 0, readable: false });
+});
+
+test('readTraceRecords distinguishes ENOENT (readable: true, honest empty) from EACCES (readable: false, unknown) on otherwise identical sessions', async (t) => {
+  const dataDir = await tempDataDir();
+  t.after(async () => {
+    await chmod(path.join(dataDir, 'trace-7777777777777', 'actions.jsonl'), 0o600).catch(() => {});
+    await rm(dataDir, { recursive: true, force: true });
+  });
+
+  const missingDir = path.join(dataDir, 'trace-6666666666666');
+  await mkdir(missingDir);
+  const missingResult = await readTraceRecords(missingDir);
+  assert.equal(missingResult.readable, true);
+
+  const deniedDir = path.join(dataDir, 'trace-7777777777777');
+  await mkdir(deniedDir);
+  const actionsFile = path.join(deniedDir, 'actions.jsonl');
+  await writeFile(actionsFile, '{"v":1,"seq":1,"tool":"browser_navigate"}\n');
+  await chmod(actionsFile, 0o000);
+  const deniedResult = await readTraceRecords(deniedDir);
+  assert.equal(deniedResult.readable, false);
+
+  // Records/skipped alone can never tell the two apart -- both report the
+  // same empty shape -- which is exactly why `readable` has to carry the
+  // distinction rather than being inferred from the rest of the result.
+  assert.deepEqual(
+    { records: missingResult.records, skipped: missingResult.skipped },
+    { records: deniedResult.records, skipped: deniedResult.skipped },
+  );
 });
 
 test('isTruncationMarker recognizes every marker shape and rejects ordinary data', () => {
