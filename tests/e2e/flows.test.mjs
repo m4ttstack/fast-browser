@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {
-  copyFile, mkdir, mkdtemp, readFile,
+  copyFile, mkdir, mkdtemp, readFile, rm,
 } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -17,13 +17,28 @@ import { startMcpClient } from './helpers/mcp-client.mjs';
 // consent tier, approve it with an injected (no-TTY) confirm, then replay
 // the returned invocation VERBATIM -- the flow-runner artifact untouched --
 // in a brand-new session and prove it completes in exactly one tool call
-// with zero snapshots. A controller-added step 7 then sabotages that same
-// invocation's locators and proves a failed replay is recorded as a failure
-// against the same stored flow, closing the last unverified link: the
-// runtime writes `record.error` when a macro throws, and sweep.mjs's
-// replay-provenance scan keys off exactly that.
+// with zero snapshots, AND that the page actually reached the state the
+// replayed args imply (fix round 1, F1: a macro call completing without
+// throwing is not proof it reproduced the recorded outcome -- see step 5).
+// A controller-added step 7 then sabotages that same invocation's locators
+// and proves a failed replay is recorded as a failure against the same
+// stored flow, closing the last unverified link: the runtime writes
+// `record.error` when a macro throws, and sweep.mjs's replay-provenance
+// scan keys off exactly that.
 
 const pluginRoot = fileURLToPath(new URL('../../', import.meta.url));
+
+// The recording and replay runs deliberately use DIFFERENT customer/plan
+// values (never the compiled flow's own recorded literals played back) so
+// that verifying each run's own order-id independently (step 1, step 5)
+// proves the replayed args actually flowed through to the page, not that a
+// stale/cached value happened to match a hardcoded expectation. `seats`
+// stays '7' in both: it's a single-character literal, and compile.mjs's own
+// lift filter (`liftLiteral`) never lifts literals under 2 characters, so
+// it is never parameterized -- both runs fill the same literal regardless
+// of `customerName`/`plan`.
+const RECORDED_ORDER_ID = 'ADA-TEAM-7';
+const REPLAY_ORDER_ID = 'GRACE-SCALE-7';
 
 // Hand-built paths object matching lib/core/paths.mjs's key shape (Task 1),
 // but rooted at `outputDir` itself rather than at `homeDir/.fast-browser`:
@@ -79,6 +94,28 @@ async function tracedSession(t, outputDir) {
   return { callTool: session.callTool, metrics: session.metrics, close };
 }
 
+// Runs two `browser_find` text searches (completion heading, then the
+// specific order id) and asserts each matched exactly once -- the page-state
+// check both the recording (step 1) and the replay (step 5) run through
+// `browser_find` specifically because it has no TOOL_OPS entry in
+// compile.mjs: it can never compile into a step, so calling it never
+// perturbs the artifact either run produces, and (for the replay) it is
+// issued only AFTER the one-call budget has already been measured.
+//
+// `mcp-client.mjs`'s `textResult` extracts the "### Result" section via a
+// multiline (`m`-flagged) regex whose `$` matches end-of-LINE, not
+// end-of-string -- for a multi-line snapshot-tree response like
+// `browser_find`'s, that collapses the returned value to just its first
+// line (verified against the real runtime; this is existing, uneditable
+// helper behavior, not a bug introduced here). `Found 1 match for "<text>":`
+// is that first line and is exact-equality-checkable on its own.
+async function assertOrderComplete(session, orderId) {
+  const headingFind = await session.callTool('browser_find', { text: 'Order complete' });
+  assert.equal(headingFind, 'Found 1 match for "Order complete":');
+  const orderIdFind = await session.callTool('browser_find', { text: orderId });
+  assert.equal(orderIdFind, `Found 1 match for "${orderId}":`);
+}
+
 test('flywheel: record scripted, compile gated, approve, replay in one call', async (t) => {
   const outputDir = await mkdtemp(path.join(os.tmpdir(), 'fast-browser-flywheel-'));
   const paths = pathsForOutputDir(outputDir);
@@ -87,8 +124,9 @@ test('flywheel: record scripted, compile gated, approve, replay in one call', as
   const fixture = await startOrderFixture();
   t.after(fixture.close);
 
-  // --- 1. record: drive the order flow through a TRACED session, then
-  // close it so meta.json gets endedAt. ---
+  // --- 1. record: drive the order flow through a TRACED session, verify
+  // the RECORDED outcome against the page itself (not just that the tool
+  // calls didn't throw), then close so meta.json gets endedAt. ---
   //
   // Deliberately NOT direct-mcp.test.mjs's single `browser_run_code_unsafe`
   // call, despite driving the exact same fixture actions/values that script
@@ -105,7 +143,15 @@ test('flywheel: record scripted, compile gated, approve, replay in one call', as
   // what makes them individually compilable AND what earns the mutating
   // classification (browser_type/browser_select_option are both in
   // compile.mjs's MUTATING_BY_IDENTITY) -- verified empirically before this
-  // test was written; see task-10-report.md.
+  // test was written; see task-10-report.md. This also means there is no
+  // meaningful "recording stayed under N calls" assertion to add here even
+  // in principle: `--save-trace` is a launch-time, server-side
+  // instrumentation flag with no client-visible round trips (TRACE.md), so
+  // the recording's call count is simply however many actions this script
+  // chose to issue, traced or not -- direct-mcp.test.mjs's own untraced
+  // budget tests are what actually establish "capture costs no extra
+  // calls" (same script, same count, tracing on vs. off is invisible to the
+  // client); pinning a second number here would prove nothing new.
   const recorder = await tracedSession(t, outputDir);
   await recorder.callTool('browser_navigate', { url: fixture.origin });
   await recorder.callTool('browser_click', { target: 'role=button[name="Start order"]' });
@@ -116,6 +162,10 @@ test('flywheel: record scripted, compile gated, approve, replay in one call', as
   await recorder.callTool('browser_click', { target: 'role=button[name="Review order"]' });
   await recorder.callTool('browser_click', { target: 'role=button[name="Place order"]' });
   await recorder.callTool('browser_wait_for', { text: 'Order complete' });
+  // browser_find has no TOOL_OPS entry (compile.mjs) -- it cannot compile
+  // into a step, so these observations never touch the artifact the
+  // recording below produces.
+  await assertOrderComplete(recorder, RECORDED_ORDER_ID);
   t.diagnostic(`recording metrics: ${JSON.stringify(recorder.metrics())}`);
   await recorder.close();
 
@@ -172,11 +222,37 @@ test('flywheel: record scripted, compile gated, approve, replay in one call', as
   const invocation = runnableCandidate.invocation;
   assert.equal(invocation.tool, 'browser_run_code_unsafe');
   assert.equal(invocation.arguments.filename, path.join(paths.macrosDir, 'flow-runner.js'));
-  assert.equal(invocation.arguments.args.flow.id, compiledFlow.id);
-  assert.deepEqual(Object.keys(invocation.arguments.args.args).sort(), ['customerName', 'plan']);
+
+  // Full-artifact embedding (fix round 1, F3): the invocation must embed
+  // EXACTLY the artifact now sitting in the ready tier -- content unchanged
+  // by approval (flows.mjs's own "tier is directory location" contract, a
+  // plain rename) -- not merely the same `id`.
+  const approvedFlowPath = path.join(paths.flowsDir, flowFileName({ name: flowName }));
+  const approvedFlow = JSON.parse(await readFile(approvedFlowPath, 'utf8'));
+  assert.deepEqual(invocation.arguments.args.flow, approvedFlow);
+
+  // Placeholder shape (fix round 1, F4): pinned before either arg is filled
+  // in, so a future change to `argPlaceholder`'s literal text fails here
+  // rather than silently at replay time.
+  assert.deepEqual(invocation.arguments.args.args, {
+    customerName: '<REQUIRED: string>',
+    plan: '<REQUIRED: string>',
+  });
 
   // --- 5. replay: a NEW traced session issues the invocation in exactly
-  // one call, zero snapshots, matching the scripted run's outcome. ---
+  // one call, zero snapshots -- AND the replayed page actually reaches the
+  // state those (different-from-recording) args imply, not merely a macro
+  // call that returned without throwing. ---
+  //
+  // Fix round 1, F1: `deepEqual(replayResult.result, { completed: true })`
+  // alone proves no step threw -- it says nothing about whether the page
+  // ended up in the state the supplied args imply (e.g. a `fill()` that
+  // failed to clear the Seats input's shipped `value="1"` before typing
+  // would silently produce a wrong order code without failing any assertion
+  // that only inspects the macro's return value). `browser_find` is issued
+  // AFTER `metricsAfterReplay` is captured, so it never touches the 1-call
+  // budget assertion below, and it cannot compile into a step for the same
+  // reason as the recording's own use of it (no TOOL_OPS entry).
   //
   // The invocation's placeholder arg values (`<REQUIRED: string>`) are
   // swapped for real ones before the call; the embedded flow artifact --
@@ -208,15 +284,19 @@ test('flywheel: record scripted, compile gated, approve, replay in one call', as
   // "v1 never compiles an extract step (ruling e)"), so a compiled flow's
   // `result.kind` is always 'completion' -- flow-runner's `{ completed:
   // true }` is the only outcome shape this flow (or any v1-compiled flow)
-  // can produce, and it is what the scripted run itself reached (the
-  // recording's own `browser_wait_for` on "Order complete" would have
-  // thrown had the fixture not gotten there).
+  // can produce.
   assert.deepEqual(replayResult.result, { completed: true });
   assert.deepEqual(replayResult.locatorFallbacks, []);
+
+  await assertOrderComplete(replaySession, REPLAY_ORDER_ID);
   await replaySession.close();
 
-  // --- 6. second sweep: the stored, now-approved flow shows one success. ---
+  // --- 6. second sweep: the stored, now-approved flow shows one success,
+  // and neither the replay call nor the verification browser_find above
+  // compiled into a new flow (fix round 1, F5's gap: replay/verification
+  // records must never be mistaken for fresh recordable actions). ---
   const secondSweep = await flows({ sub: 'compile', json: true }, { paths });
+  assert.deepEqual(secondSweep.compiled, []);
   assert.deepEqual(secondSweep.updated, [{ name: flowName, successRuns: 1, failStreak: 0 }]);
 
   const listAfterSuccess = await flows({ sub: 'list', json: true }, { paths });
@@ -247,17 +327,44 @@ test('flywheel: record scripted, compile gated, approve, replay in one call', as
     args: { flow: sabotagedFlow, args: { customerName: 'Grace', plan: 'scale' } },
   };
 
+  // Fix round 1, F2: a bare `/FLOW_RUNNER_FAILURE/.test(message)` also
+  // passes for the WRONG failure class -- `failedStep: 'args'` (a missing/
+  // malformed required arg) throws the identical prefix. Anchoring on the
+  // literal prefix, parsing the JSON payload after it, and asserting the
+  // SPECIFIC failure shape (`failedStep` a step INDEX, not `'args'`, and
+  // flow-runner's exact "no locator candidate matched" resolveTarget
+  // message) is what actually proves this failure came from the sabotaged
+  // locators, not from some unrelated args regression.
   const sabotageSession = await tracedSession(t, outputDir);
   await assert.rejects(
     sabotageSession.callTool(invocation.tool, sabotagedArgs),
-    (error) => /FLOW_RUNNER_FAILURE/.test(error.message),
+    (error) => {
+      const prefix = 'FLOW_RUNNER_FAILURE: ';
+      const markerIndex = error.message.indexOf(prefix);
+      assert.notEqual(markerIndex, -1, `expected "${prefix}" in error message: ${error.message}`);
+      const payload = JSON.parse(error.message.slice(markerIndex + prefix.length));
+      assert.equal(typeof payload.failedStep, 'number');
+      assert.equal(payload.error, 'no locator candidate matched');
+      return true;
+    },
   );
   await sabotageSession.close();
 
   const thirdSweep = await flows({ sub: 'compile', json: true }, { paths });
+  assert.deepEqual(thirdSweep.compiled, []);
   assert.deepEqual(thirdSweep.updated, [{ name: flowName, successRuns: 1, failStreak: 1 }]);
 
   const listAfterFailure = await flows({ sub: 'list', json: true }, { paths });
   const flowAfterFailure = listAfterFailure.flows.find((entry) => entry.name === flowName);
   assert.deepEqual(flowAfterFailure.health, { successRuns: 1, failStreak: 1 });
+
+  // --- hygiene (fix round 1, F6): best-effort outputDir cleanup, registered
+  // LAST so it runs LAST -- node:test runs `t.after` hooks in registration
+  // (FIFO) order, and every session's own close() was registered earlier,
+  // above -- on the success path this only ever removes a directory every
+  // runtime/fixture process has already released. `force: true` means an
+  // already-partially-missing outputDir (a failure path that threw before
+  // some subdirectory was ever created) is tolerated rather than raising a
+  // second, unrelated error on top of the real one. ---
+  t.after(() => rm(outputDir, { recursive: true, force: true }));
 });
