@@ -232,7 +232,9 @@ test('find reports an unreadable artifact file distinctly from an invalid one', 
     },
   );
 
-  assert.deepEqual(report.warnings, [{ file: 'gone.flow.json', tier: 'ready', reason: 'unreadable' }]);
+  assert.deepEqual(report.warnings, [{
+    kind: 'artifact-load', file: 'gone.flow.json', tier: 'ready', reason: 'unreadable',
+  }]);
 });
 
 // Fix round 1, item 5: the invocation's arg placeholder must be derived
@@ -388,6 +390,7 @@ test('find caps embedded quirks at 10, dropping the rest with a warning naming t
   assert.equal(embedded.length, 10);
   assert.deepEqual(embedded.map((q) => q.name), elevenQuirks.slice(0, 10).map((q) => q.name));
   assert.deepEqual(report.warnings, [{
+    kind: 'quirks-dropped',
     origin: flow.origin,
     reason: '1 quirk dropped from the replay invocation (max 10)',
   }]);

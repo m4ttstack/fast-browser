@@ -3942,7 +3942,9 @@ test('CLI main surfaces find warnings in human output, not only --json', async (
     command: 'flows',
     sub: 'find',
     candidates: [],
-    warnings: [{ file: 'broken.flow.json', tier: 'ready', reason: 'invalid: bad json' }],
+    warnings: [{
+      kind: 'artifact-load', file: 'broken.flow.json', tier: 'ready', reason: 'invalid: bad json',
+    }],
   };
   const writes = [];
   await main(
@@ -3952,6 +3954,41 @@ test('CLI main surfaces find warnings in human output, not only --json', async (
   const output = writes.join('');
   assert.match(output, /No matching flows found\./);
   assert.match(output, /1 flow artifact file could not be loaded/i);
+});
+
+// WS3a Task 4 review fix: a quirk-drop warning (kind: 'quirks-dropped') must
+// never be counted into the artifact-load line above -- it names neither a
+// file nor a load failure. Covers both: an artifact-load warning present
+// alongside a quirk-drop warning renders BOTH lines, each naming only its
+// own kind's count/content, never conflating the two.
+test('CLI main renders a quirks-dropped warning on its own line, never folded into the artifact-load count', async () => {
+  const report = {
+    command: 'flows',
+    sub: 'find',
+    candidates: [],
+    warnings: [
+      {
+        kind: 'artifact-load', file: 'broken.flow.json', tier: 'ready', reason: 'invalid: bad json',
+      },
+      {
+        kind: 'quirks-dropped',
+        origin: 'https://example.com',
+        reason: '3 quirks dropped from the replay invocation (max 10)',
+      },
+    ],
+  };
+  const writes = [];
+  await main(
+    { command: 'flows', json: false },
+    { commands: { flows: async () => report }, write: (text) => writes.push(text) },
+  );
+  const output = writes.join('');
+  // Exactly one artifact-load file counted (not two, and not "could not be
+  // loaded" bleeding onto the quirk-drop warning).
+  assert.match(output, /1 flow artifact file could not be loaded/i);
+  assert.match(output, /https:\/\/example\.com - 3 quirks dropped from the replay invocation \(max 10\)/);
+  // The quirk-drop warning must never be counted as a second artifact file.
+  assert.doesNotMatch(output, /2 flow artifact files/i);
 });
 
 // Fix round 1, item 6: `description` traces back to page-derived content
