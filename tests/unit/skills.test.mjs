@@ -82,7 +82,7 @@ test('skill frontmatter contains only portable discovery fields', async () => {
 test('macro index exposes only the portable built-in macros', async () => {
   const text = await readFile(path.join(pluginRoot, 'skills/browser-macros/MACROS.md'), 'utf8');
 
-  assert.equal((text.match(/^## /gm) || []).length, 3);
+  assert.equal((text.match(/^## /gm) || []).length, 4);
   assert.match(text, /^## page-recon$/m);
   assert.match(text, /maxLinks\?: number \(default 10\)/);
   assert.match(text, /~\/\.fast-browser\/macros\/page-recon\.js/);
@@ -115,7 +115,15 @@ test('macro index exposes only the portable built-in macros', async () => {
   assert.match(text, /stated blind spots/);
   assert.match(text, /measured evidence, not a substitute for reviewing/);
   assert.match(text, /~\/\.fast-browser\/macros\/capture-annotated\.js/);
-  assert.equal((text.match(/Status: built-in/g) || []).length, 3);
+  assert.match(text, /^## flow-runner$/m);
+  // The replay contract: this is the one place an agent will look to learn
+  // both invocation shapes and both return shapes without reading the macro
+  // source.
+  assert.match(text, /flow: <artifact object>, args: \{ <argName>: <string>/);
+  assert.match(text, /ok: true, result: \{ <extract keys> \} \| \{ completed: true \}/);
+  assert.match(text, /failedStep: <step index or 'args'>, error, url,\s+stepsCompleted, locatorFallbacks/);
+  assert.match(text, /~\/\.fast-browser\/macros\/flow-runner\.js/);
+  assert.equal((text.match(/Status: built-in/g) || []).length, 4);
 
   // The Script paths above are written with `~`, which the runtime does not
   // expand: a bare or tilde filename resolves against the browser server's

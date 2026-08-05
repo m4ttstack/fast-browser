@@ -9,7 +9,8 @@
     "0.1.0-alpha.5",
     "0.1.0-alpha.6",
     "0.1.0-alpha.7",
-    "0.1.0-alpha.8"
+    "0.1.0-alpha.8",
+    "0.1.0-alpha.9"
   ],
   "macros": {
     "page-recon.js": [
@@ -21,6 +22,9 @@
     "capture-annotated.js": [
       "8f35bc6798c642a78c5e04117de8ff4e69a1cbab80d7a167621ac3eb94b522df",
       "6f317b427a2a1b805e7846d589b8a8d916881d20f33c51104085fb8964698d03"
+    ],
+    "flow-runner.js": [
+      "cd682950ca29a8278a545e9bdd2d3f5dbabb9f80ca79fe6fc8ac4946fdc55ab5"
     ]
   },
   "indexSections": {
@@ -34,6 +38,9 @@
       "84ca775a46a4acdd864aa7ad8dc18ae6a2b2dd2160241eaa90eb85395fa806e6",
       "59029b4c103ae89f36fc84cfadaaebd61d54f86cbbe46def9d23362842b4f7a3",
       "34e859c6d39fcca8d3e3412ba6abfac324c2198d53b143c34e03a1f2a7b936b7"
+    ],
+    "flow-runner": [
+      "209499fed161cc3351514827aec001df93e36ca91d3e9dddaf03f5231434cfed"
     ]
   }
 }

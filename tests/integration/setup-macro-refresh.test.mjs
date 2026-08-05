@@ -134,19 +134,23 @@ const SHIPPED_RECON = '// shipped recon\n';
 const CURRENT_RECON = '// current recon\n';
 const CURRENT_CAPTURE = '// current capture\n';
 const CURRENT_AFFORDANCES = '// current affordances\n';
+const CURRENT_RUNNER = '// current runner\n';
 const SHIPPED_RECON_SECTION = syntheticSection('page-recon', 'maxLinks?: number');
 const CURRENT_RECON_SECTION = syntheticSection('page-recon', 'maxLinks?: number, home: string');
 const CURRENT_CAPTURE_SECTION = syntheticSection('capture-annotated', 'targets: object');
 const CURRENT_AFFORDANCES_SECTION = syntheticSection('page-affordances', 'maxButtons?: number');
+const CURRENT_RUNNER_SECTION = syntheticSection('flow-runner', 'flow: object, args: object');
 const CURRENT_MACROS = {
   'page-recon.js': CURRENT_RECON,
   'page-affordances.js': CURRENT_AFFORDANCES,
   'capture-annotated.js': CURRENT_CAPTURE,
+  'flow-runner.js': CURRENT_RUNNER,
 };
 const CURRENT_SECTIONS = {
   'page-recon': CURRENT_RECON_SECTION,
   'page-affordances': CURRENT_AFFORDANCES_SECTION,
   'capture-annotated': CURRENT_CAPTURE_SECTION,
+  'flow-runner': CURRENT_RUNNER_SECTION,
 };
 
 async function movedOnPluginRoot(t) {

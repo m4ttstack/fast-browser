@@ -64,15 +64,13 @@ async function syntheticPluginRoot(t, { macros, sections, macroHashes = {}, sect
   for (const [name, text] of Object.entries(macros)) {
     await writeFile(path.join(root, 'builtins', 'macros', name), text, 'utf8');
   }
+  // Driven by BUILTIN_NAMES, same as the manifest loop below: a fixture
+  // that only ever wrote three hardcoded sections would stop building a
+  // valid template the moment a fourth built-in shipped.
   const index = [
     '# Macro Index',
     '',
-    sections['page-recon'],
-    '',
-    sections['page-affordances'],
-    '',
-    sections['capture-annotated'],
-    '',
+    ...BUILTIN_NAMES.flatMap((name) => [sections[macroIndexName(name)], '']),
   ].join('\n');
   await writeFile(path.join(root, 'skills', 'browser-macros', 'MACROS.md'), index, 'utf8');
   const macroList = {};
@@ -97,10 +95,12 @@ const SHIPPED_RECON = '// shipped recon\n';
 const CURRENT_RECON = '// current recon\n';
 const CURRENT_CAPTURE = '// current capture\n';
 const CURRENT_AFFORDANCES = '// current affordances\n';
+const CURRENT_RUNNER = '// current runner\n';
 const SHIPPED_RECON_SECTION = syntheticSection('page-recon', 'maxLinks?: number');
 const CURRENT_RECON_SECTION = syntheticSection('page-recon', 'maxLinks?: number, home: string');
 const CURRENT_CAPTURE_SECTION = syntheticSection('capture-annotated', 'targets: object');
 const CURRENT_AFFORDANCES_SECTION = syntheticSection('page-affordances', 'maxButtons?: number');
+const CURRENT_RUNNER_SECTION = syntheticSection('flow-runner', 'flow: object, args: object');
 
 // A plugin root whose packaged macro and index section have both moved on from
 // a previous release, with that previous release's bytes recorded as shipped.
@@ -110,11 +110,13 @@ async function movedOnPluginRoot(t) {
       'page-recon.js': CURRENT_RECON,
       'page-affordances.js': CURRENT_AFFORDANCES,
       'capture-annotated.js': CURRENT_CAPTURE,
+      'flow-runner.js': CURRENT_RUNNER,
     },
     sections: {
       'page-recon': CURRENT_RECON_SECTION,
       'page-affordances': CURRENT_AFFORDANCES_SECTION,
       'capture-annotated': CURRENT_CAPTURE_SECTION,
+      'flow-runner': CURRENT_RUNNER_SECTION,
     },
     macroHashes: { 'page-recon.js': [sha256(SHIPPED_RECON), sha256(CURRENT_RECON)] },
     sectionHashes: {
@@ -603,11 +605,13 @@ test('the shipped hash manifest refuses the empty-string digest', async (t) => {
       'page-recon.js': CURRENT_RECON,
       'page-affordances.js': CURRENT_AFFORDANCES,
       'capture-annotated.js': CURRENT_CAPTURE,
+      'flow-runner.js': CURRENT_RUNNER,
     },
     sections: {
       'page-recon': CURRENT_RECON_SECTION,
       'page-affordances': CURRENT_AFFORDANCES_SECTION,
       'capture-annotated': CURRENT_CAPTURE_SECTION,
+      'flow-runner': CURRENT_RUNNER_SECTION,
     },
     // The digest of no bytes at all. A generator that hashes whatever readFile
     // returned for an absent file writes exactly this, and it would make the
