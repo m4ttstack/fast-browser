@@ -4,6 +4,7 @@
     <meta charset="utf-8">
     <title>Order flow fixture</title>
     <!--FIXTURE_VARIANT-->
+    <!--FIXTURE_KILLTEST-->
   </head>
   <body>
     <!--FIXTURE_OVERLAY-->
@@ -14,6 +15,50 @@
       const VARIANT = window.__FIXTURE_VARIANT__ || 'base';
       const app = document.querySelector('#app');
       const state = { customer: '', plan: 'starter', seats: 1 };
+
+      // WS4a Task 5 (at-most-once kill test): orthogonal to VARIANT above --
+      // server.mjs's `setKillTest({ token, stall })` is a separate toggle
+      // (a server MODE, not a mutation PROFILE) that injects these two
+      // globals via the `<!--FIXTURE_KILLTEST-->` placeholder. Both are
+      // `undefined` on every request no test ever opts into kill-test mode
+      // for, so KILL_TEST_TOKEN reads null and every branch gated on it
+      // below is dead code for every OTHER suite in this repo -- zero
+      // behavior change, by construction, for anything that never calls
+      // `setKillTest`.
+      const KILL_TEST_TOKEN = window.__KILL_TEST_TOKEN__ || null;
+      const KILL_TEST_STALL = window.__KILL_TEST_STALL__ === true;
+
+      // The mutating POST itself: registered ONCE here, at `app`-level
+      // delegation, rather than as a second direct listener inside
+      // `showReview()`'s own `else` branch below. That branch's exact
+      // source text (`PLACE_ORDER_LISTENER_CALL` and friends) is what four
+      // of profiles.mjs's mutation profiles target with their own literal
+      // `String#replace()` -- class-rename/text-rename-far in particular
+      // additionally assert every reference to the OLD id-based place-order
+      // query selector is GONE from their transformed output (deliberately
+      // not spelling that selector out literally in THIS comment, for the
+      // same reason -- a raw substring match over the whole page would
+      // catch a comment quoting it just as readily as real code). A second,
+      // independently-added query targeting that same id, sitting outside
+      // what those `.replace()` calls target, would survive their
+      // transform and falsely reintroduce it, breaking that assertion.
+      // Delegation sidesteps this entirely: nothing inside
+      // `showReview()`/`showComplete()` changes at all, so every existing
+      // profile's own targeted diff stays exactly what it was before this
+      // task. Click bubbles from the button (inserted later by
+      // `showReview()`) up to `app`, which already exists in the page's
+      // initial markup.
+      if (KILL_TEST_TOKEN) {
+        app.addEventListener('click', (event) => {
+          if (event.target && event.target.id === 'place-order') {
+            fetch('/order', {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ token: KILL_TEST_TOKEN }),
+            });
+          }
+        });
+      }
 
       // WS3a Task 9 / WS3b Task 10 (healing e2e, tests/e2e/healing.test.mjs)
       // -- only a handful of behaviors in this whole script are
@@ -31,9 +76,19 @@
       // fail flow-runner's locator probe (Playwright's `waitFor({state:
       // 'visible'})` -- what that probe calls -- checks bounding-box/CSS
       // visibility only, never pointer-event occlusion).
+      // `window.__consentDismissClicks__` (WS4a Task 4): mirrors the
+      // 'intercept' branch's own `__interceptDismissClicks__` below --
+      // added per the drift-harness rung-distribution matrix's ledger
+      // ruling that a successful quirk-driven dismissal here needs its own
+      // directly countable fixture-side evidence, not just the escalated
+      // fallback entry the runner's post-quirk retry also happens to leave
+      // behind (that entry alone cannot distinguish "a quirk recovered
+      // this" from "the retry would have succeeded regardless").
       if (VARIANT === 'overlay') {
         app.style.visibility = 'hidden';
+        window.__consentDismissClicks__ = 0;
         document.querySelector('#consent-accept').addEventListener('click', () => {
+          window.__consentDismissClicks__ += 1;
           document.querySelector('#consent-overlay').remove();
           app.style.visibility = 'visible';
         });
@@ -175,6 +230,21 @@
       function showComplete() {
         app.innerHTML = '<h1>Order complete</h1><p data-testid="order-id"></p>';
         document.querySelector('[data-testid="order-id"]').textContent = orderId();
+        // WS4a Task 5's own stall mechanism: "the client script never
+        // renders the next element" (the brief's own second documented
+        // option, chosen over holding an HTTP response open -- see
+        // server.mjs's doc comment for why). When KILL_TEST_STALL is true,
+        // the mutating action above has already fired for real (the POST
+        // already completed by the time this function runs) -- only the
+        // FOLLOWING interactive element (what the compiled kill-test flow's
+        // own next step targets) is withheld, indefinitely: nothing here
+        // ever times out or retries this render from the client side.
+        if (KILL_TEST_TOKEN && !KILL_TEST_STALL) {
+          app.insertAdjacentHTML('beforeend', '<button type="button" id="confirm-receipt">Confirm receipt</button>');
+          document.querySelector('#confirm-receipt').addEventListener('click', () => {
+            app.innerHTML = '<p>Receipt confirmed</p>';
+          });
+        }
       }
 
       document.querySelector('#start-order').addEventListener('click', showCustomer);

@@ -282,30 +282,41 @@ async (page, args) => {
     return text.length > CANDIDATE_STRING_CAP ? text.slice(0, CANDIDATE_STRING_CAP) : text;
   };
 
-  // WS3b Task 5: when an element has no `role` ATTRIBUTE, derive one from
-  // its tag instead of collecting bare-text-only -- heal synthesis skips
-  // text-only candidates, so a plain `<button>Place order</button>` (no
-  // `role`, no `aria-label`) could never heal before this. Exactly the
-  // Scope ruling's tag map, nothing more (no heading/list/img -- only
-  // action targets heal): `button` -> `button`; `a` WITH `href` -> `link`
-  // (an `a` without `href` gets no derived role); `select` -> `combobox`;
-  // `input[type=checkbox]` -> `checkbox`; `input[type=radio]` -> `radio`;
-  // `input[type=button|submit]` -> `button`; any other `input` ->
-  // `textbox`. An explicit `role` attribute always wins -- this is only
-  // ever consulted once the caller has already confirmed one is absent.
+  // WS3b Task 5 (amended by the fable triage's fold-in, WS4a Task 8): when
+  // an element has no `role` ATTRIBUTE, or has one that is present but
+  // EMPTY, derive one from its tag instead of collecting bare-text-only --
+  // heal synthesis skips text-only candidates, so a plain
+  // `<button>Place order</button>` (no `role`, no `aria-label`) could never
+  // heal before this. Exactly the Scope ruling's tag map, nothing more (no
+  // heading/list/img -- only action targets heal): `button` -> `button`;
+  // `a` WITH `href` -> `link` (an `a` without `href` gets no derived role);
+  // `select` -> `combobox`; `input[type=checkbox]` -> `checkbox`;
+  // `input[type=radio]` -> `radio`; `input[type=button|submit]` ->
+  // `button`; any other `input` -> `textbox`. An explicit, NON-EMPTY `role`
+  // attribute always wins: per ARIA, `role=""` means the element has NO
+  // role, so an empty attribute no longer suppresses derivation
+  // (plan-level ruling amending WS3b Task 5's letter -- WS3b's own Task 5
+  // review flagged exactly this case as a Minor).
   //
   // A `Locator` from `.all()` carries no tagName of its own to read
   // client-side (unlike an `ElementHandle`'s cached remote object, it is a
   // lazy page-side reference that re-resolves on every call), so getting it
   // at all costs one more page round trip no matter what -- there is no
-  // way to avoid that round trip entirely. What IS avoidable: paying it at
-  // all when it is not needed (an explicit `role` already answers the
-  // question -- see the call site below, which only invokes this when
-  // `role` read `null`), and paying it more than once per element -- this
-  // is a SINGLE bounded `evaluate` call (`{ timeout: 1000 }`, matching
-  // every other read in this function) returning tagName, `type`, and
-  // `href` presence together, rather than three separate round trips for
-  // the same element.
+  // way to avoid that round trip entirely. WS3b Task 5 originally paid it
+  // only when needed: a SEQUENTIAL extra `await` dispatched after the other
+  // four reads' `Promise.all`, and only when the explicit role attribute
+  // read `null`. That halved the round trips in the common case (an
+  // explicit role present) at the cost of doubling worst-case enrichment
+  // wall time -- 12 candidates at up to 1000ms each becomes 12 x 2000ms
+  // once every one of them lacks an explicit role. The fable triage
+  // reverses that tradeoff, deliberately (WS4a Task 8): this call is folded
+  // INTO the same `Promise.all` as the other four reads below, in
+  // `collectCandidates`, so it is now ALWAYS dispatched -- one more round
+  // trip even on an element whose result ends up discarded -- in exchange
+  // for a flat wall clock that never doubles. Still a SINGLE bounded
+  // `evaluate` call (`{ timeout: 1000 }`, matching every other read in this
+  // function) returning tagName, `type`, and `href` presence together,
+  // rather than three separate round trips for the same element.
   const deriveImplicitRole = async (element) => {
     const info = await element.evaluate((el) => ({
       tagName: el.tagName,
@@ -344,13 +355,25 @@ async (page, args) => {
     const elements = await page.locator(CANDIDATE_SELECTOR).all();
     const candidates = [];
     for (const element of elements.slice(0, MAX_CANDIDATES)) {
-      const [role, name, testid, text] = await Promise.all([
+      // Flat wall clock (WS4a Task 8, see `deriveImplicitRole`'s doc
+      // comment): `deriveImplicitRole` is one more entry in this SAME
+      // `Promise.all`, always dispatched alongside the other four reads --
+      // never a sequential extra `await` gated on `role` first coming back
+      // `null`. Its result (`derivedRole`) is simply unused below whenever
+      // an explicit, non-empty role attribute already answers the question.
+      const [role, name, testid, text, derivedRole] = await Promise.all([
         element.getAttribute('role', { timeout: 1000 }),
         element.getAttribute('aria-label', { timeout: 1000 }),
         element.getAttribute('data-testid', { timeout: 1000 }),
         element.innerText({ timeout: 1000 }),
+        deriveImplicitRole(element),
       ]);
-      const resolvedRole = role !== null ? role : await deriveImplicitRole(element);
+      // Per ARIA, `role=""` is not an explicit role -- an empty string
+      // means "no role" -- so only a present, NON-EMPTY attribute short-
+      // circuits derivation; `null` (absent) and `''` (present but empty)
+      // both fall through to the tag-derived value.
+      const hasExplicitRole = role !== null && role !== '';
+      const resolvedRole = hasExplicitRole ? role : derivedRole;
       candidates.push({
         role: clampCandidateString(resolvedRole),
         name: clampCandidateString(name),

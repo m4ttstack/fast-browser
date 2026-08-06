@@ -4272,6 +4272,96 @@ test('CLI main renders flows compile heal-write failures as warning lines', asyn
   );
 });
 
+// WS4a Task 7: the runs-ledger append is contained exactly like a heal
+// write failure (sweep.mjs's own doc comment) -- this is the only place a
+// human running `flows compile` interactively would learn one silently
+// failed to write.
+test('CLI main renders flows compile runs-ledger write failures as warning lines', async () => {
+  const report = {
+    command: 'flows',
+    sub: 'compile',
+    compiled: [],
+    updated: [],
+    healed: [],
+    healErrors: [],
+    runsErrors: [{ sessionDir: 'trace-1', error: 'EACCES: permission denied' }],
+    warnings: [],
+    sessionsProcessed: 1,
+    cursor: {},
+    skippedBySession: {},
+    replaysSeen: 1,
+  };
+  const writes = [];
+  await main(
+    { command: 'flows', json: false },
+    { commands: { flows: async () => report }, write: (text) => writes.push(text) },
+  );
+  assert.equal(
+    writes.join(''),
+    [
+      'Compiled 0 new flow(s); updated 0; sessions processed: 1; replays seen: 1.',
+      'Warning: runs ledger append failed for trace-1: EACCES: permission denied',
+      '',
+    ].join('\n'),
+  );
+});
+
+// WS4a Task 7: sweep's own heal-path ranker can degrade to lexical, exactly
+// like `flows find`'s rerank stage already can -- rendered with the SAME
+// shared line (`encoderDegradedWarningLines`, lib/cli/main.mjs), reused
+// verbatim rather than a second, independently maintained copy.
+test('CLI main renders a sweep encoder-degraded warning on the compile arm with the same wording find already uses', async () => {
+  const report = {
+    command: 'flows',
+    sub: 'compile',
+    compiled: [],
+    updated: [],
+    healed: [],
+    healErrors: [],
+    runsErrors: [],
+    warnings: [{ kind: 'encoder-degraded', reason: 'voyage embeddings request failed: HTTP 500' }],
+    sessionsProcessed: 1,
+    cursor: {},
+    skippedBySession: {},
+    replaysSeen: 1,
+  };
+  const writes = [];
+  await main(
+    { command: 'flows', json: false },
+    { commands: { flows: async () => report }, write: (text) => writes.push(text) },
+  );
+  assert.equal(
+    writes.join(''),
+    [
+      'Compiled 0 new flow(s); updated 0; sessions processed: 1; replays seen: 1.',
+      'Warning: ranking fell back to lexical order - voyage embeddings request failed: HTTP 500',
+      '',
+    ].join('\n'),
+  );
+});
+
+test('CLI main renders flows compile with no runsErrors/warnings fields (a report predating Task 7) exactly as before, no crash', async () => {
+  const report = {
+    command: 'flows',
+    sub: 'compile',
+    compiled: [{ name: 'log-in', tier: 'ready' }],
+    updated: [],
+    sessionsProcessed: 1,
+    cursor: {},
+    skippedBySession: {},
+    replaysSeen: 0,
+  };
+  const writes = [];
+  await main(
+    { command: 'flows', json: false },
+    { commands: { flows: async () => report }, write: (text) => writes.push(text) },
+  );
+  assert.equal(
+    writes.join(''),
+    'Compiled 1 new flow(s); updated 0; sessions processed: 1; replays seen: 0.\n',
+  );
+});
+
 // Task 8 (folded MAT-136 debt #3): the exact grouped rendering, pinned line
 // by line. One session of each reason class -- 'unreadable' (called out
 // loudly, by name, ahead of everything else), two DIAGNOSABLE reasons
@@ -4649,4 +4739,98 @@ test('CLI main strips control characters from a quirk list detail line before pr
   const output = writes.join('');
   assert.doesNotMatch(output, /\x1b/);
   assert.match(output, /FAKE/);
+});
+
+// --- stats (WS4a drift-harness plan, Task 7) ---
+
+function statsReport(overrides = {}) {
+  return {
+    command: 'stats',
+    replays: 12,
+    outcomes: {
+      clean: 6, fallback: 2, escalated: 1, 'quirk-recovered': 1, healed: 1, failed: 1,
+    },
+    healRate: 1 / 12,
+    cleanRate: 0.5,
+    quarantined: 2,
+    flowsHealed: 3,
+    ...overrides,
+  };
+}
+
+// Review round 1, Important 1: the human breakdown line prints only the
+// three outcomes sweep.mjs can actually emit (clean/healed/failed) -- the
+// other three (fallback/escalated/quirk-recovered, still present in the
+// --json report below) are reserved-but-unreachable from this module
+// today, and printing them as inline zeros would read as "didn't happen"
+// rather than "cannot happen yet".
+test('CLI main dispatches stats and renders the human arm with the three reachable outcome counts, rates, and the two tallies', async () => {
+  const writes = [];
+  await main(
+    { command: 'stats', json: false },
+    { commands: { stats: async () => statsReport() }, write: (text) => writes.push(text) },
+  );
+  const output = writes.join('');
+  assert.equal(
+    output,
+    [
+      'Replays: 12 (clean 6, healed 1, failed 1)',
+      'Heal rate: 8.3%; clean rate: 50.0%',
+      'Quarantined flows: 2',
+      'Flows healed at least once: 3',
+      '',
+    ].join('\n'),
+  );
+  // Belt and suspenders on the omission itself: even though the fixture
+  // report carries nonzero fallback/escalated/quirk-recovered counts (see
+  // statsReport() above), none of those words reach the human line.
+  assert.doesNotMatch(output, /fallback|escalated|quirk-recovered/);
+});
+
+test('CLI main --json passes the stats report straight through', async () => {
+  const writes = [];
+  const report = statsReport();
+  await main(
+    { command: 'stats', json: true },
+    { commands: { stats: async () => report }, write: (text) => writes.push(text) },
+  );
+  assert.deepEqual(JSON.parse(writes.join('')), report);
+});
+
+test('CLI main renders zero rates cleanly when the runs ledger is empty', async () => {
+  const writes = [];
+  await main(
+    { command: 'stats', json: false },
+    {
+      commands: {
+        stats: async () => statsReport({
+          replays: 0,
+          outcomes: {
+            clean: 0, fallback: 0, escalated: 0, 'quirk-recovered': 0, healed: 0, failed: 0,
+          },
+          healRate: 0,
+          cleanRate: 0,
+          quarantined: 0,
+          flowsHealed: 0,
+        }),
+      },
+      write: (text) => writes.push(text),
+    },
+  );
+  assert.equal(
+    writes.join(''),
+    [
+      'Replays: 0 (clean 0, healed 0, failed 0)',
+      'Heal rate: 0.0%; clean rate: 0.0%',
+      'Quarantined flows: 0',
+      'Flows healed at least once: 0',
+      '',
+    ].join('\n'),
+  );
+});
+
+test('CLI main --help mentions stats among the supported commands', async () => {
+  const writes = [];
+  await main({ command: 'doctor', help: true }, { write: (text) => writes.push(text) });
+  assert.match(writes.join(''), /\bstats\b/);
 });

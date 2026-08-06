@@ -38,6 +38,16 @@ export function pathsForOutputDir(outputDir) {
     macrosDir: path.join(outputDir, 'macros'),
     rejectedFlowsFile: path.join(outputDir, 'rejected-flows.md'),
     sitesDir: path.join(outputDir, 'sites'),
+    // WS4a Task 7: sweep.mjs's runs-ledger append (`paths.runsDir`/
+    // `paths.runsFile`) needs these two keys the same way it needs every
+    // other key above -- without them `ensurePrivateDirectory(undefined)`
+    // throws and every e2e replay's runs-ledger append lands in
+    // `report.runsErrors` instead of `runs.jsonl` (contained, so it never
+    // fails a suite, but it silently defeats the ledger for every e2e
+    // fixture using this shared trio -- caught live via this exact symptom
+    // in the drift harness's own kill-leg diagnostic output).
+    runsDir: path.join(outputDir, 'runs'),
+    runsFile: path.join(outputDir, 'runs', 'runs.jsonl'),
   };
 }
 

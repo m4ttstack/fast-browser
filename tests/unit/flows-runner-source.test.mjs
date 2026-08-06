@@ -708,6 +708,12 @@ test('flow-runner.js records quirkAttempted alongside candidates when the post-q
   const fakeElement = {
     getAttribute: async (attr) => (attr === 'role' ? 'button' : null),
     innerText: async () => 'Buy now',
+    // Carries an explicit `role` attribute above, so the derived value is
+    // discarded -- but WS4a Task 8's flatten still dispatches `evaluate`
+    // unconditionally (folded into the same `Promise.all`), so a stub is
+    // required here regardless: this test's final failure IS a locator
+    // miss, so `collectCandidates()` genuinely runs.
+    evaluate: async () => ({ tagName: 'BUTTON', type: null, hasHref: false }),
   };
   const stubPage = {
     url: () => 'http://x/checkout',
@@ -1768,6 +1774,10 @@ test("flow-runner.js derives an implicit role from tag/type/href when the role a
     { label: 'input with no type attribute at all, no role attr -> textbox', tagName: 'INPUT', type: null, hasHref: false, roleAttr: null, expected: 'textbox' },
     { label: 'a tag outside the map (div), no role attr -> no derived role', tagName: 'DIV', type: null, hasHref: false, roleAttr: null, expected: '' },
     { label: 'explicit role attribute wins over tag derivation', tagName: 'BUTTON', type: null, hasHref: false, roleAttr: 'tab', expected: 'tab' },
+    // WS4a Task 8 ruling: role="" is not an explicit role -- per ARIA an
+    // empty role attribute means NO role, so it no longer suppresses
+    // derivation the way a real (non-empty) role attribute does.
+    { label: 'role="" on BUTTON -> derives button per ARIA (empty role means no role)', tagName: 'BUTTON', type: null, hasHref: false, roleAttr: '', expected: 'button' },
   ];
 
   for (const testCase of cases) {
@@ -1819,14 +1829,46 @@ test("flow-runner.js derives an implicit role from tag/type/href when the role a
       },
     );
 
-    // An explicit `role` attribute must short-circuit derivation entirely,
-    // not merely win the value: the tagName reads costs a page round trip
-    // that has no reason to happen at all once the attribute already
-    // answers the question (see the derivation comment in the macro source).
-    if (testCase.roleAttr !== null) {
-      assert.equal(evaluateCallCount, 0, `${testCase.label}: an explicit role attribute must skip the tagName round trip entirely`);
-    }
+    // WS4a Task 8 flatten: `deriveImplicitRole`'s `evaluate` call is now
+    // folded into the same `Promise.all` as the other bounded reads, so it
+    // is ALWAYS dispatched exactly once per element -- flat wall clock, at
+    // the cost of paying the round trip even when its result is discarded
+    // (an explicit, non-empty role attribute already answers the
+    // question). This is pinning CALL BEHAVIOR (always dispatched, exactly
+    // once), not call count parity with the pre-flatten conditional
+    // dispatch it replaces -- the OUTCOME that matters is asserted above:
+    // an explicit role wins the resolved value regardless of whether
+    // `evaluate` ran.
+    assert.equal(evaluateCallCount, 1, `${testCase.label}: the flatten dispatches the tagName round trip exactly once per element, always`);
   }
+});
+
+// WS4a Task 8: the flatten's wall-clock claim ("12 candidates x 1000ms
+// worst case, not 12 x 2000ms") is structural, not something a per-call
+// timing assertion can prove reliably in a stubbed unit test -- so it is
+// pinned against the source shape instead: `deriveImplicitRole` has to be
+// one more entry inside the SAME `Promise.all` as the other four bounded
+// reads, not a sequential extra `await` after it resolves.
+test('flow-runner.js folds implicit-role derivation into the same Promise.all as the other candidate reads, not a sequential extra await (WS4a Task 8: flat wall clock)', async () => {
+  const source = await readSource();
+
+  assert.match(
+    source,
+    /const \[role, name, testid, text, derivedRole\] = await Promise\.all\(\[\s*\n\s*element\.getAttribute\('role', \{ timeout: 1000 \}\),\s*\n\s*element\.getAttribute\('aria-label', \{ timeout: 1000 \}\),\s*\n\s*element\.getAttribute\('data-testid', \{ timeout: 1000 \}\),\s*\n\s*element\.innerText\(\{ timeout: 1000 \}\),\s*\n\s*deriveImplicitRole\(element\),\s*\n\s*\]\);/,
+    'deriveImplicitRole must be dispatched inside the same Promise.all as the other four bounded reads',
+  );
+  // Exactly one call site invokes `deriveImplicitRole` -- the flattened one
+  // pinned above -- proving there is no leftover sequential
+  // `await deriveImplicitRole(element)` anywhere else in the source.
+  assert.equal(
+    (source.match(/deriveImplicitRole\(element\)/g) || []).length,
+    1,
+    'deriveImplicitRole must be called from exactly one site (the flattened Promise.all)',
+  );
+  // The role="" ruling: an explicit role must be present AND non-empty to
+  // win over the always-computed derived value.
+  assert.match(source, /const hasExplicitRole = role !== null && role !== '';/);
+  assert.match(source, /const resolvedRole = hasExplicitRole \? role : derivedRole;/);
 });
 
 // --- WS3b Task 5: ledgered macro minors deferred from WS3a ---
@@ -1989,11 +2031,16 @@ test('flow-runner.js drops fat candidates from the end until the whole payload i
   const fakeElements = [];
   for (let i = 0; i < 13; i += 1) {
     fakeElements.push({
-      // Every element carries an explicit (fat) `role` attribute, so
-      // implicit-role derivation's `evaluate` round trip is never reached
-      // here -- this test is about the trim loop, not role derivation.
+      // Every element carries an explicit (fat) `role` attribute, so its
+      // derived role is always discarded -- but WS4a Task 8's flatten
+      // dispatches `evaluate` regardless (folded into the same
+      // `Promise.all`, not gated on `role` first reading absent), so a
+      // stub is still required here or the round trip throws
+      // "evaluate is not a function". This test is about the trim loop,
+      // not role derivation, hence the fixed, unused stub value.
       getAttribute: async () => FAT,
       innerText: async () => FAT,
+      evaluate: async () => ({ tagName: 'DIV', type: null, hasHref: false }),
     });
   }
 

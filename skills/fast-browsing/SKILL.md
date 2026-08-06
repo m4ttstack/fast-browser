@@ -107,6 +107,12 @@ then use the loop below.
   its error, and `page.url()` so recovery is informed.
 - Never return page dumps, element handles, or click-by-click narration.
 
+## Report flywheel health
+
+When asked to report on flow health, healing, or drift, run `fast-browser
+stats --json` and read `replays`, `outcomes`, `healRate`, `cleanRate`,
+`quarantined`, and `flowsHealed` from its output rather than guessing.
+
 ## Browser boundaries
 
 Fast Browser drives the real Chrome instance connected through its extension.

@@ -2274,3 +2274,380 @@ test('two heal-worthy failures for the same flow, same step, same winning candid
   assert.equal(onDisk.steps[1].target.locators[1].selector, 'internal:testid=[data-testid="vd-btn-1"]');
   assert.equal(onDisk.provenance.failStreak, 2);
 });
+
+// --- runs ledger (WS4a drift-harness plan, Task 7) ---
+
+async function readRunsLedger(paths) {
+  let raw;
+  try {
+    raw = await readFile(paths.runsFile, 'utf8');
+  } catch (error) {
+    if (error.code === 'ENOENT') return [];
+    throw error;
+  }
+  return raw.split('\n').filter((line) => line.trim() !== '').map((line) => JSON.parse(line));
+}
+
+test('a successful (clean) replay appends exactly one runs-ledger record with the exact shape; the runs dir/file land at the documented private modes', async (t) => {
+  const paths = await tempPaths(t);
+  const clock = () => new Date('2026-04-01T00:00:00.000Z');
+  await writeSession(paths, 61000, {
+    meta: baseMeta(),
+    records: [
+      record({ seq: 1, tool: 'browser_navigate', params: { url: 'https://shop.example/cart' } }),
+      record({ seq: 2, targets: [traceTarget({ name: 'View details' })], mutating: false }),
+    ],
+  });
+  const first = await sweep({ paths, now: clock });
+  const [{ name }] = first.compiled;
+  const stored = await readFlow(paths.flowsDir, 'view-details.flow.json');
+  // Nothing replayed yet on the first (compile-only) sweep -- no ledger file at all.
+  assert.deepEqual(await readRunsLedger(paths), []);
+
+  await appendRecords(paths, 61000, [
+    record({
+      seq: 3,
+      tool: 'browser_run_code_unsafe',
+      params: { filename: 'flow-runner.js', args: { flow: { id: stored.id, name } } },
+    }),
+  ]);
+
+  await sweep({ paths, now: clock });
+  const ledger = await readRunsLedger(paths);
+  assert.deepEqual(ledger, [{
+    v: 1,
+    ts: '2026-04-01T00:00:00.000Z',
+    flowName: name,
+    flowId: stored.id,
+    origin: 'https://shop.example',
+    outcome: 'clean',
+    quirkAttempted: null,
+    healedKind: null,
+    sessionDir: 'trace-61000',
+  }]);
+
+  const dirStat = await stat(paths.runsDir);
+  assert.equal(dirStat.mode & 0o777, 0o700);
+  const fileStat = await stat(paths.runsFile);
+  assert.equal(fileStat.mode & 0o777, 0o600);
+});
+
+test('an unhealed failed replay appends a failed runs-ledger record, quirkAttempted populated straight from the FLOW_RUNNER_FAILURE payload (no new payload key)', async (t) => {
+  const paths = await tempPaths(t);
+  await writeSession(paths, 62000, {
+    meta: baseMeta(),
+    records: [
+      record({ seq: 1, tool: 'browser_navigate', params: { url: 'https://shop.example/cart' } }),
+      record({ seq: 2, targets: [traceTarget({ name: 'View details' })], mutating: false }),
+    ],
+  });
+  const first = await sweep({ paths });
+  const [{ name }] = first.compiled;
+  const stored = await readFlow(paths.flowsDir, 'view-details.flow.json');
+
+  // A payload with NO candidates at all can never heal (proposeHeal's own
+  // "no candidates" null case) but still legitimately carries
+  // quirkAttempted -- flow-runner.js sets it whenever rung 3 fired,
+  // independent of whether the post-quirk pass then found candidates.
+  await appendRecords(paths, 62000, [
+    record({
+      seq: 3,
+      tool: 'browser_run_code_unsafe',
+      params: { filename: 'flow-runner.js', args: { flow: { id: stored.id, name } } },
+      error: `FLOW_RUNNER_FAILURE: ${JSON.stringify({
+        failedStep: 1, candidates: [], quirkAttempted: 'cookie-banner',
+      })}`,
+    }),
+  ]);
+
+  const result = await sweep({ paths });
+  assert.deepEqual(result.healed, []);
+  const ledger = await readRunsLedger(paths);
+  assert.equal(ledger.length, 1);
+  assert.equal(ledger[0].outcome, 'failed');
+  assert.equal(ledger[0].quirkAttempted, 'cookie-banner');
+  assert.equal(ledger[0].healedKind, null);
+  assert.equal(ledger[0].sessionDir, 'trace-62000');
+});
+
+test('a healed replay appends a healed runs-ledger record with healedKind set from the accepted locator\'s kind', async (t) => {
+  const paths = await tempPaths(t);
+  await writeSession(paths, 63000, {
+    meta: baseMeta(),
+    records: [
+      record({ seq: 1, tool: 'browser_navigate', params: { url: 'https://shop.example/cart' } }),
+      record({ seq: 2, targets: [traceTarget({ name: 'View details' })], mutating: false }),
+    ],
+  });
+  const first = await sweep({ paths });
+  const [{ name }] = first.compiled;
+  const stored = await readFlow(paths.flowsDir, 'view-details.flow.json');
+
+  await appendRecords(paths, 63000, [
+    record({
+      seq: 3,
+      tool: 'browser_run_code_unsafe',
+      params: { filename: 'flow-runner.js', args: { flow: { id: stored.id, name } } },
+      error: failurePayload(1, [{
+        role: 'button', name: 'View details', testid: 'vd-btn', text: 'View details',
+      }]),
+    }),
+  ]);
+
+  const result = await sweep({ paths });
+  assert.deepEqual(result.healed, [{ name, stepIndex: 1, kind: 'testid' }]);
+  const ledger = await readRunsLedger(paths);
+  assert.equal(ledger.length, 1);
+  assert.equal(ledger[0].outcome, 'healed');
+  assert.equal(ledger[0].healedKind, 'testid');
+  assert.equal(ledger[0].quirkAttempted, null);
+
+  // Review round 1, Important 2: `flowId` names the identity THIS REPLAY
+  // ran against (the pre-heal artifact) -- pinned directly against the
+  // PRE-heal `stored.id`, and proven distinct from the post-heal on-disk
+  // id (a heal recomputes `id` from the appended locator, so the two must
+  // differ here or this pin would be vacuous).
+  const healedOnDisk = await readFlow(paths.flowsDir, 'view-details.flow.json');
+  assert.equal(ledger[0].flowId, stored.id);
+  assert.equal(ledger[0].flowName, name);
+  assert.notEqual(healedOnDisk.id, stored.id); // sanity: the heal really did change the on-disk id
+  assert.notEqual(ledger[0].flowId, healedOnDisk.id);
+});
+
+test('a heal that fails to durably write records "failed" in the ledger, not "healed" -- outcome tracks what actually landed on disk', async (t) => {
+  const paths = await tempPaths(t);
+  await writeSession(paths, 64000, {
+    meta: baseMeta(),
+    records: [
+      record({ seq: 1, tool: 'browser_navigate', params: { url: 'https://shop.example/cart' } }),
+      record({ seq: 2, targets: [traceTarget({ name: 'View details' })], mutating: false }),
+    ],
+  });
+  const first = await sweep({ paths });
+  const [{ name }] = first.compiled;
+  const stored = await readFlow(paths.flowsDir, 'view-details.flow.json');
+
+  await appendRecords(paths, 64000, [
+    record({
+      seq: 3,
+      tool: 'browser_run_code_unsafe',
+      params: { filename: 'flow-runner.js', args: { flow: { id: stored.id, name } } },
+      error: failurePayload(1, [{
+        role: 'button', name: 'View details', testid: 'vd-btn', text: 'View details',
+      }]),
+    }),
+  ]);
+
+  await chmod(paths.flowsDir, 0o500);
+  t.after(() => chmod(paths.flowsDir, 0o700).catch(() => {}));
+
+  let result;
+  try {
+    result = await sweep({ paths });
+  } finally {
+    await chmod(paths.flowsDir, 0o700);
+  }
+
+  assert.deepEqual(result.healed, []);
+  assert.equal(result.healErrors.length, 1);
+  const ledger = await readRunsLedger(paths);
+  assert.equal(ledger.length, 1);
+  assert.equal(ledger[0].outcome, 'failed'); // the heal never durably landed
+  assert.equal(ledger[0].healedKind, null);
+});
+
+test('a ledger write failure is CONTAINED in report.runsErrors; the sweep still completes, provenance/healing are unaffected', async (t) => {
+  const paths = await tempPaths(t);
+  await writeSession(paths, 65000, {
+    meta: baseMeta(),
+    records: [
+      record({ seq: 1, tool: 'browser_navigate', params: { url: 'https://shop.example/cart' } }),
+      record({ seq: 2, targets: [traceTarget({ name: 'View details' })], mutating: false }),
+    ],
+  });
+  const first = await sweep({ paths });
+  const [{ name }] = first.compiled;
+  const stored = await readFlow(paths.flowsDir, 'view-details.flow.json');
+
+  // First replay: succeeds, and (as a side effect) creates runs.jsonl.
+  await appendRecords(paths, 65000, [
+    record({
+      seq: 3,
+      tool: 'browser_run_code_unsafe',
+      params: { filename: 'flow-runner.js', args: { flow: { id: stored.id, name } } },
+    }),
+  ]);
+  await sweep({ paths });
+  assert.equal((await readRunsLedger(paths)).length, 1);
+
+  // Sabotage the ledger FILE itself (not the directory, which stays
+  // writable so the flow artifact write below is unaffected) -- read-only
+  // blocks the next append specifically.
+  await chmod(paths.runsFile, 0o400);
+  t.after(() => chmod(paths.runsFile, 0o600).catch(() => {}));
+
+  await appendRecords(paths, 65000, [
+    record({
+      seq: 4,
+      tool: 'browser_run_code_unsafe',
+      params: { filename: 'flow-runner.js', args: { flow: { id: stored.id, name } } },
+      error: 'replay failed: locator not found',
+    }),
+  ]);
+
+  let result;
+  try {
+    result = await sweep({ paths });
+  } finally {
+    await chmod(paths.runsFile, 0o600);
+  }
+
+  // The sweep completed; the SECOND replay's own provenance update landed
+  // normally (never fails on a ledger write fault).
+  assert.deepEqual(result.updated, [{ name, successRuns: 1, failStreak: 1 }]);
+  assert.equal(result.runsErrors.length, 1);
+  assert.equal(result.runsErrors[0].sessionDir, 'trace-65000');
+  assert.equal(typeof result.runsErrors[0].error, 'string');
+  // The ledger itself still holds only the FIRST (pre-sabotage) line -- the
+  // second append never landed, and losing it costs stats only.
+  assert.equal((await readRunsLedger(paths)).length, 1);
+
+  const updatedOnDisk = await readFlow(paths.flowsDir, 'view-details.flow.json');
+  assert.equal(updatedOnDisk.provenance.successRuns, 1);
+  assert.equal(updatedOnDisk.provenance.failStreak, 1);
+});
+
+test('a replay record that names no known flow gets no runs-ledger line (nothing to report against), even though it still counts toward replaysSeen', async (t) => {
+  const paths = await tempPaths(t);
+  await writeSession(paths, 66000, {
+    meta: baseMeta(),
+    records: [
+      record({
+        seq: 1,
+        tool: 'browser_run_code_unsafe',
+        params: { filename: 'flow-runner.js', args: { flow: { id: 'a'.repeat(64), name: 'ghost' } } },
+      }),
+    ],
+  });
+
+  const result = await sweep({ paths });
+  assert.equal(result.replaysSeen, 1);
+  assert.deepEqual(await readRunsLedger(paths), []);
+});
+
+// Folded minor 2 (review round 1): N replays in one sweep produce exactly N
+// ledger lines, in the SAME order the replay records themselves appear in
+// the session -- not deduped, not batched, not reordered.
+test('two replays in the same sweep call append exactly two runs-ledger records, in replay order', async (t) => {
+  const paths = await tempPaths(t);
+  await writeSession(paths, 67500, {
+    meta: baseMeta(),
+    records: [
+      record({ seq: 1, tool: 'browser_navigate', params: { url: 'https://shop.example/cart' } }),
+      record({ seq: 2, targets: [traceTarget({ name: 'View details' })], mutating: false }),
+    ],
+  });
+  const first = await sweep({ paths });
+  const [{ name }] = first.compiled;
+  const stored = await readFlow(paths.flowsDir, 'view-details.flow.json');
+
+  await appendRecords(paths, 67500, [
+    record({
+      seq: 3,
+      tool: 'browser_run_code_unsafe',
+      params: { filename: 'flow-runner.js', args: { flow: { id: stored.id, name } } },
+    }),
+    record({
+      seq: 4,
+      tool: 'browser_run_code_unsafe',
+      params: { filename: 'flow-runner.js', args: { flow: { id: stored.id, name } } },
+      error: 'replay failed: locator not found',
+    }),
+  ]);
+
+  const result = await sweep({ paths });
+  assert.deepEqual(result.updated, [{ name, successRuns: 1, failStreak: 1 }]);
+  const ledger = await readRunsLedger(paths);
+  assert.equal(ledger.length, 2);
+  assert.equal(ledger[0].outcome, 'clean'); // seq 3, the success, first
+  assert.equal(ledger[1].outcome, 'failed'); // seq 4, the failure, second
+});
+
+// --- sweep degrade visibility: report.warnings (WS4a drift-harness plan, Task 7) ---
+
+test('a configured ranker that rejects on a failed replay degrades that heal proposal to the lexical default AND records exactly one encoder-degraded warning in report.warnings', async (t) => {
+  const paths = await tempPaths(t);
+  await writeSession(paths, 67000, {
+    meta: baseMeta(),
+    records: [
+      record({ seq: 1, tool: 'browser_navigate', params: { url: 'https://shop.example/cart' } }),
+      record({ seq: 2, targets: [traceTarget({ name: 'View details' })], mutating: false }),
+    ],
+  });
+  const first = await sweep({ paths });
+  const [{ name }] = first.compiled;
+  const stored = await readFlow(paths.flowsDir, 'view-details.flow.json');
+
+  await appendRecords(paths, 67000, [
+    record({
+      seq: 3,
+      tool: 'browser_run_code_unsafe',
+      params: { filename: 'flow-runner.js', args: { flow: { id: stored.id, name } } },
+      error: failurePayload(1, [{
+        role: 'button', name: 'View details', testid: 'vd-btn', text: 'View details',
+      }]),
+    }),
+  ]);
+
+  const rejectingRanker = async () => {
+    throw new Error('voyage embeddings request failed: HTTP 500');
+  };
+
+  const result = await sweep({ paths, ranker: rejectingRanker });
+
+  assert.deepEqual(result.warnings, [
+    { kind: 'encoder-degraded', reason: 'voyage embeddings request failed: HTTP 500' },
+  ]);
+  // The wrapper only OBSERVES -- heal.mjs's own lexical fallback still ran
+  // and still healed, byte-for-byte as it would have with no wrapper at all.
+  assert.deepEqual(result.healed, [{ name, stepIndex: 1, kind: 'testid' }]);
+  const ledger = await readRunsLedger(paths);
+  assert.equal(ledger[0].outcome, 'healed');
+});
+
+test('report.warnings stays empty when no ranker is configured (the ordinary lexical-only path)', async (t) => {
+  const paths = await tempPaths(t);
+  await writeSession(paths, 68000, { meta: baseMeta(), records: twoTierRecords() });
+  const result = await sweep({ paths });
+  assert.deepEqual(result.warnings, []);
+});
+
+test('report.warnings stays empty when a configured ranker succeeds -- no false positives from the wrapper', async (t) => {
+  const paths = await tempPaths(t);
+  await writeSession(paths, 69000, {
+    meta: baseMeta(),
+    records: [
+      record({ seq: 1, tool: 'browser_navigate', params: { url: 'https://shop.example/cart' } }),
+      record({ seq: 2, targets: [traceTarget({ name: 'View details' })], mutating: false }),
+    ],
+  });
+  const first = await sweep({ paths });
+  const [{ name }] = first.compiled;
+  const stored = await readFlow(paths.flowsDir, 'view-details.flow.json');
+
+  await appendRecords(paths, 69000, [
+    record({
+      seq: 3,
+      tool: 'browser_run_code_unsafe',
+      params: { filename: 'flow-runner.js', args: { flow: { id: stored.id, name } } },
+      error: failurePayload(1, [{
+        role: 'button', name: 'View details', testid: 'vd-btn', text: 'View details',
+      }]),
+    }),
+  ]);
+
+  const succeedingRanker = async () => [{ index: 0, score: 1 }];
+  const result = await sweep({ paths, ranker: succeedingRanker });
+  assert.deepEqual(result.warnings, []);
+  assert.deepEqual(result.healed, [{ name, stepIndex: 1, kind: 'testid' }]);
+});
