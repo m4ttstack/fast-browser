@@ -338,3 +338,361 @@ test('multiple offending fields each produce their own reason', () => {
     { path: 'steps[1].value', rule: 'literal-survived' },
   ]);
 });
+
+// --- fix round 1 ---
+
+// Finding 1 (CRITICAL): 'secret-pattern'/'entropy' were anchored to the
+// WHOLE field, so a secret embedded inside a url/selector/prose string
+// (surrounded by '/', '?', '=', ':', '"', or a space) passed clean.
+// compile.mjs only ever hands isHighEntropyValue ONE already-isolated
+// segment; these tests pin that the fixed per-token scan catches a secret
+// embedded in each of the four shapes the review named.
+
+test('an entropy secret embedded in a goto url path segment rejects', () => {
+  const flow = parseFlow(baseFlow({
+    steps: [
+      { op: 'goto', url: '/share/aB3xQ9zK2mN7pL4vR8tW1yUf' },
+      {
+        op: 'fill',
+        target: target({
+          locators: [{ kind: 'role', selector: 'internal:role=textbox[name="Customer"i]' }],
+          description: 'Customer',
+          role: 'textbox',
+          name: 'Customer',
+        }),
+        value: '{customer}',
+      },
+      {
+        op: 'click',
+        target: target(),
+        waitAfter: { networkSettled: true },
+        mutating: true,
+      },
+      {
+        op: 'expect',
+        target: target({
+          locators: [{ kind: 'text', selector: 'internal:text="Order placed"' }],
+          description: 'Order placed',
+          role: undefined,
+          name: undefined,
+        }),
+        state: 'visible',
+      },
+    ],
+  }));
+  const result = lintArtifact(flow);
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.reasons, [{ path: 'steps[0].url', rule: 'entropy' }]);
+});
+
+test('a key-shaped secret embedded in a goto query value rejects', () => {
+  const flow = parseFlow(baseFlow({
+    steps: [
+      { op: 'goto', url: '/callback?token=sk-AbCdEfGh12345678ijklMNOP' },
+      {
+        op: 'fill',
+        target: target({
+          locators: [{ kind: 'role', selector: 'internal:role=textbox[name="Customer"i]' }],
+          description: 'Customer',
+          role: 'textbox',
+          name: 'Customer',
+        }),
+        value: '{customer}',
+      },
+      {
+        op: 'click',
+        target: target(),
+        waitAfter: { networkSettled: true },
+        mutating: true,
+      },
+      {
+        op: 'expect',
+        target: target({
+          locators: [{ kind: 'text', selector: 'internal:text="Order placed"' }],
+          description: 'Order placed',
+          role: undefined,
+          name: undefined,
+        }),
+        state: 'visible',
+      },
+    ],
+  }));
+  const result = lintArtifact(flow);
+  assert.equal(result.ok, false);
+  assert.ok(result.reasons.some((reason) => reason.rule === 'secret-pattern' && reason.path === 'steps[0].url'));
+});
+
+test('a key-shaped secret embedded in a selector attribute value rejects', () => {
+  const flow = parseFlow(baseFlow({
+    steps: [
+      { op: 'goto', url: '/checkout/{plan}' },
+      {
+        op: 'fill',
+        target: target({
+          locators: [{ kind: 'css', selector: '[data-token="sk-AbCdEfGh12345678ijklMNOP"]' }],
+          description: 'Customer',
+          role: 'textbox',
+          name: 'Customer',
+        }),
+        value: '{customer}',
+      },
+      {
+        op: 'click',
+        target: target(),
+        waitAfter: { networkSettled: true },
+        mutating: true,
+      },
+      {
+        op: 'expect',
+        target: target({
+          locators: [{ kind: 'text', selector: 'internal:text="Order placed"' }],
+          description: 'Order placed',
+          role: undefined,
+          name: undefined,
+        }),
+        state: 'visible',
+      },
+    ],
+  }));
+  const result = lintArtifact(flow);
+  assert.equal(result.ok, false);
+  assert.ok(result.reasons.some(
+    (reason) => reason.rule === 'secret-pattern' && reason.path === 'steps[1].target.locators[0].selector',
+  ));
+});
+
+test('an entropy secret embedded in free-text description prose rejects', () => {
+  const flow = parseFlow(baseFlow({
+    description: 'On failure, the token aB3xQ9zK2mN7pL4vR8tW1yUf is logged for support',
+  }));
+  const result = lintArtifact(flow);
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.reasons, [{ path: 'description', rule: 'entropy' }]);
+});
+
+// Finding 2 (IMPORTANT): 'literal-survived' was stricter than the real
+// compile contract -- compile.mjs's liftLiteral excludes literals shorter
+// than 2 chars and exactly 'true'/'false' from lifting, so a valid
+// compiled flow with a checkbox toggle or a single-char fill legitimately
+// carries a raw literal there.
+
+test('a compiled-shape flow with a checkbox "true" value and a single-char fill value passes', () => {
+  const flow = parseFlow(baseFlow({
+    steps: [
+      { op: 'goto', url: '/checkout/{plan}' },
+      {
+        op: 'fill',
+        target: target({
+          locators: [{ kind: 'role', selector: 'internal:role=checkbox[name="Subscribe"i]' }],
+          description: 'Subscribe',
+          role: 'checkbox',
+          name: 'Subscribe',
+        }),
+        value: 'true',
+      },
+      {
+        op: 'fill',
+        target: target({
+          locators: [{ kind: 'role', selector: 'internal:role=textbox[name="Rating"i]' }],
+          description: 'Rating',
+          role: 'textbox',
+          name: 'Rating',
+        }),
+        value: 'y',
+      },
+      {
+        op: 'click',
+        target: target(),
+        waitAfter: { networkSettled: true },
+        mutating: true,
+      },
+      {
+        op: 'expect',
+        target: target({
+          locators: [{ kind: 'text', selector: 'internal:text="Order placed"' }],
+          description: 'Order placed',
+          role: undefined,
+          name: undefined,
+        }),
+        state: 'visible',
+      },
+    ],
+  }));
+  const result = lintArtifact(flow);
+  assert.deepEqual(result, { ok: true, reasons: [] });
+});
+
+test('a multi-char literal that is not "true"/"false" still rejects literal-survived, and email if it looks like one', () => {
+  const flow = parseFlow(baseFlow({
+    steps: [
+      { op: 'goto', url: '/checkout/{plan}' },
+      {
+        op: 'fill',
+        target: target({
+          locators: [{ kind: 'role', selector: 'internal:role=textbox[name="Customer"i]' }],
+          description: 'Customer',
+          role: 'textbox',
+          name: 'Customer',
+        }),
+        value: 'jane@x.com',
+      },
+      {
+        op: 'click',
+        target: target(),
+        waitAfter: { networkSettled: true },
+        mutating: true,
+      },
+      {
+        op: 'expect',
+        target: target({
+          locators: [{ kind: 'text', selector: 'internal:text="Order placed"' }],
+          description: 'Order placed',
+          role: undefined,
+          name: undefined,
+        }),
+        state: 'visible',
+      },
+    ],
+  }));
+  const result = lintArtifact(flow);
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.reasons.sort((a, b) => a.rule.localeCompare(b.rule)), [
+    { path: 'steps[1].value', rule: 'email' },
+    { path: 'steps[1].value', rule: 'literal-survived' },
+  ]);
+});
+
+test('an un-lifted short/boolean literal exemption does NOT extend to upload files', () => {
+  const flow = parseFlow(baseFlow({
+    steps: [
+      { op: 'goto', url: '/checkout/{plan}' },
+      {
+        op: 'upload',
+        files: ['x'],
+      },
+      {
+        op: 'click',
+        target: target(),
+        waitAfter: { networkSettled: true },
+        mutating: true,
+      },
+      {
+        op: 'expect',
+        target: target({
+          locators: [{ kind: 'text', selector: 'internal:text="Order placed"' }],
+          description: 'Order placed',
+          role: undefined,
+          name: undefined,
+        }),
+        state: 'visible',
+      },
+    ],
+  }));
+  const result = lintArtifact(flow);
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.reasons, [{ path: 'steps[1].files[0]', rule: 'literal-survived' }]);
+});
+
+// Finding 3 (IMPORTANT): KEY_SHAPE_PATTERN matched ordinary kebab-case
+// prose that merely starts with a key-prefix-shaped substring
+// ('skip-...', 'skateboard-...') -- resolveName mints exactly this shape
+// from click verbs/path roots. A real key's separator is immediate.
+
+test('ordinary kebab-case names that start with a key-shape prefix do not trip secret-pattern', () => {
+  const prose = ['skip-onboarding-and-continue', 'skateboard-2024-checkout'];
+  for (const name of prose) {
+    const flow = parseFlow(baseFlow({ name }));
+    const result = lintArtifact(flow);
+    assert.deepEqual(result, { ok: true, reasons: [] }, `expected "${name}" to pass cleanly`);
+  }
+});
+
+test('real key shapes with either separator are still recognized', () => {
+  const values = [
+    'sk-AbCdEfGh12345678ijklMNOP',
+    'ghp_AbCdEfGh12345678ijklMNOP',
+    'xoxb-AbCdEfGh12345678ijklMNOP',
+  ];
+  for (const value of values) {
+    const flow = parseFlow(baseFlow({ description: value }));
+    const result = lintArtifact(flow);
+    assert.equal(result.ok, false, `expected ${value} to be rejected`);
+    assert.ok(
+      result.reasons.some((reason) => reason.rule === 'secret-pattern' && reason.path === 'description'),
+      `expected ${value} to trip secret-pattern`,
+    );
+  }
+});
+
+// Finding 4 (IMPORTANT): js-step args were never scanned at all. compile.mjs's
+// redactScriptArgs redacts VALUES only -- key names survive verbatim -- and
+// parseFlow allows arbitrary JSON under args, so it's a real tamper channel
+// pass 2 must cover.
+
+test('an email in a js-step arg key rejects at that key\'s path', () => {
+  const flow = parseFlow(baseFlow({
+    steps: [
+      { op: 'goto', url: '/checkout/{plan}' },
+      {
+        op: 'fill',
+        target: target({
+          locators: [{ kind: 'role', selector: 'internal:role=textbox[name="Customer"i]' }],
+          description: 'Customer',
+          role: 'textbox',
+          name: 'Customer',
+        }),
+        value: '{customer}',
+      },
+      {
+        op: 'click',
+        target: target(),
+        waitAfter: { networkSettled: true },
+        mutating: true,
+      },
+      {
+        op: 'js',
+        sha256: 'a'.repeat(64),
+        args: { 'jane.doe@example.com': '<REDACTED: captured value not stored>' },
+      },
+    ],
+  }));
+  const result = lintArtifact(flow);
+  assert.equal(result.ok, false);
+  assert.ok(result.reasons.some(
+    (reason) => reason.rule === 'email' && reason.path === 'steps[3].args.jane.doe@example.com',
+  ));
+});
+
+test('a key-shaped string in a nested js-step arg value rejects at its exact path', () => {
+  const flow = parseFlow(baseFlow({
+    steps: [
+      { op: 'goto', url: '/checkout/{plan}' },
+      {
+        op: 'fill',
+        target: target({
+          locators: [{ kind: 'role', selector: 'internal:role=textbox[name="Customer"i]' }],
+          description: 'Customer',
+          role: 'textbox',
+          name: 'Customer',
+        }),
+        value: '{customer}',
+      },
+      {
+        op: 'click',
+        target: target(),
+        waitAfter: { networkSettled: true },
+        mutating: true,
+      },
+      {
+        op: 'js',
+        sha256: 'a'.repeat(64),
+        args: { config: { apiKey: 'sk-AbCdEfGh12345678ijklMNOP' } },
+      },
+    ],
+  }));
+  const result = lintArtifact(flow);
+  assert.equal(result.ok, false);
+  assert.ok(result.reasons.some(
+    (reason) => reason.rule === 'secret-pattern' && reason.path === 'steps[3].args.config.apiKey',
+  ));
+});
