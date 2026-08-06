@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {
-  chmod, mkdir, mkdtemp, rm, writeFile,
+  appendFile, chmod, mkdir, mkdtemp, readFile, rm, writeFile,
 } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -9,9 +9,11 @@ import test from 'node:test';
 
 import {
   cleanArray,
+  isReplayRecord,
   isTruncationMarker,
   listTraceSessions,
   readTraceRecords,
+  readTraceRecordsFrom,
 } from '../../lib/flows/trace-reader.mjs';
 
 const fixturesDir = path.resolve(
@@ -240,4 +242,241 @@ test('cleanArray strips a trailing marker and tolerates missing or legacy shapes
     cleanArray({ __truncated__: true, sizeBytes: 5 }),
     { items: [], truncated: true },
   );
+});
+
+// --- readTraceRecordsFrom: byte-offset API (WS3b Task 1) ---
+
+test('readTraceRecordsFrom at offset 0 matches readTraceRecords exactly on the same fixture, plus a full-file endByte/lineCount', async () => {
+  const whole = await readTraceRecords(basicDir);
+  const fromZero = await readTraceRecordsFrom(basicDir, 0);
+
+  assert.deepEqual(
+    { records: fromZero.records, skipped: fromZero.skipped, readable: fromZero.readable },
+    whole,
+  );
+  assert.equal(fromZero.lineCount, 6);
+  const fileBytes = await readFile(path.join(basicDir, 'actions.jsonl'));
+  assert.equal(fromZero.endByte, fileBytes.length);
+});
+
+test('readTraceRecordsFrom resuming from a prior endByte yields exactly the appended records', async (t) => {
+  const dataDir = await tempDataDir();
+  t.after(() => rm(dataDir, { recursive: true, force: true }));
+  const sessionDir = path.join(dataDir, 'trace-1000000000001');
+  await mkdir(sessionDir);
+  const actionsFile = path.join(sessionDir, 'actions.jsonl');
+
+  await writeFile(
+    actionsFile,
+    `${JSON.stringify({ v: 1, seq: 1, tool: 'browser_navigate' })}\n`
+    + `${JSON.stringify({ v: 1, seq: 2, tool: 'browser_snapshot' })}\n`,
+  );
+
+  const first = await readTraceRecordsFrom(sessionDir, 0);
+  assert.equal(first.records.length, 2);
+  assert.equal(first.lineCount, 2);
+  assert.equal(first.readable, true);
+
+  await appendFile(
+    actionsFile,
+    `${JSON.stringify({ v: 1, seq: 3, tool: 'browser_click' })}\n`
+    + `${JSON.stringify({ v: 1, seq: 4, tool: 'browser_fill_form' })}\n`,
+  );
+
+  const second = await readTraceRecordsFrom(sessionDir, first.endByte);
+  assert.equal(second.records.length, 2);
+  assert.deepEqual(second.records.map((record) => record.seq), [3, 4]);
+  assert.equal(second.lineCount, 2);
+  assert.equal(second.skipped, 0);
+  assert.equal(second.readable, true);
+  assert.ok(second.endByte > first.endByte);
+});
+
+test('readTraceRecordsFrom excludes a trailing partial line (no terminating newline) and stops endByte before it; completing the line and resuming from endByte then yields it', async (t) => {
+  const dataDir = await tempDataDir();
+  t.after(() => rm(dataDir, { recursive: true, force: true }));
+  const sessionDir = path.join(dataDir, 'trace-1000000000002');
+  await mkdir(sessionDir);
+  const actionsFile = path.join(sessionDir, 'actions.jsonl');
+
+  const completeLines = `${JSON.stringify({ v: 1, seq: 1, tool: 'browser_navigate' })}\n`
+    + `${JSON.stringify({ v: 1, seq: 2, tool: 'browser_snapshot' })}\n`;
+  const partialLine = '{"v":1,"seq":3,"tool":"browser_clic'; // mid-append, no trailing newline
+  await writeFile(actionsFile, completeLines + partialLine);
+
+  const result = await readTraceRecordsFrom(sessionDir, 0);
+  assert.equal(result.records.length, 2);
+  assert.equal(result.lineCount, 2);
+  assert.equal(result.readable, true);
+  // endByte lands exactly at the byte length of the two complete lines --
+  // the partial line's bytes are neither parsed nor counted.
+  assert.equal(result.endByte, Buffer.byteLength(completeLines, 'utf8'));
+
+  // Complete the partial line (as a real capturing agent would on its next
+  // append) and resume from the previously reported endByte.
+  const restOfLine3 = 'k","params":{"ref":"e9"}}\n';
+  await appendFile(actionsFile, restOfLine3);
+
+  const resumed = await readTraceRecordsFrom(sessionDir, result.endByte);
+  assert.equal(resumed.records.length, 1);
+  assert.equal(resumed.records[0].seq, 3);
+  assert.equal(resumed.records[0].tool, 'browser_click');
+  assert.equal(resumed.lineCount, 1);
+  assert.equal(resumed.endByte, Buffer.byteLength(completeLines + partialLine + restOfLine3, 'utf8'));
+});
+
+test('readTraceRecordsFrom counts a malformed line mid-file toward lineCount and endByte, exactly like readTraceRecords counts it toward skipped', async (t) => {
+  const dataDir = await tempDataDir();
+  t.after(() => rm(dataDir, { recursive: true, force: true }));
+  const sessionDir = path.join(dataDir, 'trace-1000000000003');
+  await mkdir(sessionDir);
+  const actionsFile = path.join(sessionDir, 'actions.jsonl');
+
+  await writeFile(
+    actionsFile,
+    `${JSON.stringify({ v: 1, seq: 1, tool: 'browser_navigate' })}\n`
+    + 'not even close to json {{{\n'
+    + `${JSON.stringify({ v: 1, seq: 3, tool: 'browser_click' })}\n`,
+  );
+
+  const result = await readTraceRecordsFrom(sessionDir, 0);
+  assert.equal(result.records.length, 2);
+  assert.equal(result.skipped, 1);
+  assert.equal(result.lineCount, 3); // skip = consume: the malformed line still counts
+  assert.deepEqual(result.records.map((record) => record.seq), [1, 3]);
+
+  const fileBytes = await readFile(actionsFile);
+  assert.equal(result.endByte, fileBytes.length);
+});
+
+test('readTraceRecordsFrom skips a wrong-version record (v !== 1), counting it toward skipped and lineCount/endByte, same as readTraceRecords', async (t) => {
+  const dataDir = await tempDataDir();
+  t.after(() => rm(dataDir, { recursive: true, force: true }));
+  const sessionDir = path.join(dataDir, 'trace-1000000000004');
+  await mkdir(sessionDir);
+  const actionsFile = path.join(sessionDir, 'actions.jsonl');
+  const content = `${JSON.stringify({ v: 1, seq: 1, tool: 'browser_navigate' })}\n`
+    + `${JSON.stringify({ v: 99, seq: 2, tool: 'browser_click' })}\n`;
+  await writeFile(actionsFile, content);
+
+  const result = await readTraceRecordsFrom(sessionDir, 0);
+  assert.equal(result.records.length, 1);
+  assert.equal(result.records[0].seq, 1);
+  assert.equal(result.skipped, 1);
+  assert.equal(result.lineCount, 2);
+  assert.equal(result.endByte, Buffer.byteLength(content, 'utf8'));
+});
+
+test('readTraceRecordsFrom never throws when actions.jsonl is missing: readable: true, endByte unchanged from the requested offset (no rewind)', async (t) => {
+  const dataDir = await tempDataDir();
+  t.after(() => rm(dataDir, { recursive: true, force: true }));
+  const sessionDir = path.join(dataDir, 'trace-1000000000005');
+  await mkdir(sessionDir);
+
+  const atZero = await readTraceRecordsFrom(sessionDir, 0);
+  assert.deepEqual(atZero, {
+    records: [], skipped: 0, readable: true, endByte: 0, lineCount: 0,
+  });
+
+  // A non-zero resume offset against a still-missing file must not be
+  // treated as new information to rewind from: endByte echoes the
+  // requested offset back unchanged.
+  const atNonZero = await readTraceRecordsFrom(sessionDir, 42);
+  assert.deepEqual(atNonZero, {
+    records: [], skipped: 0, readable: true, endByte: 42, lineCount: 0,
+  });
+});
+
+test('readTraceRecordsFrom never throws when actions.jsonl exists but is unreadable (permissions): readable: false, endByte unchanged', async (t) => {
+  const dataDir = await tempDataDir();
+  t.after(async () => {
+    await chmod(path.join(dataDir, 'trace-1000000000006', 'actions.jsonl'), 0o600).catch(() => {});
+    await rm(dataDir, { recursive: true, force: true });
+  });
+  const sessionDir = path.join(dataDir, 'trace-1000000000006');
+  await mkdir(sessionDir);
+  const actionsFile = path.join(sessionDir, 'actions.jsonl');
+  await writeFile(actionsFile, '{"v":1,"seq":1,"tool":"browser_navigate"}\n');
+  await chmod(actionsFile, 0o000);
+
+  const result = await readTraceRecordsFrom(sessionDir, 7);
+  assert.deepEqual(result, {
+    records: [], skipped: 0, readable: false, endByte: 7, lineCount: 0,
+  });
+});
+
+test('readTraceRecordsFrom resumes correctly across a multibyte UTF-8 record boundary without corrupting content or splitting mid-character', async (t) => {
+  const dataDir = await tempDataDir();
+  t.after(() => rm(dataDir, { recursive: true, force: true }));
+  const sessionDir = path.join(dataDir, 'trace-1000000000007');
+  await mkdir(sessionDir);
+  const actionsFile = path.join(sessionDir, 'actions.jsonl');
+
+  // Each name below is multibyte in UTF-8 (2-, 3-, and 4-byte sequences),
+  // so a resume computed from STRING length rather than BYTE length would
+  // land on the wrong offset and either corrupt or lose the second record.
+  const firstLine = `${JSON.stringify({
+    v: 1, seq: 1, tool: 'browser_fill_form', params: { value: 'café 日本語' },
+  })}\n`;
+  const secondLine = `${JSON.stringify({
+    v: 1, seq: 2, tool: 'browser_click', params: { name: 'Place order 🚀' },
+  })}\n`;
+  await writeFile(actionsFile, firstLine);
+
+  const first = await readTraceRecordsFrom(sessionDir, 0);
+  assert.equal(first.records.length, 1);
+  assert.equal(first.records[0].params.value, 'café 日本語');
+  assert.equal(first.endByte, Buffer.byteLength(firstLine, 'utf8'));
+  // The line's byte length must exceed its string (UTF-16 code unit)
+  // length -- otherwise this test would not actually exercise byte-vs-
+  // string offset arithmetic.
+  assert.ok(first.endByte > firstLine.length);
+
+  await appendFile(actionsFile, secondLine);
+
+  const second = await readTraceRecordsFrom(sessionDir, first.endByte);
+  assert.equal(second.records.length, 1);
+  assert.equal(second.records[0].seq, 2);
+  assert.equal(second.records[0].params.name, 'Place order 🚀');
+  assert.equal(second.endByte, Buffer.byteLength(firstLine + secondLine, 'utf8'));
+});
+
+// --- isReplayRecord: shared predicate (WS3b Task 1) ---
+//
+// Previously three byte-identical copies (lib/flows/sweep.mjs,
+// lib/sites/graph.mjs, lib/sites/inventory.mjs), each independently
+// pinned only through the behavior of their own callers
+// (mineGraphEdges/mineInventory/sweep). This is the first direct pin of
+// the predicate itself, now that it has one shared home.
+
+test('isReplayRecord recognizes a flow-runner replay invocation and rejects everything else, without throwing on hostile input', () => {
+  assert.equal(
+    isReplayRecord({
+      tool: 'browser_run_code_unsafe',
+      params: { filename: '/macros/flow-runner.js', args: { flow: { name: 'checkout' } } },
+    }),
+    true,
+  );
+  // A path prefix before the filename is fine -- only the suffix is checked.
+  assert.equal(
+    isReplayRecord({
+      tool: 'browser_run_code_unsafe',
+      params: { filename: '/some/nested/dir/flow-runner.js' },
+    }),
+    true,
+  );
+
+  assert.equal(isReplayRecord({ tool: 'browser_click', params: {} }), false);
+  assert.equal(
+    isReplayRecord({
+      tool: 'browser_run_code_unsafe',
+      params: { filename: '/macros/page-recon.js' },
+    }),
+    false,
+  );
+  assert.equal(isReplayRecord({ tool: 'browser_run_code_unsafe' }), false);
+  assert.equal(isReplayRecord({ tool: 'browser_run_code_unsafe', params: { filename: 42 } }), false);
+  assert.equal(isReplayRecord({}), false);
+  assert.equal(isReplayRecord(null), false);
+  assert.equal(isReplayRecord(undefined), false);
 });
