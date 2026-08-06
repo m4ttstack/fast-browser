@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { encoderRanker, ENCODER_MIN_MARGIN, ENCODER_MIN_SCORE } from '../../lib/flows/encoder.mjs';
 import {
   applyHeal,
   HEAL_MIN_MARGIN,
@@ -624,6 +625,126 @@ test('proposeHeal returns a Promise end to end when a well-behaved asynchronous 
   const decision = await result;
   assert.ok(decision);
   assert.equal(decision.locator.selector, 'internal:testid=[data-testid="place-order-v2"]');
+});
+
+// ============================================================
+// Fix round 1 (controller ruling, direction b): ranker-supplied
+// acceptance thresholds
+// ============================================================
+
+// Builds a real `encoderRanker` over a stubbed `encoder` whose `embed`
+// returns hand-picked 1-dimensional vectors, indexed by POSITION rather
+// than by text content -- `encoder.mjs`'s own doc comment pins the batch
+// order as `[targetText, candidate0Text, candidate1Text, ...]`, so
+// `texts.map((_, index) => ...)` is both simpler than a text-keyed lookup
+// and exactly matches the real contract (a text-keyed map would also risk
+// key collisions whenever a fixture's target and top candidate happen to
+// render the same string). `cosineSimilarity` is a plain dot product, so a
+// 1-D vector IS its own cosine score against a target vector of `[1]`,
+// letting these tests pin exact score/margin numbers without going through
+// a real normalization step. Target/candidates below carry no `role`
+// field, so `encoderRanker`'s role bonus (Folded Minor 1, tested
+// separately in flows-encoder.test.mjs) never fires here -- these tests
+// are about the threshold gate alone.
+function positionalEncoderRanker(vectorsByPosition) {
+  return encoderRanker({
+    active: true,
+    kind: 'voyage',
+    embed: async (texts) => texts.map((_, index) => vectorsByPosition[index]),
+  });
+}
+
+test('encoder-ranked proposeHeal accepts a heal at cosine 0.8 with a 0.07 margin (clears ENCODER_MIN_SCORE/MARGIN)', async () => {
+  assert.equal(ENCODER_MIN_SCORE, 0.75);
+  assert.equal(ENCODER_MIN_MARGIN, 0.05);
+
+  const flow = baseFlow({ steps: [
+    { op: 'goto', url: '/checkout' },
+    { op: 'click', target: baseTarget({ description: 'Place order', name: 'Place order', role: undefined }) },
+  ] });
+  const candidates = [
+    candidate({ name: 'Place order', testid: 'top-btn', text: 'Place order' }),
+    candidate({ name: 'Almost place order', testid: 'runner-up-btn', text: 'Almost place order' }),
+  ];
+  const payload = payloadFor(flow, 1, candidates);
+
+  // vectors[0] = target, vectors[1] = top candidate (cosine 0.8),
+  // vectors[2] = runner-up (cosine 0.73 -- a 0.07 margin under the top).
+  const ranker = positionalEncoderRanker([[1], [0.8], [0.73]]);
+
+  const decision = await proposeHeal({ flow, payload, ranker });
+  assert.ok(decision, 'a 0.8/0.73 pair (margin 0.07) must clear ENCODER_MIN_SCORE/ENCODER_MIN_MARGIN');
+  assert.equal(decision.score, 0.8);
+  assert.ok(Math.abs(decision.score - decision.runnerUp - 0.07) < 1e-9);
+  assert.equal(decision.locator.selector, 'internal:testid=[data-testid="top-btn"]');
+});
+
+test('encoder-ranked proposeHeal rejects a heal at cosine 0.8 with only a 0.03 margin (below ENCODER_MIN_MARGIN)', async () => {
+  const flow = baseFlow({ steps: [
+    { op: 'goto', url: '/checkout' },
+    { op: 'click', target: baseTarget({ description: 'Place order', name: 'Place order', role: undefined }) },
+  ] });
+  const candidates = [
+    candidate({ name: 'Place order', testid: 'top-btn', text: 'Place order' }),
+    candidate({ name: 'Almost place order', testid: 'runner-up-btn', text: 'Almost place order' }),
+  ];
+  const payload = payloadFor(flow, 1, candidates);
+
+  // vectors[0] = target, vectors[1] = top candidate (cosine 0.8, still
+  // clears ENCODER_MIN_SCORE), vectors[2] = runner-up (cosine 0.77 -- only
+  // a 0.03 margin, below ENCODER_MIN_MARGIN).
+  const ranker = positionalEncoderRanker([[1], [0.8], [0.77]]);
+
+  const decision = await proposeHeal({ flow, payload, ranker });
+  assert.equal(decision, null, 'a 0.03 margin must NOT clear ENCODER_MIN_MARGIN even though the top score clears ENCODER_MIN_SCORE');
+});
+
+test('the threshold source is pinned: a stub ranker\'s own custom minScore/minMargin are honored over both the lexical and encoder defaults', async () => {
+  const flow = baseFlow({ steps: [
+    { op: 'goto', url: '/checkout' },
+    { op: 'click', target: baseTarget({ description: 'Place order', name: 'Place order', role: 'button' }) },
+  ] });
+  const candidates = [candidate({ role: 'button', name: 'Place order', testid: 'place-order-v2', text: 'Place order' })];
+  const payload = payloadFor(flow, 1, candidates);
+
+  // Score 0.8 clears HEAL_MIN_SCORE (0.6) AND ENCODER_MIN_SCORE (0.75), but
+  // a custom minScore of 0.9 on the ranker itself must still reject it --
+  // proving proposeHeal reads the threshold off the ranker, not off either
+  // module's own constants.
+  const strictStub = ({ candidates: given }) => given.map((_, index) => ({ index, score: 0.8 }));
+  strictStub.minScore = 0.9;
+  strictStub.minMargin = 0.5;
+
+  assert.equal(proposeHeal({ flow, payload, ranker: strictStub }), null);
+
+  // The SAME 0.8 score with a lenient custom threshold (below both module
+  // defaults) is accepted -- confirms the custom threshold is genuinely
+  // read both ways, not just capable of rejecting.
+  const lenientStub = ({ candidates: given }) => given.map((_, index) => ({ index, score: 0.8 }));
+  lenientStub.minScore = 0.1;
+  lenientStub.minMargin = 0;
+
+  const decision = proposeHeal({ flow, payload, ranker: lenientStub });
+  assert.ok(decision);
+  assert.equal(decision.score, 0.8);
+});
+
+test('a ranker with no minScore/minMargin properties (the lexical default, or a plain stub) uses HEAL_MIN_SCORE/HEAL_MIN_MARGIN unchanged', () => {
+  const flow = baseFlow({ steps: [
+    { op: 'goto', url: '/checkout' },
+    { op: 'click', target: baseTarget({ description: 'Place order', name: 'Place order', role: 'button' }) },
+  ] });
+  // Score 0.65 clears HEAL_MIN_SCORE (0.6) but a plain stub carries no
+  // threshold overrides, so HEAL_MIN_SCORE/HEAL_MIN_MARGIN apply exactly as
+  // they did before fix round 1.
+  const candidates = [candidate({ role: 'button', name: 'Place order', testid: 'a', text: '' })];
+  const payload = payloadFor(flow, 1, candidates);
+  const plainStub = ({ candidates: given }) => given.map((_, index) => ({ index, score: 0.65 }));
+
+  const decision = proposeHeal({ flow, payload, ranker: plainStub });
+  assert.ok(decision, 'a bare score of 0.65 with no runner-up (margin 0.65) must clear the unmodified lexical thresholds');
+  assert.equal(HEAL_MIN_SCORE, 0.6);
+  assert.equal(HEAL_MIN_MARGIN, 0.2);
 });
 
 // ============================================================

@@ -5,6 +5,8 @@ import {
   clampEmbedText,
   cosineSimilarity,
   createEncoder,
+  ENCODER_MIN_MARGIN,
+  ENCODER_MIN_SCORE,
   encoderRanker,
   MAX_EMBED_TEXT_CHARS,
   MAX_EMBED_TEXTS,
@@ -335,5 +337,104 @@ test('encoderRanker clamps each individual text to MAX_EMBED_TEXT_CHARS characte
 
   for (const text of capturedTexts) {
     assert.ok(text.length <= MAX_EMBED_TEXT_CHARS, `text length ${text.length} exceeds the ${MAX_EMBED_TEXT_CHARS} clamp`);
+  }
+});
+
+// ============================================================
+// Fix round 1 (controller ruling, direction b): ranker-supplied
+// acceptance thresholds
+// ============================================================
+
+test('encoderRanker attaches ENCODER_MIN_SCORE/ENCODER_MIN_MARGIN to its returned function', () => {
+  const encoder = createEncoder({ config: { encoder: 'voyage' }, env: { [VOYAGE_API_KEY_ENV]: 'sk-live' } });
+  const ranker = encoderRanker(encoder);
+  assert.equal(ranker.minScore, ENCODER_MIN_SCORE);
+  assert.equal(ranker.minMargin, ENCODER_MIN_MARGIN);
+  assert.equal(ENCODER_MIN_SCORE, 0.75);
+  assert.equal(ENCODER_MIN_MARGIN, 0.05);
+});
+
+// ============================================================
+// Fix round 1, Folded Minor 1: role bonus
+// ============================================================
+
+// The role-bonus tests build the `encoder` object directly (bypassing
+// `createEncoder`/`fetch` entirely) rather than stubbing `fetch` and
+// letting the real `voyageEmbed` normalize the response: normalization
+// discards MAGNITUDE and keeps only DIRECTION, so a fetch-stubbed vector
+// like `[0.5, 0]` and `[1, 0]` are literally the same vector post-
+// normalization (both point the same direction) -- exactly the trap this
+// file's own `unit-normalized vectors` test elsewhere pins as CORRECT
+// behavior for the real encoder, but wrong for pinning an exact cosine
+// value here. Calling `encoder.embed` directly with pre-chosen numbers
+// sidesteps that: `cosineSimilarity` is a plain dot product, so a
+// 1-dimensional vector `[x]` against a target of `[1]` IS its own cosine
+// score, with no normalization step to fight.
+function directEncoder(vectorsByPosition) {
+  return {
+    active: true,
+    kind: 'voyage',
+    embed: async (texts) => texts.map((_, index) => vectorsByPosition[index]),
+  };
+}
+
+test('encoderRanker adds ROLE_MATCH_BONUS (0.15) on top of cosine for a role-agreeing candidate', async () => {
+  // vectors[0] = target ([1]); vectors[1] = candidate 0 (role matches,
+  // cosine 0.5 + 0.15 bonus = 0.65); vectors[2] = candidate 1 (role does
+  // NOT match, cosine 0.6, no bonus).
+  const ranker = encoderRanker(directEncoder([[1], [0.5], [0.6]]));
+
+  const candidates = [
+    healCandidate({ name: 'role match', role: 'button' }),
+    healCandidate({ name: 'no role match', role: 'link' }),
+  ];
+  const ranked = await ranker({ target: { description: 'target', name: '', role: 'button' }, candidates });
+
+  const byIndex = new Map(ranked.map((entry) => [entry.index, entry.score]));
+  assert.ok(Math.abs(byIndex.get(0) - 0.65) < 1e-9, `expected 0.65, got ${byIndex.get(0)}`);
+  assert.ok(Math.abs(byIndex.get(1) - 0.6) < 1e-9, `expected 0.6, got ${byIndex.get(1)}`);
+  // The role-boosted candidate (0.65) now correctly outranks the higher
+  // raw-cosine one (0.6) it would have lost to without the bonus.
+  assert.deepEqual(ranked.map((entry) => entry.index), [0, 1]);
+});
+
+test('encoderRanker caps a role-boosted score at 1.0', async () => {
+  // vectors[1] = candidate (role matches, cosine 0.95 -- 0.95 + 0.15 would
+  // be 1.10 uncapped).
+  const ranker = encoderRanker(directEncoder([[1], [0.95]]));
+
+  const ranked = await ranker({
+    target: { description: 'target', name: '', role: 'button' },
+    candidates: [healCandidate({ name: 'role match', role: 'button' })],
+  });
+
+  assert.equal(ranked[0].score, 1);
+});
+
+test('encoderRanker never applies the role bonus when the target has no role', async () => {
+  const ranker = encoderRanker(directEncoder([[1], [0.5]]));
+
+  const ranked = await ranker({
+    target: { description: 'target', name: '' }, // no role
+    candidates: [healCandidate({ name: 'has a role', role: 'button' })],
+  });
+
+  assert.ok(Math.abs(ranked[0].score - 0.5) < 1e-9);
+});
+
+test('encoderRanker never applies the role bonus to a clamped-out candidate', async (t) => {
+  stubFetch(t, async (url, init) => {
+    const texts = JSON.parse(init.body).input;
+    return jsonResponse(voyageBody(texts.map(() => [1, 0])));
+  });
+  const encoder = createEncoder({ config: { encoder: 'voyage' }, env: { [VOYAGE_API_KEY_ENV]: 'sk-live' } });
+  const ranker = encoderRanker(encoder);
+
+  const candidates = Array.from({ length: 40 }, (_, i) => healCandidate({ name: `candidate-${i}`, role: 'button' }));
+  const ranked = await ranker({ target: { description: 'target', name: '', role: 'button' }, candidates });
+
+  const clampedOut = ranked.filter((entry) => entry.index >= MAX_EMBED_TEXTS - 1);
+  for (const entry of clampedOut) {
+    assert.equal(entry.score, Number.NEGATIVE_INFINITY, 'a clamped-out candidate must stay at -Infinity, never role-boosted');
   }
 });

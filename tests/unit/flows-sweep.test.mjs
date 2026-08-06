@@ -1456,8 +1456,14 @@ test('sweep forwards its configured ranker down to proposeHeal, overriding the l
     }),
   ]);
 
+  // Fix round 1, Folded Minor 2: async, not sync -- the real production
+  // shape (`encoderRanker`'s returned function) is always async, so
+  // pinning this stub as async is what actually exercises the
+  // Promise-returning `proposeHeal` -> `await`ed `applyReplayRecords` path
+  // end to end through `sweep`, rather than only the synchronous branch a
+  // sync stub would take.
   let rankerInvoked = false;
-  const ranker = () => {
+  const ranker = async () => {
     rankerInvoked = true;
     return [{ index: 0, score: 1 }, { index: 1, score: 0 }];
   };
