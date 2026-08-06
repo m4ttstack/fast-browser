@@ -7,7 +7,7 @@ import path from 'node:path';
 import test from 'node:test';
 
 import { BODY_LIMIT_BYTES, PUSH_MAX_FLOWS } from '../lib/http.mjs';
-import { startTestServer, TEST_TOKEN } from './helpers/server.mjs';
+import { generateSigningKeyPem, startTestServer, TEST_TOKEN } from './helpers/server.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REGISTRY_ROOT = path.dirname(HERE);
@@ -390,6 +390,58 @@ test('boot() rejects a syntactically valid PEM of the wrong key type (RSA instea
     () => boot({ env: { REGISTRY_TOKEN: 'x', REGISTRY_SIGNING_KEY: rsaPrivateKeyPem } }),
     (error) => /REGISTRY_SIGNING_KEY/.test(error.message) && !error.message.includes(rsaPrivateKeyPem),
   );
+});
+
+// SECURITY (WS4b Task 4 review note): a pg connection/init failure's
+// error.message can quote the connection string -- and therefore its
+// password -- verbatim. Before this test existed, boot()'s only failure
+// handling was the server.mjs CLI entrypoint's catch printing
+// `error.message` unconditionally, which would have put DATABASE_URL's
+// password straight into the process's logs on a bad connection string.
+// Uses an unreachable port (1, on localhost) rather than an actually
+// malformed URL, so the failure is a real connection error (fast,
+// ECONNREFUSED) and the redaction is proven against boot()'s real
+// end-to-end failure path, not a synthetic message.
+test('boot() with a DATABASE_URL that fails to connect never echoes the connection string or its password', async () => {
+  const { boot } = await import('../server.mjs');
+  const password = 'sup3rSecretFakePass123';
+  const bogusUrl = `postgres://registryuser:${password}@127.0.0.1:1/registry_test`;
+  await assert.rejects(
+    () => boot({
+      env: {
+        REGISTRY_TOKEN: 'x',
+        REGISTRY_SIGNING_KEY: generateSigningKeyPem(),
+        DATABASE_URL: bogusUrl,
+        PORT: '0',
+      },
+    }),
+    (error) => {
+      assert.ok(!error.message.includes(password), 'failure message must never include the DATABASE_URL password');
+      assert.ok(!error.message.includes(bogusUrl), 'failure message must never include the full DATABASE_URL');
+      assert.match(error.message, /DATABASE_URL/);
+      return true;
+    },
+  );
+});
+
+test('redactConnectionString strips both the whole connection string and its password wherever they appear', async () => {
+  const { redactConnectionString } = await import('../server.mjs');
+  const connectionString = 'postgres://registryuser:sup3rSecretFakePass123@db.example.com:5432/registry';
+
+  assert.equal(
+    redactConnectionString(`connect failed for ${connectionString}`, connectionString),
+    'connect failed for [DATABASE_URL redacted]',
+  );
+  assert.equal(
+    redactConnectionString('password authentication failed for sup3rSecretFakePass123', connectionString),
+    'password authentication failed for ***',
+  );
+  // A message with neither the string nor the password passes through
+  // unchanged -- redaction must never mangle an already-safe message.
+  assert.equal(redactConnectionString('connect ECONNREFUSED 127.0.0.1:1', connectionString), 'connect ECONNREFUSED 127.0.0.1:1');
+  // No connectionString to redact against (e.g. the memory driver never
+  // has a DATABASE_URL) -- passthrough, not a crash.
+  assert.equal(redactConnectionString('some error', undefined), 'some error');
 });
 
 test('a keygen-generated keypair boots a real (spawned) server whose /health serves the derived public key', async () => {

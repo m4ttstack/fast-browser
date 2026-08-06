@@ -34,13 +34,35 @@ function requireEnv(env, name) {
   return value;
 }
 
-// Task 4 seam: the 'pg' driver arrives when DATABASE_URL is present; until
-// then every boot uses the memory store. Keeping this selection in its own
-// function (rather than inlining the check in boot()) is the whole seam --
-// Task 4 only needs createStore('pg', ...) to become real; this function
-// does not change.
+// Task 4 seam: the 'pg' driver is selected when DATABASE_URL is present;
+// otherwise every boot uses the memory store.
 function selectStoreDriver(env) {
   return env.DATABASE_URL ? 'pg' : 'memory';
+}
+
+// SECURITY: some pg connection/init failure paths can quote the
+// connection string -- and therefore its embedded password -- verbatim in
+// error.message. Before Task 4, boot()'s only failure handling was the
+// isMain catch below printing `error.message` unconditionally, which
+// would have leaked DATABASE_URL's password straight to the process's
+// logs on a bad connection string. This strips both the whole
+// connectionString and its password component (if the string is
+// URL-parseable) out of `message` wherever they appear, so a caller can
+// still see a useful diagnostic without ever seeing the secret.
+export function redactConnectionString(message, connectionString) {
+  if (!connectionString || typeof message !== 'string') return message;
+  let redacted = message.split(connectionString).join('[DATABASE_URL redacted]');
+  try {
+    const { password } = new URL(connectionString);
+    if (password) {
+      const decoded = decodeURIComponent(password);
+      redacted = redacted.split(password).join('***').split(decoded).join('***');
+    }
+  } catch {
+    // connectionString did not parse as a URL -- nothing further to strip
+    // beyond the whole-string replacement above.
+  }
+  return redacted;
 }
 
 // Ed25519 only -- signing.mjs's sign()/verify() work with any key
@@ -77,8 +99,20 @@ export async function boot({ env = process.env } = {}) {
   const signingKeyPem = requireEnv(env, 'REGISTRY_SIGNING_KEY');
   const publicKeyPem = derivePublicKeyPem(signingKeyPem);
 
-  const store = await createStore(selectStoreDriver(env));
-  await store.init();
+  const driver = selectStoreDriver(env);
+  let store;
+  try {
+    store = await createStore(driver, { connectionString: env.DATABASE_URL });
+    await store.init();
+  } catch (error) {
+    if (driver !== 'pg') throw error;
+    // See redactConnectionString above -- this is the one place a pg
+    // connection/init failure's message is allowed to surface, and only
+    // after it has had DATABASE_URL's value stripped out of it.
+    throw new RegistryBootError(
+      `failed to initialize the Postgres store from DATABASE_URL: ${redactConnectionString(error.message, env.DATABASE_URL)}`,
+    );
+  }
 
   const listener = createRequestListener({
     token,
@@ -101,7 +135,13 @@ export async function boot({ env = process.env } = {}) {
     store,
     port: server.address().port,
     publicKeyPem,
-    close: () => new Promise((resolveClose) => server.close(resolveClose)),
+    // Closes the HTTP server, then the store if it holds its own
+    // resources to release (pg-store's connection pool; memory-store has
+    // none and simply has no close method to call).
+    close: async () => {
+      await new Promise((resolveClose) => server.close(resolveClose));
+      if (typeof store.close === 'function') await store.close();
+    },
   };
 }
 

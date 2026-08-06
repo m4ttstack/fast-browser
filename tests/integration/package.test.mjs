@@ -136,20 +136,24 @@ async function walk(root, directory = root) {
 // machine and must not pull in a runtime dependency tree. The registry
 // service (registry/package.json, a separate Railway deployable that is
 // never npm-packed from here -- it isn't listed in this package's `files`)
-// gets its own allowance: exactly {} today, and Task 4 of the WS4b plan
-// updates this second pin to exactly { pg } once the Postgres store lands,
-// so a stray dependency added to either package.json fails a test instead
-// of silently drifting.
+// gets its own allowance: exactly { pg } as of WS4b Task 4 (the Postgres +
+// pgvector store's only dependency), so a stray dependency added to
+// either package.json fails a test instead of silently drifting.
 test('root package.json declares no runtime dependencies', async () => {
   const packageJson = JSON.parse(await readFile(path.join(pluginRoot, 'package.json'), 'utf8'));
   assert.deepEqual(packageJson.dependencies, {});
 });
 
-test('registry/package.json declares no runtime dependencies yet (pg arrives in WS4b Task 4)', async () => {
+test('registry/package.json declares exactly pg as a runtime dependency', async () => {
   const registryPackageJson = JSON.parse(
     await readFile(path.join(pluginRoot, 'registry/package.json'), 'utf8'),
   );
-  assert.deepEqual(registryPackageJson.dependencies, {});
+  assert.deepEqual(Object.keys(registryPackageJson.dependencies), ['pg']);
+  assert.match(
+    registryPackageJson.dependencies.pg,
+    /^\^\d+\.\d+\.\d+$/,
+    'pg must be pinned with a caret range',
+  );
 });
 
 test('npm package contains only portable deployable Fast Browser assets', async (t) => {

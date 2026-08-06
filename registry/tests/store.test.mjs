@@ -47,13 +47,22 @@ test('createStore("memory") builds the same store explicitly', async () => {
   assert.deepEqual(await store.health(), { ok: true, count: 0 });
 });
 
-test('createStore throws loudly on an unknown or not-yet-implemented driver', async () => {
-  await assert.rejects(
-    () => createStore('pg'),
-    (error) => error instanceof Error && /pg/.test(error.message),
-  );
+test('createStore throws loudly on an unknown driver', async () => {
   await assert.rejects(
     () => createStore('bogus-driver'),
     (error) => error instanceof Error && /bogus-driver/.test(error.message),
   );
+});
+
+// 'pg' is implemented as of WS4b Task 4 (registry/lib/pg-store.mjs). This
+// only checks that the factory wires the driver name to a shape-complete
+// store -- it must not require a real database: createPgStore() builds a
+// node-postgres Pool lazily (Pool's constructor never connects on its
+// own), so this stays a fast, offline, always-on test. The gated parity
+// suite that actually exercises this store against Postgres lives in
+// registry/tests/pg-store.test.mjs (REGISTRY_TEST_DATABASE_URL).
+test('createStore("pg") builds a shape-complete store without needing a real database', async () => {
+  const store = await createStore('pg', { connectionString: 'postgres://placeholder@127.0.0.1/placeholder' });
+  assert.equal(typeof store.init, 'function');
+  assert.equal(typeof store.search, 'function');
 });

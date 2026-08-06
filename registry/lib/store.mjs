@@ -79,6 +79,34 @@
 //     createdAt, updatedAt,
 //   }
 
+// Search-mode constants shared by every store implementation (memory-store
+// and pg-store), so "top 5" and the dimension-mismatch error type are
+// pinned in exactly one place rather than redefined per store.
+export const TOP_RESULTS = 5;
+
+// Thrown by memory-store's cosineSimilarity on a dimension mismatch rather
+// than silently truncating to the shorter vector -- a silent truncation is
+// exactly the mis-bind failure class the WS4a drift harness measured (a
+// shorter/longer embedding scoring a false 1.0 against an unrelated vector
+// because only their common prefix ever got compared). Two embeddings only
+// belong in the same comparison at all if they came from the same model; a
+// length mismatch means they didn't, and that must fail loudly, not
+// silently degrade the search.
+//
+// pg-store enforces the same "never truncate, always fail loudly" contract
+// structurally instead: its embedding column is a fixed vector(1024), so
+// Postgres itself rejects a wrong-width value (at putCanonical/insert time)
+// or a wrong-width query vector (at search/compare time) with its own loud
+// error naming both dimensions -- pg-store does not raise this class. See
+// registry/lib/pg-store.mjs's top-of-file comment for where that structural
+// parity (same guarantee, different failure shape) is documented.
+export class EmbeddingDimensionMismatchError extends Error {
+  constructor(aLength, bLength) {
+    super(`embedding dimension mismatch: ${aLength} vs ${bLength}`);
+    this.name = 'EmbeddingDimensionMismatchError';
+  }
+}
+
 export const STORE_METHODS = Object.freeze([
   'init',
   'putCanonical',
@@ -103,15 +131,21 @@ export function assertStoreShape(store) {
   return store;
 }
 
-// Selects a store implementation by driver name. 'memory' is the only
-// driver Task 1 ships; 'pg' arrives in Task 4 (Postgres + pgvector,
-// registry/lib/pg-store.mjs). Keeping the factory here (rather than having
-// callers import memory-store.mjs directly) gives server.mjs (Task 3) one
-// place to add the 'pg' branch without touching any other call site.
+// Selects a store implementation by driver name: 'memory' (Task 1) or 'pg'
+// (Task 4, Postgres + pgvector, registry/lib/pg-store.mjs). Keeping the
+// factory here (rather than having callers import memory-store.mjs or
+// pg-store.mjs directly) gives server.mjs's boot() one place to add a
+// driver without touching any other call site -- boot() only ever calls
+// createStore(selectStoreDriver(env), { connectionString: env.DATABASE_URL }).
+// `options.connectionString` is ignored by the memory driver.
 export async function createStore(driver = 'memory', options = {}) {
   if (driver === 'memory') {
     const { createMemoryStore } = await import('./memory-store.mjs');
     return assertStoreShape(createMemoryStore(options));
+  }
+  if (driver === 'pg') {
+    const { createPgStore } = await import('./pg-store.mjs');
+    return assertStoreShape(createPgStore(options));
   }
   throw new Error(`unknown or not-yet-implemented store driver: ${driver}`);
 }

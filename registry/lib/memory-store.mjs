@@ -14,22 +14,13 @@
 // store's own state, and the store's internal state can never be corrupted
 // by a caller mutating a record it already stored.
 
-const TOP_RESULTS = 5;
+import { EmbeddingDimensionMismatchError, TOP_RESULTS } from './store.mjs';
+import { lexicalScore, queryTermsFrom } from './lexical-score.mjs';
 
-// Thrown by cosineSimilarity on a dimension mismatch rather than silently
-// truncating to the shorter vector -- a silent truncation is exactly the
-// mis-bind failure class the WS4a drift harness measured (a shorter/longer
-// embedding scoring a false 1.0 against an unrelated vector because only
-// their common prefix ever got compared). Two embeddings only belong in the
-// same comparison at all if they came from the same model; a length
-// mismatch means they didn't, and that must fail loudly, not silently
-// degrade the search.
-export class EmbeddingDimensionMismatchError extends Error {
-  constructor(aLength, bLength) {
-    super(`embedding dimension mismatch: ${aLength} vs ${bLength}`);
-    this.name = 'EmbeddingDimensionMismatchError';
-  }
-}
+// Re-exported for backward compatibility: existing imports of this error
+// class from memory-store.mjs keep working now that its canonical home is
+// store.mjs (registry/lib/store.mjs), shared with pg-store.mjs.
+export { EmbeddingDimensionMismatchError };
 
 function cosineSimilarity(a, b) {
   if (a.length !== b.length) {
@@ -45,19 +36,6 @@ function cosineSimilarity(a, b) {
   }
   if (normA === 0 || normB === 0) return 0;
   return dot / (Math.sqrt(normA) * Math.sqrt(normB));
-}
-
-// Term-overlap scoring over `name + description`: the fraction of the
-// (lowercased, whitespace-split) query terms that appear as a substring of
-// the haystack. 0 when nothing matches (excluded from results), up to 1
-// when every query term is present. Simple and honest rather than a real
-// text-search ranking -- this is the keyless fallback the plan documents
-// as clearly-marked 'lexical' mode, not a semantic replacement.
-function lexicalScore(record, queryTerms) {
-  if (queryTerms.length === 0) return 0;
-  const haystack = `${record.name} ${record.description}`.toLowerCase();
-  const matched = queryTerms.filter((term) => haystack.includes(term)).length;
-  return matched / queryTerms.length;
 }
 
 function toEmbedding(value) {
@@ -132,7 +110,7 @@ export function createMemoryStore() {
         return { mode: 'semantic', results: scored.slice(0, TOP_RESULTS) };
       }
 
-      const queryTerms = (intentText ?? '').toLowerCase().split(/\s+/).filter(Boolean);
+      const queryTerms = queryTermsFrom(intentText);
       const scored = scoped
         .map((record) => ({ record: structuredClone(record), score: lexicalScore(record, queryTerms) }))
         .filter(({ score }) => score > 0);
