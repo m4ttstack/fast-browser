@@ -397,6 +397,69 @@ async (page, args) => {
   // string, `target.locators` an array, `action === 'click'`) so a
   // malformed or non-click entry is skipped silently rather than failing
   // a replay over quirk data this runner never itself validated.
+  //
+  // --- WS3b Task 6: rung 3 extends to act-phase interception ---
+  // Gap WS3a's acceptance review found: an overlay that only intercepts
+  // pointer events -- never affecting the target's own 'visible' state --
+  // lets BOTH probe passes above hit, so `resolveTarget` never throws and
+  // rung 3 (gated on the probe-miss message alone) never fires; the step's
+  // ACT throws instead, after resolution already succeeded. THE CONSENT
+  // RULING (binding): Playwright dispatches a pointer action -- click,
+  // dblclick, hover, tap, check/uncheck, drag's move-and-down/move-and-up
+  // -- only after its actionability wait succeeds; a timeout DURING that
+  // wait whose message carries the interception signature
+  // (`INTERCEPTION_SIGNATURE` below, pinned against Playwright's own
+  // literal text) proves the action never dispatched -- the identical
+  // consent basis as the probe-miss case above ("the step's own action
+  // never fired"), so rung 3 eligibility extends to act-phase failures
+  // matching that signature ONLY. Every other budget is unchanged:
+  // probe-miss and act-interception SHARE one quirk attempt per step,
+  // never two -- structurally guaranteed below, since a step's FIRST
+  // failure is exactly one throw, either a locator miss or an act throw,
+  // never both, and the act-interception branch never re-invokes the
+  // step's full walk the way the probe-miss branch does -- click-only
+  // (the quirk's own action, unchanged), never re-clicked, exactly one
+  // post-quirk act. Because the FIRST act provably never dispatched, the
+  // post-quirk act is the step's single EFFECTIVE act, not a second one --
+  // the ACT-at-most-once-per-consent-basis invariant holds. An act failure
+  // with any OTHER message (navigation, detached, "Target closed",
+  // anything not matching the signature) stays ineligible: there is no
+  // proof that failure's action didn't fire, so recovering it would risk a
+  // double-mutate.
+  //
+  // Playwright's own hit-target/interception check (confirmed against the
+  // vendored playwright-core actionability implementation) runs ONLY for
+  // the pointer-dispatch path -- click/dblclick/hover/tap/check/uncheck/
+  // drag call `setupHitTargetInterceptor`/`_checkFrameIsHitTarget`; `fill`
+  // and `selectOption` wait on visible/enabled/editable (or
+  // visible/enabled) only and can never organically throw this exact
+  // message. This runner's own gate below is nonetheless the MESSAGE
+  // alone, never `step.op` -- see `resolvedForAct`/`reattemptAct` below --
+  // so it recovers correctly regardless of which op a message like this is
+  // ever observed from; a fill-op test in `flows-runner-source.test.mjs`
+  // exercises this generality directly rather than assuming it.
+  //
+  // On a second-act failure (any error) or no quirk dismissed, the payload
+  // carries the step's ORIGINAL act error (the interception message), not
+  // the second attempt's -- deliberately different from the probe-miss
+  // branch above, which reports whatever the post-quirk PASS newly threw.
+  // There, the second pass is a fresh diagnosis (a brand-new locator
+  // walk); here, the interception message is already the most legible
+  // diagnosis available, and whatever the post-quirk act attempt throws
+  // (the target going stale, an unrelated failure) is strictly less
+  // provable, so it is discarded rather than reported.
+  //
+  // Reuse-vs-re-resolve: the post-quirk act reuses the SAME `Locator`
+  // `runStep` already resolved just before the first act threw, rather
+  // than re-resolving through `resolveEscalated`. A Playwright `Locator`
+  // (unlike an `ElementHandle`) is a lazy, selector-based reference that
+  // re-queries the live DOM on every action call -- it cannot go "stale"
+  // the way a cached element handle can, so a second `.click()` (or
+  // `.fill()`, etc.) on the same `Locator` is exactly as fresh as
+  // re-resolving from scratch would be, without spending a second probe or
+  // recording a spurious `locatorFallbacks` entry for a resolution that
+  // never actually had any trouble -- only the act was blocked.
+  const INTERCEPTION_SIGNATURE = /intercepts pointer events/;
   const rawQuirks = Array.isArray(input.quirks) ? input.quirks : [];
   const quirks = rawQuirks.filter((quirk) => (
     quirk
@@ -615,6 +678,19 @@ async (page, args) => {
     const result = Object.create(null);
     let extracted = false;
 
+    // WS3b Task 6: captures the Locator(s) the CURRENT step's action needs,
+    // set by `runStep` immediately before invoking that action -- read only
+    // by `reattemptAct` below, and only when the act-interception branch in
+    // the step catch below decides a post-quirk act re-attempt is eligible
+    // (see the extended rung-3 doc comment above `dismissInterrupt`). Reset
+    // to null at the top of every `runStep` call (the ordinary run, and the
+    // WS3a post-quirk PROBE-miss pass, which never reads it) so a step
+    // whose action never reaches a case that sets it (goto/wait/expect/
+    // extract/upload) simply has no captured target -- exactly what makes
+    // act-phase recovery correctly ineligible for those ops even if some
+    // future error text happened to match the interception signature.
+    let resolvedForAct = null;
+
     // The whole per-op switch, extracted so WS3a Task 3's post-quirk pass
     // can run it a second time for the SAME step without duplicating every
     // case. It always calls `resolveTarget` by name, never a passed-in
@@ -624,6 +700,7 @@ async (page, args) => {
     // only ever reached from the catch below, and only after the FIRST
     // run's target resolution -- never its action -- has thrown.
     const runStep = async (step, index) => {
+      resolvedForAct = null;
       switch (step && step.op) {
         case 'goto': {
           await page.goto(`${origin}${template(step.url)}`);
@@ -632,22 +709,28 @@ async (page, args) => {
         }
         case 'click': {
           const locator = await resolveTarget(step.target, index);
+          resolvedForAct = { op: 'click', locator };
           await locator.click();
           break;
         }
         case 'fill': {
           const locator = await resolveTarget(step.target, index);
-          await locator.fill(template(step.value));
+          const value = template(step.value);
+          resolvedForAct = { op: 'fill', locator, value };
+          await locator.fill(value);
           break;
         }
         case 'select': {
           const locator = await resolveTarget(step.target, index);
-          await locator.selectOption(template(step.value));
+          const value = template(step.value);
+          resolvedForAct = { op: 'select', locator, value };
+          await locator.selectOption(value);
           break;
         }
         case 'press': {
           if (step.target) {
             const locator = await resolveTarget(step.target, index);
+            resolvedForAct = { op: 'press', locator, key: step.key };
             await locator.press(step.key);
           } else {
             await page.keyboard.press(step.key);
@@ -656,12 +739,14 @@ async (page, args) => {
         }
         case 'hover': {
           const locator = await resolveTarget(step.target, index);
+          resolvedForAct = { op: 'hover', locator };
           await locator.hover();
           break;
         }
         case 'drag': {
           const source = await resolveTarget(step.target, index, undefined, 'source');
           const destination = await resolveTarget(step.to, index, undefined, 'dest');
+          resolvedForAct = { op: 'drag', source, destination };
           await source.dragTo(destination);
           break;
         }
@@ -707,6 +792,33 @@ async (page, args) => {
       }
     };
 
+    // WS3b Task 6: re-invokes ONLY the action half of the step that just
+    // threw an interception timeout, against the SAME Locator(s) `runStep`
+    // already resolved -- never `resolveTarget` again (see the extended
+    // rung-3 doc comment above `dismissInterrupt` for why reuse is correct
+    // here). `resolvedForAct` is null for any op this mechanism does not
+    // cover (goto/wait/expect/extract/upload -- none of which can
+    // organically throw the interception message; see the same doc
+    // comment), so the `default` throw below is a defensive backstop, not
+    // something the eligibility check at the call site is expected to
+    // reach: that check requires `resolvedForAct` truthy first.
+    const reattemptAct = () => {
+      if (!resolvedForAct) {
+        throw new Error('no resolved target available for a post-quirk act re-attempt');
+      }
+      switch (resolvedForAct.op) {
+        case 'click': return resolvedForAct.locator.click();
+        case 'fill': return resolvedForAct.locator.fill(resolvedForAct.value);
+        case 'select': return resolvedForAct.locator.selectOption(resolvedForAct.value);
+        case 'press': return resolvedForAct.locator.press(resolvedForAct.key);
+        case 'hover': return resolvedForAct.locator.hover();
+        case 'drag': return resolvedForAct.source.dragTo(resolvedForAct.destination);
+        default: {
+          throw new Error(`unsupported step op for a post-quirk act re-attempt: ${resolvedForAct.op}`);
+        }
+      }
+    };
+
     for (let index = startIndex; index < steps.length; index += 1) {
       const step = steps[index];
       try {
@@ -714,14 +826,19 @@ async (page, args) => {
       } catch (error) {
         const message = String(error && error.message ? error.message : error);
 
-        // --- WS3a Task 3: one interrupt-recovery pass before failing ---
-        // Only a locator miss is eligible (never an action failure after
-        // resolution, never args/js/navigation) -- it is the one failure
-        // that proves the step's own action never fired (see the doc
-        // comment above `dismissInterrupt`). `quirks` empty (rung
-        // disabled) skips this whole block, and `quirkAttempted` starts
-        // fresh on every step, so an earlier step's attempt (successful or
-        // not) never affects a later one.
+        // --- WS3a Task 3 / WS3b Task 6: one interrupt-recovery pass before
+        // failing --- Eligible on either of two signatures, mutually
+        // exclusive by construction (a step's first failure is exactly one
+        // throw, never both): a locator miss (WS3a -- resolution itself
+        // never got there) or an act-phase interception timeout (WS3b Task
+        // 6 -- resolution succeeded but the act never dispatched; see the
+        // extended doc comment above `dismissInterrupt`). Both share the
+        // same per-step budget below: `quirks` empty (rung disabled) skips
+        // this whole block either way, and `quirkAttempted`/`recovered`/
+        // `finalMessage` start fresh on every step, so an earlier step's
+        // attempt (successful or not) never affects a later one, and this
+        // step's own FIRST failure -- whichever branch it takes -- is the
+        // only chance it gets.
         let quirkAttempted = null;
         let recovered = false;
         let finalMessage = message;
@@ -760,6 +877,35 @@ async (page, args) => {
               );
             } finally {
               forcedEscalatedOnly = false;
+            }
+          }
+        } else if (INTERCEPTION_SIGNATURE.test(message) && resolvedForAct && quirks.length > 0) {
+          // `resolvedForAct` truthy is the "the target was already resolved
+          // pre-act" precondition from the consent ruling -- an op
+          // `reattemptAct` does not cover (see its own doc comment) never
+          // reaches here even if some future error text happened to match
+          // the signature.
+          let dismissedQuirk = null;
+          try {
+            dismissedQuirk = await dismissInterrupt();
+          } catch {
+            dismissedQuirk = null;
+          }
+          if (dismissedQuirk !== null) {
+            quirkAttempted = dismissedQuirk;
+            try {
+              await reattemptAct();
+              recovered = true;
+            } catch {
+              // Consent ruling: the payload keeps the ORIGINAL interception
+              // message -- `finalMessage` stays `message`, never
+              // overwritten here, regardless of what the post-quirk act
+              // itself throws. Deliberately different from the probe-miss
+              // branch above (which DOES overwrite `finalMessage` with the
+              // post-quirk PASS's own throw): there, the second pass is a
+              // fresh diagnosis; here, the interception message is already
+              // the most legible diagnosis available, and whatever this
+              // post-quirk act attempt throws is strictly less provable.
             }
           }
         }

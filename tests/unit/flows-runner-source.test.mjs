@@ -1209,6 +1209,361 @@ test('flow-runner.js degrades a quirk with a malformed locator element to no dis
   );
 });
 
+// --- WS3b Task 6: rung 3 extends to act-phase interception ---
+// WS3a's rung 3 (above) only fires on a LOCATOR miss -- an overlay that
+// merely intercepts pointer events, never affecting the target's own
+// 'visible' state, lets both probe passes hit, so `resolveTarget` never
+// throws and the step's ACT throws instead, after resolution already
+// succeeded. These tests pin the extension: the step's ACT throwing a
+// message matching Playwright's own pointer-interception signature
+// (`/intercepts pointer events/`, verified against the vendored
+// playwright-core actionability implementation -- see the flow-runner doc
+// comment) is eligible for the identical one-quirk-per-step budget, with
+// the post-quirk pass re-attempting ONLY the action against the
+// already-resolved target rather than re-walking locators.
+
+test("flow-runner.js recovers a click that throws Playwright's pointer-interception timeout via the matching quirk, succeeding on the second act attempt with no quirkAttempted key on success (WS3b Task 6)", async () => {
+  // The step's own locator probe succeeds on the FIRST try (the target is
+  // visible -- only the click itself is blocked), proving this is genuinely
+  // an act-phase recovery, not a repeat of the WS3a locator-miss path. The
+  // step's `click` throws the interception message on its first call only;
+  // its second call (the post-quirk pass) must land on the SAME resolved
+  // Locator object, not a freshly re-resolved one -- `stepClickCount`
+  // reaching exactly 2 on ONE stub object proves the reuse.
+  const source = await readSource();
+  const sandbox = {};
+  vm.createContext(sandbox);
+  const script = new vm.Script(`(${source})`);
+  const macro = script.runInContext(sandbox);
+
+  const stepSelector = 'role=button[name="Buy now"]';
+  const quirkSelector = '#cookie-accept';
+  let stepClickCount = 0;
+  let quirkClickCount = 0;
+  const stubPage = {
+    url: () => 'http://x/checkout',
+    on: () => {},
+    off: () => {},
+    locator: (selector) => {
+      if (selector === quirkSelector) {
+        return {
+          waitFor: async () => {},
+          click: async () => { quirkClickCount += 1; },
+        };
+      }
+      return {
+        waitFor: async () => {},
+        click: async () => {
+          stepClickCount += 1;
+          if (stepClickCount === 1) {
+            throw new Error('<div id="cookie-banner"> intercepts pointer events');
+          }
+        },
+      };
+    },
+  };
+
+  const flow = {
+    schemaVersion: 1,
+    name: 'act-interception-recovery-success',
+    steps: [
+      { op: 'click', target: { locators: [{ kind: 'role', selector: stepSelector }] } },
+    ],
+  };
+  const quirks = [
+    {
+      name: 'cookie-banner',
+      urlPattern: null,
+      target: { locators: [{ kind: 'css', selector: quirkSelector }] },
+      action: 'click',
+    },
+  ];
+
+  const result = await macro(stubPage, { flow, args: {}, quirks });
+  assert.equal(result.ok, true);
+  assert.equal(stepClickCount, 2, 'the step action must be re-attempted exactly once, on the same resolved target, after the dismissal');
+  assert.equal(quirkClickCount, 1, 'the quirk must be clicked exactly once');
+  assert.equal(Object.prototype.hasOwnProperty.call(result, 'quirkAttempted'), false, 'quirkAttempted must never appear on a success payload');
+  // No locatorFallbacks entry either: the post-quirk act reuses the already
+  // -resolved Locator rather than running a second, escalated probe pass.
+  const locatorFallbacks = JSON.parse(JSON.stringify(result.locatorFallbacks));
+  assert.deepEqual(locatorFallbacks, []);
+});
+
+test("flow-runner.js keeps the step's ORIGINAL interception error (not the second act's) when the post-quirk act attempt fails too, still recording quirkAttempted and no candidates (WS3b Task 6)", async () => {
+  // The second act attempt throws a DIFFERENT message ('Target closed')
+  // than the first (the interception signature) -- proving the payload
+  // reports the FIRST, most-legible diagnosis, not whatever the second act
+  // attempt happened to throw. This is the documented divergence from the
+  // WS3a probe-miss branch, which reports the post-quirk PASS's own fresh
+  // throw.
+  const source = await readSource();
+  const sandbox = {};
+  vm.createContext(sandbox);
+  const script = new vm.Script(`(${source})`);
+  const macro = script.runInContext(sandbox);
+
+  const stepSelector = 'role=button[name="Buy now"]';
+  const quirkSelector = '#cookie-accept';
+  let stepClickCount = 0;
+  const stubPage = {
+    url: () => 'http://x/checkout',
+    on: () => {},
+    off: () => {},
+    locator: (selector) => {
+      if (selector === quirkSelector) {
+        return { waitFor: async () => {}, click: async () => {} };
+      }
+      if (typeof selector === 'string' && selector.indexOf(',') >= 0) {
+        return { all: async () => [] };
+      }
+      return {
+        waitFor: async () => {},
+        click: async () => {
+          stepClickCount += 1;
+          if (stepClickCount === 1) {
+            throw new Error('<div id="cookie-banner"> intercepts pointer events');
+          }
+          throw new Error('Target closed');
+        },
+      };
+    },
+  };
+
+  const flow = {
+    schemaVersion: 1,
+    name: 'act-interception-recovery-second-act-fails',
+    steps: [
+      { op: 'click', target: { locators: [{ kind: 'role', selector: stepSelector }] } },
+    ],
+  };
+  const quirks = [
+    {
+      name: 'cookie-banner',
+      urlPattern: null,
+      target: { locators: [{ kind: 'css', selector: quirkSelector }] },
+      action: 'click',
+    },
+  ];
+
+  await assert.rejects(
+    () => macro(stubPage, { flow, args: {}, quirks }),
+    (error) => {
+      const payload = JSON.parse(error.message.slice('FLOW_RUNNER_FAILURE: '.length));
+      assert.equal(payload.failedStep, 0);
+      assert.equal(
+        payload.error,
+        '<div id="cookie-banner"> intercepts pointer events',
+        "must keep the ORIGINAL interception message, not the second act's \"Target closed\"",
+      );
+      assert.equal(payload.quirkAttempted, 'cookie-banner');
+      assert.equal(Object.prototype.hasOwnProperty.call(payload, 'candidates'), false, 'an interception failure never carries candidates -- it never matches the locator-miss message that gates enrichment');
+      return true;
+    },
+  );
+  assert.equal(stepClickCount, 2, 'exactly one post-quirk act attempt, no more');
+});
+
+test("flow-runner.js never probes a quirk for a NON-interception act failure, failing immediately with the original error (WS3b Task 6)", async () => {
+  // 'Target closed' does not match the interception signature -- there is
+  // no proof the action never fired, so rung 3 must stay ineligible: the
+  // quirk's own locator must never even be probed.
+  const source = await readSource();
+  const sandbox = {};
+  vm.createContext(sandbox);
+  const script = new vm.Script(`(${source})`);
+  const macro = script.runInContext(sandbox);
+
+  const stepSelector = 'role=button[name="Buy now"]';
+  const quirkSelector = '#cookie-accept';
+  let quirkLocatorCalls = 0;
+  const stubPage = {
+    url: () => 'http://x/checkout',
+    on: () => {},
+    off: () => {},
+    locator: (selector) => {
+      if (selector === quirkSelector) {
+        quirkLocatorCalls += 1;
+        return { waitFor: async () => {}, click: async () => {} };
+      }
+      return {
+        waitFor: async () => {},
+        click: async () => {
+          throw new Error('Target closed');
+        },
+      };
+    },
+  };
+
+  const flow = {
+    schemaVersion: 1,
+    name: 'act-non-interception-failure',
+    steps: [
+      { op: 'click', target: { locators: [{ kind: 'role', selector: stepSelector }] } },
+    ],
+  };
+  const quirks = [
+    {
+      name: 'cookie-banner',
+      urlPattern: null,
+      target: { locators: [{ kind: 'css', selector: quirkSelector }] },
+      action: 'click',
+    },
+  ];
+
+  await assert.rejects(
+    () => macro(stubPage, { flow, args: {}, quirks }),
+    (error) => {
+      const payload = JSON.parse(error.message.slice('FLOW_RUNNER_FAILURE: '.length));
+      assert.equal(payload.error, 'Target closed');
+      assert.equal(Object.prototype.hasOwnProperty.call(payload, 'quirkAttempted'), false);
+      return true;
+    },
+  );
+  assert.equal(quirkLocatorCalls, 0, 'a non-interception act failure must never probe the quirk target at all');
+});
+
+test('flow-runner.js does not attempt a second quirk dismissal at act time when the step already spent its budget dismissing during the probe phase (WS3b Task 6, shared budget)', async () => {
+  // Construct: the step's locator MISSES until the quirk is dismissed
+  // (WS3a's existing probe-miss recovery fires first), the post-quirk PROBE
+  // then succeeds, but the post-quirk ACT itself throws the interception
+  // signature. The shared per-step budget means this must NOT trigger a
+  // second, independent quirk-dismissal attempt -- the step simply fails
+  // with the interception message and the ONE quirkAttempted already spent.
+  const source = await readSource();
+  const sandbox = {};
+  vm.createContext(sandbox);
+  const script = new vm.Script(`(${source})`);
+  const macro = script.runInContext(sandbox);
+
+  const stepSelector = 'role=button[name="Buy now"]';
+  const quirkSelector = '#cookie-accept';
+  let dismissed = false;
+  let quirkClickCount = 0;
+  let stepClickCount = 0;
+  const stubPage = {
+    url: () => 'http://x/checkout',
+    on: () => {},
+    off: () => {},
+    locator: (selector) => {
+      if (selector === quirkSelector) {
+        return {
+          waitFor: async () => {},
+          click: async () => {
+            quirkClickCount += 1;
+            dismissed = true;
+          },
+        };
+      }
+      if (typeof selector === 'string' && selector.indexOf(',') >= 0) {
+        return { all: async () => [] };
+      }
+      return {
+        waitFor: async () => {
+          if (!dismissed) throw new Error('not found');
+        },
+        click: async () => {
+          stepClickCount += 1;
+          throw new Error('<div id="cookie-banner"> intercepts pointer events');
+        },
+      };
+    },
+  };
+
+  const flow = {
+    schemaVersion: 1,
+    name: 'budget-shared-probe-then-act',
+    steps: [
+      { op: 'click', target: { locators: [{ kind: 'role', selector: stepSelector }] } },
+    ],
+  };
+  const quirks = [
+    {
+      name: 'cookie-banner',
+      urlPattern: null,
+      target: { locators: [{ kind: 'css', selector: quirkSelector }] },
+      action: 'click',
+    },
+  ];
+
+  await assert.rejects(
+    () => macro(stubPage, { flow, args: {}, quirks }),
+    (error) => {
+      const payload = JSON.parse(error.message.slice('FLOW_RUNNER_FAILURE: '.length));
+      assert.equal(payload.quirkAttempted, 'cookie-banner');
+      assert.equal(payload.error, '<div id="cookie-banner"> intercepts pointer events');
+      assert.equal(Object.prototype.hasOwnProperty.call(payload, 'candidates'), false);
+      return true;
+    },
+  );
+  assert.equal(quirkClickCount, 1, 'the quirk must be dismissed only once total -- the shared budget, not attempted again at act time');
+  assert.equal(stepClickCount, 1, "the step's act only runs once, during the post-quirk pass -- no independent second attempt follows its own failure");
+});
+
+test("flow-runner.js recovers a fill step's act-phase interception the same way as click -- the recovery gate is the error message, not step.op (WS3b Task 6)", async () => {
+  // Playwright's own actionability implementation only performs the
+  // hit-target/interception check for pointer-dispatching actions (click,
+  // dblclick, hover, tap, check/uncheck, drag); `fill` waits on
+  // visible/enabled/editable only and cannot organically throw this exact
+  // message in real Playwright (verified against the vendored
+  // playwright-core actionability source -- see the flow-runner doc
+  // comment). This test still stubs `fill` throwing it, because the
+  // requirement under test is that THIS RUNNER's own eligibility gate is
+  // the error message alone, never `step.op` -- so it recovers correctly
+  // regardless of which op a message like this is ever observed from.
+  const source = await readSource();
+  const sandbox = {};
+  vm.createContext(sandbox);
+  const script = new vm.Script(`(${source})`);
+  const macro = script.runInContext(sandbox);
+
+  const stepSelector = 'role=textbox[name="Promo code"]';
+  const quirkSelector = '#cookie-accept';
+  let stepFillCount = 0;
+  let fillValueSeen = null;
+  const stubPage = {
+    url: () => 'http://x/checkout',
+    on: () => {},
+    off: () => {},
+    locator: (selector) => {
+      if (selector === quirkSelector) {
+        return { waitFor: async () => {}, click: async () => {} };
+      }
+      return {
+        waitFor: async () => {},
+        fill: async (value) => {
+          stepFillCount += 1;
+          fillValueSeen = value;
+          if (stepFillCount === 1) {
+            throw new Error('<div id="cookie-banner"> intercepts pointer events');
+          }
+        },
+      };
+    },
+  };
+
+  const flow = {
+    schemaVersion: 1,
+    name: 'act-interception-recovery-fill',
+    steps: [
+      { op: 'fill', target: { locators: [{ kind: 'role', selector: stepSelector }] }, value: 'SAVE10' },
+    ],
+  };
+  const quirks = [
+    {
+      name: 'cookie-banner',
+      urlPattern: null,
+      target: { locators: [{ kind: 'css', selector: quirkSelector }] },
+      action: 'click',
+    },
+  ];
+
+  const result = await macro(stubPage, { flow, args: {}, quirks });
+  assert.equal(result.ok, true);
+  assert.equal(stepFillCount, 2, 'the fill action must be re-attempted exactly once after the dismissal');
+  assert.equal(fillValueSeen, 'SAVE10');
+});
+
 // --- WS3b Task 5: implicit-role derivation (candidate collection) ---
 // Today `role` on a collected candidate comes only from the raw `role`
 // ATTRIBUTE, so a plain `<button>Place order</button>` (no `role`, no
