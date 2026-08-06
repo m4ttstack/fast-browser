@@ -40,6 +40,7 @@
     "test:flows": "node --test tests/e2e/flows.test.mjs",
     "test:sites": "node --test tests/e2e/sites.test.mjs",
     "test:healing": "node --test tests/e2e/healing.test.mjs",
+    "test:drift": "node --test tests/e2e/drift-harness.test.mjs",
     "test:host": "node --test tests/e2e/host-parity.test.mjs",
     "test:simultaneous": "node --test tests/e2e/simultaneous.test.mjs",
     "test:annotate": "node --test tests/e2e/annotate.test.mjs",
