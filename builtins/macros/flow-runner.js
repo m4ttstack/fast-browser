@@ -282,6 +282,50 @@ async (page, args) => {
     return text.length > CANDIDATE_STRING_CAP ? text.slice(0, CANDIDATE_STRING_CAP) : text;
   };
 
+  // WS3b Task 5: when an element has no `role` ATTRIBUTE, derive one from
+  // its tag instead of collecting bare-text-only -- heal synthesis skips
+  // text-only candidates, so a plain `<button>Place order</button>` (no
+  // `role`, no `aria-label`) could never heal before this. Exactly the
+  // Scope ruling's tag map, nothing more (no heading/list/img -- only
+  // action targets heal): `button` -> `button`; `a` WITH `href` -> `link`
+  // (an `a` without `href` gets no derived role); `select` -> `combobox`;
+  // `input[type=checkbox]` -> `checkbox`; `input[type=radio]` -> `radio`;
+  // `input[type=button|submit]` -> `button`; any other `input` ->
+  // `textbox`. An explicit `role` attribute always wins -- this is only
+  // ever consulted once the caller has already confirmed one is absent.
+  //
+  // A `Locator` from `.all()` carries no tagName of its own to read
+  // client-side (unlike an `ElementHandle`'s cached remote object, it is a
+  // lazy page-side reference that re-resolves on every call), so getting it
+  // at all costs one more page round trip no matter what -- there is no
+  // way to avoid that round trip entirely. What IS avoidable: paying it at
+  // all when it is not needed (an explicit `role` already answers the
+  // question -- see the call site below, which only invokes this when
+  // `role` read `null`), and paying it more than once per element -- this
+  // is a SINGLE bounded `evaluate` call (`{ timeout: 1000 }`, matching
+  // every other read in this function) returning tagName, `type`, and
+  // `href` presence together, rather than three separate round trips for
+  // the same element.
+  const deriveImplicitRole = async (element) => {
+    const info = await element.evaluate((el) => ({
+      tagName: el.tagName,
+      type: el.getAttribute('type'),
+      hasHref: el.hasAttribute('href'),
+    }), undefined, { timeout: 1000 });
+    const tag = info && typeof info.tagName === 'string' ? info.tagName.toUpperCase() : '';
+    if (tag === 'BUTTON') return 'button';
+    if (tag === 'A') return info.hasHref ? 'link' : null;
+    if (tag === 'SELECT') return 'combobox';
+    if (tag === 'INPUT') {
+      const type = info && typeof info.type === 'string' ? info.type.toLowerCase() : '';
+      if (type === 'checkbox') return 'checkbox';
+      if (type === 'radio') return 'radio';
+      if (type === 'button' || type === 'submit') return 'button';
+      return 'textbox';
+    }
+    return null;
+  };
+
   // `.all()` snapshots the compound scan's match list in one call; only the
   // first MAX_CANDIDATES elements are ever touched, so a page with
   // hundreds of matches costs the same as one with twelve. Left fully
@@ -306,8 +350,9 @@ async (page, args) => {
         element.getAttribute('data-testid', { timeout: 1000 }),
         element.innerText({ timeout: 1000 }),
       ]);
+      const resolvedRole = role !== null ? role : await deriveImplicitRole(element);
       candidates.push({
-        role: clampCandidateString(role),
+        role: clampCandidateString(resolvedRole),
         name: clampCandidateString(name),
         testid: clampCandidateString(testid),
         text: clampCandidateString(text),
@@ -378,6 +423,11 @@ async (page, args) => {
     const path = cut === -1 ? rest : rest.slice(0, cut);
     return path.length > 0 ? path : '/';
   };
+  // `urlPattern: undefined` (the key absent entirely rather than set to
+  // `null`) is deliberately NOT special-cased alongside `null` above: it
+  // falls through to the strict `===` comparison, which a real path string
+  // can never equal, so a malformed quirk missing the key simply never
+  // matches -- fail-closed by design.
   const quirkMatchesUrl = (quirk) => (
     quirk.urlPattern === null ? true : quirk.urlPattern === pathOf(page.url())
   );
@@ -690,7 +740,15 @@ async (page, args) => {
           } catch {
             dismissedQuirk = null;
           }
-          if (dismissedQuirk) {
+          // `!== null`, not a truthiness check: `dismissInterrupt` returns
+          // the clicked quirk's `name`, and a quirk named '' (falsy, but a
+          // real string a caller embedding `quirks` directly could still
+          // supply -- the store's own kebab-case validation would never
+          // persist one, but this runner does not re-derive that guardrail)
+          // was clicked-but-unreported under a truthiness check, silently
+          // dropping the step's post-quirk pass for a dismissal that DID
+          // happen (WS3a deferral, fixed here for correctness).
+          if (dismissedQuirk !== null) {
             quirkAttempted = dismissedQuirk;
             forcedEscalatedOnly = true;
             try {
@@ -722,8 +780,11 @@ async (page, args) => {
           // dismissal was tried, not that the miss itself was (once
           // again) a locator miss -- the post-quirk pass's ACTION can
           // still throw something else, and that failure still deserves
-          // the note.
-          if (quirkAttempted) shape.quirkAttempted = quirkAttempted;
+          // the note. `!== null`, not truthiness, for the same reason as
+          // the `dismissedQuirk` check above: `quirkAttempted` carries the
+          // same possibly-empty-string quirk name, and this is the site
+          // that would actually drop it from the payload.
+          if (quirkAttempted !== null) shape.quirkAttempted = quirkAttempted;
           // Gated on the exact message `resolveTarget`'s own rung-2 miss
           // throws above -- not "any step failure" -- so an action that
           // throws AFTER its target already resolved (or any other failure

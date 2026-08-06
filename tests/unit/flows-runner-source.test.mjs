@@ -290,6 +290,14 @@ test('flow-runner.js collects up to 12 bounded, clamped candidates on a locator-
         return null;
       },
       innerText: async () => (i === 0 ? LONG_TEXT : `text-${i}`),
+      // WS3b Task 5: element 0 carries an explicit `role` attribute above,
+      // so implicit-role derivation never reads this element's tag (an
+      // explicit attribute always wins -- see the derivation tests below).
+      // Elements 1+ have no `role` attribute, so derivation DOES run for
+      // them; `DIV` is not in the Scope ruling's tag map, so it derives no
+      // role, keeping this test's existing `role: ''` assertion on element 1
+      // intact.
+      evaluate: async () => ({ tagName: 'DIV', type: null, hasHref: false }),
     });
   }
 
@@ -1196,6 +1204,301 @@ test('flow-runner.js degrades a quirk with a malformed locator element to no dis
       assert.equal(payload.failedStep, 0);
       assert.equal(payload.error, 'no locator candidate matched', 'the ORIGINAL error, not a raw TypeError from the malformed quirk element');
       assert.equal(Object.prototype.hasOwnProperty.call(payload, 'quirkAttempted'), false);
+      return true;
+    },
+  );
+});
+
+// --- WS3b Task 5: implicit-role derivation (candidate collection) ---
+// Today `role` on a collected candidate comes only from the raw `role`
+// ATTRIBUTE, so a plain `<button>Place order</button>` (no `role`, no
+// `aria-label`) collects as bare-text-only and heal synthesis (which skips
+// text-only candidates) can never use it. This derives a role from the tag
+// when the attribute is absent, using the Scope ruling's exact tag map and
+// nothing else. Table-driven (one `test()`, several stub/assert cycles
+// inside it, each with its own fresh vm sandbox) rather than one `test()`
+// per tag/type combination -- the setup and assertion shape are identical
+// across every case; only the stubbed tag/type/href and the expected
+// derived role differ.
+test("flow-runner.js derives an implicit role from tag/type/href when the role attribute is absent -- the Scope ruling's exact tag map, nothing more (WS3b Task 5)", async () => {
+  const source = await readSource();
+
+  const cases = [
+    { label: 'button, no role attr -> button', tagName: 'BUTTON', type: null, hasHref: false, roleAttr: null, expected: 'button' },
+    { label: 'a WITH href, no role attr -> link', tagName: 'A', type: null, hasHref: true, roleAttr: null, expected: 'link' },
+    { label: 'a WITHOUT href, no role attr -> no derived role', tagName: 'A', type: null, hasHref: false, roleAttr: null, expected: '' },
+    { label: 'select, no role attr -> combobox', tagName: 'SELECT', type: null, hasHref: false, roleAttr: null, expected: 'combobox' },
+    { label: 'input type=checkbox, no role attr -> checkbox', tagName: 'INPUT', type: 'checkbox', hasHref: false, roleAttr: null, expected: 'checkbox' },
+    { label: 'input type=radio, no role attr -> radio', tagName: 'INPUT', type: 'radio', hasHref: false, roleAttr: null, expected: 'radio' },
+    { label: 'input type=submit, no role attr -> button', tagName: 'INPUT', type: 'submit', hasHref: false, roleAttr: null, expected: 'button' },
+    { label: 'input type=button, no role attr -> button', tagName: 'INPUT', type: 'button', hasHref: false, roleAttr: null, expected: 'button' },
+    { label: 'input type=text, no role attr -> textbox', tagName: 'INPUT', type: 'text', hasHref: false, roleAttr: null, expected: 'textbox' },
+    { label: 'input with no type attribute at all, no role attr -> textbox', tagName: 'INPUT', type: null, hasHref: false, roleAttr: null, expected: 'textbox' },
+    { label: 'a tag outside the map (div), no role attr -> no derived role', tagName: 'DIV', type: null, hasHref: false, roleAttr: null, expected: '' },
+    { label: 'explicit role attribute wins over tag derivation', tagName: 'BUTTON', type: null, hasHref: false, roleAttr: 'tab', expected: 'tab' },
+  ];
+
+  for (const testCase of cases) {
+    const sandbox = {};
+    vm.createContext(sandbox);
+    const script = new vm.Script(`(${source})`);
+    const macro = script.runInContext(sandbox);
+
+    let evaluateCallCount = 0;
+    const fakeElement = {
+      getAttribute: async (attr) => (attr === 'role' ? testCase.roleAttr : null),
+      innerText: async () => '',
+      evaluate: async () => {
+        evaluateCallCount += 1;
+        return { tagName: testCase.tagName, type: testCase.type, hasHref: testCase.hasHref };
+      },
+    };
+
+    const stubPage = {
+      url: () => 'http://x/cart',
+      on: () => {},
+      off: () => {},
+      locator: (selector) => {
+        if (typeof selector === 'string' && selector.indexOf(',') >= 0) {
+          return { all: async () => [fakeElement] };
+        }
+        return {
+          waitFor: async () => {
+            throw new Error('not found');
+          },
+        };
+      },
+    };
+
+    const flow = {
+      schemaVersion: 1,
+      name: 'implicit-role',
+      steps: [
+        { op: 'click', target: { locators: [{ kind: 'role', selector: 'role=button[name="Go"]' }] } },
+      ],
+    };
+
+    await assert.rejects(
+      () => macro(stubPage, { flow, args: {} }),
+      (error) => {
+        const payload = JSON.parse(error.message.slice('FLOW_RUNNER_FAILURE: '.length));
+        assert.equal(payload.candidates[0].role, testCase.expected, testCase.label);
+        return true;
+      },
+    );
+
+    // An explicit `role` attribute must short-circuit derivation entirely,
+    // not merely win the value: the tagName reads costs a page round trip
+    // that has no reason to happen at all once the attribute already
+    // answers the question (see the derivation comment in the macro source).
+    if (testCase.roleAttr !== null) {
+      assert.equal(evaluateCallCount, 0, `${testCase.label}: an explicit role attribute must skip the tagName round trip entirely`);
+    }
+  }
+});
+
+// --- WS3b Task 5: ledgered macro minors deferred from WS3a ---
+
+test("flow-runner.js treats a dismissed quirk named '' as a real dismissal, not a truthiness no-op (WS3b Task 5 ledger: dismissedQuirk !== null)", async () => {
+  // A quirk named '' passes the shape check (`typeof quirk.name === 'string'`
+  // requires only a string, not a non-empty one) even though the store's own
+  // `sites quirk add` kebab-case validation would never persist one -- a
+  // caller that embeds `quirks` directly, bypassing the store, still can.
+  // `dismissInterrupt` returns the clicked quirk's `name` on a hit, so a
+  // click against THIS quirk returns '' -- falsy, but not null. The old `if
+  // (dismissedQuirk)` truthiness check treated that exactly like "nothing
+  // was dismissed" and skipped the step's post-quirk pass entirely, silently
+  // dropping a click that DID happen. `dismissedQuirk !== null` fixes it.
+  const source = await readSource();
+  const sandbox = {};
+  vm.createContext(sandbox);
+  const script = new vm.Script(`(${source})`);
+  const macro = script.runInContext(sandbox);
+
+  const stepSelector = 'role=button[name="Buy now"]';
+  const quirkSelector = '#cookie-accept';
+  let quirkClickCount = 0;
+  const stubPage = {
+    url: () => 'http://x/checkout',
+    on: () => {},
+    off: () => {},
+    locator: (selector) => {
+      if (selector === quirkSelector) {
+        return {
+          waitFor: async () => {},
+          click: async () => {
+            quirkClickCount += 1;
+          },
+        };
+      }
+      if (typeof selector === 'string' && selector.indexOf(',') >= 0) {
+        return { all: async () => [] };
+      }
+      return {
+        waitFor: async () => {
+          throw new Error('not found');
+        },
+      };
+    },
+  };
+
+  const flow = {
+    schemaVersion: 1,
+    name: 'quirk-empty-name',
+    steps: [
+      { op: 'click', target: { locators: [{ kind: 'role', selector: stepSelector }] } },
+    ],
+  };
+  const quirks = [
+    { name: '', urlPattern: null, target: { locators: [{ kind: 'css', selector: quirkSelector }] }, action: 'click' },
+  ];
+
+  await assert.rejects(
+    () => macro(stubPage, { flow, args: {}, quirks }),
+    (error) => {
+      const payload = JSON.parse(error.message.slice('FLOW_RUNNER_FAILURE: '.length));
+      assert.equal(payload.quirkAttempted, '', "a dismissal with an empty name must still be reported, not dropped by a truthiness check");
+      return true;
+    },
+  );
+  assert.equal(quirkClickCount, 1, 'the empty-named quirk must still be clicked exactly once');
+});
+
+test("flow-runner.js probes a quirk at 1500ms and gives the post-quirk pass exactly 3000ms, no other timeout (WS3b Task 5 ledger: rung 3 timeout pins)", async () => {
+  // Records every `waitFor` call's selector+timeout using the same
+  // recording-stub pattern as the rung 1/2 dedupe test above. Order proves
+  // the sequence, not just the set: the step's own rung 1 (1500) then rung 2
+  // (3000) both miss first (the quirk has not been dismissed yet), THEN the
+  // quirk itself is probed once at 1500ms (dismissInterrupt's own pass never
+  // escalates -- it is a dismissal check, not the step's walk), and only
+  // after a successful dismissal does the post-quirk pass run, at a single
+  // escalated 3000ms (forcedEscalatedOnly skips straight past rung 1).
+  const source = await readSource();
+  const sandbox = {};
+  vm.createContext(sandbox);
+  const script = new vm.Script(`(${source})`);
+  const macro = script.runInContext(sandbox);
+
+  const stepSelector = 'role=button[name="Buy now"]';
+  const quirkSelector = '#cookie-accept';
+  const waitForCalls = [];
+  let dismissed = false;
+  const stubPage = {
+    url: () => 'http://x/checkout',
+    on: () => {},
+    off: () => {},
+    locator: (selector) => {
+      if (selector === quirkSelector) {
+        return {
+          waitFor: async ({ timeout }) => {
+            waitForCalls.push({ selector, timeout });
+          },
+          click: async () => {
+            dismissed = true;
+          },
+        };
+      }
+      return {
+        waitFor: async ({ timeout }) => {
+          waitForCalls.push({ selector, timeout });
+          if (!dismissed) throw new Error('not found');
+        },
+        click: async () => {},
+      };
+    },
+  };
+
+  const flow = {
+    schemaVersion: 1,
+    name: 'quirk-timeout-pins',
+    steps: [
+      { op: 'click', target: { locators: [{ kind: 'role', selector: stepSelector }] } },
+    ],
+  };
+  const quirks = [
+    {
+      name: 'cookie-banner',
+      urlPattern: null,
+      target: { locators: [{ kind: 'css', selector: quirkSelector }] },
+      action: 'click',
+    },
+  ];
+
+  const result = await macro(stubPage, { flow, args: {}, quirks });
+  assert.equal(result.ok, true);
+  assert.deepEqual(waitForCalls, [
+    { selector: stepSelector, timeout: 1500 },
+    { selector: stepSelector, timeout: 3000 },
+    { selector: quirkSelector, timeout: 1500 },
+    { selector: stepSelector, timeout: 3000 },
+  ]);
+});
+
+test('flow-runner.js drops fat candidates from the end until the whole payload is <= 8KB (WS3b Task 5 ledger: boundCandidatesToPayload trim loop)', async () => {
+  // Every clamped candidate string field maxes out at 80 characters
+  // (CANDIDATE_STRING_CAP); plain ASCII text at that cap across 12
+  // candidates never reaches 8KB on its own (~4.4KB), so the trim loop's
+  // drop-from-end branch would go untested by accident. Using a double-quote
+  // character for all 80 -- each one costs 2 bytes once JSON-escaped (`\"`)
+  // -- makes even the 12-candidate (post-MAX_CANDIDATES-cap) payload exceed
+  // 8192 bytes (verified: 8341 bytes for this exact shape), forcing the
+  // drop-from-end loop to fire for real rather than merely being reachable
+  // in principle. 13 elements are offered so the MAX_CANDIDATES cap (Task
+  // 2) is exercised first, same as the sibling 12-candidate test above --
+  // this test is about what happens to the payload AFTER that cap, not the
+  // cap itself.
+  const source = await readSource();
+  const sandbox = {};
+  vm.createContext(sandbox);
+  const script = new vm.Script(`(${source})`);
+  const macro = script.runInContext(sandbox);
+
+  const FAT = '"'.repeat(200); // clamped to 80 chars, still all quotes
+  const fakeElements = [];
+  for (let i = 0; i < 13; i += 1) {
+    fakeElements.push({
+      // Every element carries an explicit (fat) `role` attribute, so
+      // implicit-role derivation's `evaluate` round trip is never reached
+      // here -- this test is about the trim loop, not role derivation.
+      getAttribute: async () => FAT,
+      innerText: async () => FAT,
+    });
+  }
+
+  const stubPage = {
+    url: () => 'http://x/cart',
+    on: () => {},
+    off: () => {},
+    locator: (selector) => {
+      if (typeof selector === 'string' && selector.indexOf(',') >= 0) {
+        return { all: async () => fakeElements };
+      }
+      return {
+        waitFor: async () => {
+          throw new Error('not found');
+        },
+      };
+    },
+  };
+
+  const flow = {
+    schemaVersion: 1,
+    name: 'trim-loop',
+    steps: [
+      { op: 'click', target: { locators: [{ kind: 'role', selector: 'role=button[name="Go"]' }] } },
+    ],
+  };
+
+  await assert.rejects(
+    () => macro(stubPage, { flow, args: {} }),
+    (error) => {
+      const payload = JSON.parse(error.message.slice('FLOW_RUNNER_FAILURE: '.length));
+      assert.ok(
+        payload.candidates.length > 0 && payload.candidates.length < 12,
+        `expected fewer than 12 (but more than 0) survivors, got ${payload.candidates.length}`,
+      );
+      const serialized = JSON.stringify(payload);
+      assert.ok(serialized.length <= 8192, `expected the full payload to be <= 8192 bytes, got ${serialized.length}`);
       return true;
     },
   );
