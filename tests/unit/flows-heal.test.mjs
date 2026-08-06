@@ -748,6 +748,188 @@ test('a ranker with no minScore/minMargin properties (the lexical default, or a 
 });
 
 // ============================================================
+// WS3b Task 8: heal synthesis widening (role + text)
+// ============================================================
+//
+// Task 5 (this branch) made `collectCandidates` derive implicit roles
+// (button/a-with-href/select/input types), so a plain `<button>Place
+// order</button>` now collects `{ role: 'button', text: 'Place order' }`
+// with no `name`. Per the plan's Scope ruling (binding): for a candidate
+// that CARRIES a role, visible text IS the ARIA accessible name for
+// name-from-content roles, so synthesis accepts `name ?? text` as the
+// accessible-name evidence -- kind 'other', same selector syntax/escaping
+// as the role+name path, NAME wins when both exist. Bare text with no role
+// at all remains too weak (unchanged, covered above at
+// "returns null when the winning candidate's only evidence is bare text").
+// These fixtures are deliberately local to this section, not shared with
+// Task 5's own fixtures (per the Task 5 review carry-forward: candidate
+// survival counts near the 8KB truncation boundary are not stable to
+// couple tests to).
+
+test('proposeHeal synthesizes a role+text locator when the winning candidate has a role and text but no name', () => {
+  const flow = baseFlow({ steps: [
+    { op: 'goto', url: '/checkout' },
+    { op: 'click', target: baseTarget({ description: 'Place order', name: 'Place order', role: 'button' }) },
+  ] });
+  const candidates = [candidate({ role: 'button', name: '', testid: '', text: 'Place order' })];
+  const payload = payloadFor(flow, 1, candidates);
+
+  const decision = proposeHeal({ flow, payload });
+
+  assert.ok(decision, 'test setup: this scenario should clear the acceptance rule');
+  assert.deepEqual(decision.locator, { kind: 'other', selector: 'internal:role=button[name="Place order"i]' });
+});
+
+test('proposeHeal still returns null when the winning candidate has text but no role at all', () => {
+  const flow = baseFlow({ steps: [
+    { op: 'goto', url: '/checkout' },
+    { op: 'click', target: baseTarget({ description: 'Place order', name: 'Place order' }) },
+  ] });
+  const candidates = [candidate({ role: '', name: '', testid: '', text: 'Place order' })];
+  const payload = payloadFor(flow, 1, candidates);
+
+  assert.equal(proposeHeal({ flow, payload }), null);
+});
+
+test('proposeHeal prefers testid over a role+text winner', () => {
+  const flow = baseFlow({ steps: [
+    { op: 'goto', url: '/checkout' },
+    { op: 'click', target: baseTarget({ description: 'Place order', name: 'Place order', role: 'button' }) },
+  ] });
+  const candidates = [candidate({ role: 'button', name: '', testid: 'place-order-v2', text: 'Place order' })];
+  const payload = payloadFor(flow, 1, candidates);
+
+  const decision = proposeHeal({ flow, payload });
+
+  assert.deepEqual(decision.locator, { kind: 'testid', selector: 'internal:testid=[data-testid="place-order-v2"]' });
+});
+
+test('proposeHeal prefers name over text when a role+name+text candidate wins (name takes precedence)', () => {
+  const flow = baseFlow({ steps: [
+    { op: 'goto', url: '/checkout' },
+    { op: 'click', target: baseTarget({ description: 'Submit order now', name: 'Submit order now', role: 'button' }) },
+  ] });
+  // name and text both feed the target-token overlap used by ranking (so
+  // this single candidate clears HEAL_MIN_SCORE/MARGIN on its own), but
+  // synthesis must pick NAME ("Submit order"), never TEXT ("Submit order
+  // now"), for the actual selector string.
+  const candidates = [candidate({ role: 'button', name: 'Submit order', testid: '', text: 'Submit order now' })];
+  const payload = payloadFor(flow, 1, candidates);
+
+  const decision = proposeHeal({ flow, payload });
+
+  assert.ok(decision, 'test setup: this scenario should clear the acceptance rule');
+  assert.deepEqual(decision.locator, { kind: 'other', selector: 'internal:role=button[name="Submit order"i]' });
+});
+
+test('proposeHeal escapes embedded quotes in a synthesized role+text selector', () => {
+  const flow = baseFlow({ steps: [
+    { op: 'goto', url: '/checkout' },
+    { op: 'click', target: baseTarget({ description: 'Place order now', name: 'Place order now', role: 'button' }) },
+  ] });
+  const candidates = [candidate({ role: 'button', name: '', testid: '', text: 'Place "order" now' })];
+  const payload = payloadFor(flow, 1, candidates);
+
+  const decision = proposeHeal({ flow, payload });
+
+  assert.equal(decision.locator.kind, 'other');
+  assert.equal(
+    decision.locator.selector,
+    'internal:role=button[name="Place \\"order\\" now"i]',
+  );
+});
+
+test('proposeHeal returns null when a role-only winner\'s text is whitespace-only (nothing to synthesize from)', () => {
+  const flow = baseFlow({ steps: [
+    { op: 'goto', url: '/checkout' },
+    { op: 'click', target: baseTarget({ description: 'Place order', name: 'Place order', role: 'button' }) },
+  ] });
+  const candidates = [candidate({ role: 'button', name: '', testid: '', text: '   ' })];
+  const payload = payloadFor(flow, 1, candidates);
+  // Forces this sole candidate to win regardless of its (deliberately
+  // near-zero) lexical score, so the null result below is proven to come
+  // from synthesis rejecting whitespace-only text, not from the
+  // acceptance-rule threshold rejecting a weak candidate.
+  const forceWinner = ({ candidates: given }) => given.map((_, index) => ({ index, score: 1 }));
+
+  assert.equal(proposeHeal({ flow, payload, ranker: forceWinner }), null);
+});
+
+test('proposeHeal returns null for a role "textbox" candidate whose name and text are both empty (Task 5 hidden-input guard)', () => {
+  // Task 5's tag map derives role 'textbox' for input[type=hidden|file|image]
+  // -- a hidden input can never be probed successfully, so it must never be
+  // blindly minted into a heal. Its candidate never carries a name or text,
+  // so this is the general "nothing to build a selector from" case above,
+  // pinned here against the specific scenario the Task 5 review flagged.
+  const flow = baseFlow({ steps: [
+    { op: 'goto', url: '/checkout' },
+    { op: 'click', target: baseTarget({ description: 'Place order', name: 'Place order', role: 'button' }) },
+  ] });
+  const candidates = [candidate({ role: 'textbox', name: '', testid: '', text: '' })];
+  const payload = payloadFor(flow, 1, candidates);
+  const forceWinner = ({ candidates: given }) => given.map((_, index) => ({ index, score: 1 }));
+
+  assert.equal(proposeHeal({ flow, payload, ranker: forceWinner }), null);
+});
+
+test("an applyHeal'd role+text fallback locator resolves through the runner's verbatim page.locator branch (Task 8 mirror of the role+name proof above)", () => {
+  // Same runner-precedence mirror as the role+name test above (see that
+  // test's own comment for the full rationale) -- this one confirms the
+  // SAME guarantee holds for a role+TEXT synthesized selector: 'other'
+  // always resolves via `page.locator(candidate.selector)` verbatim, never
+  // deduped away against the step's existing `kind: 'role'` alternate.
+  const candidateKey = (target, candidateEntry) => (
+    candidateEntry.kind === 'role' && target.role && target.name
+      ? `role:${target.role}:${target.name}`
+      : `${candidateEntry.kind}:${candidateEntry.selector}`
+  );
+  const candidateLocator = (target, candidateEntry, page) => (
+    candidateEntry.kind === 'role' && target.role && target.name
+      ? page.getByRole(target.role, { name: target.name })
+      : page.locator(candidateEntry.selector)
+  );
+
+  const flow = baseFlow({ steps: [
+    { op: 'goto', url: '/checkout' },
+    {
+      op: 'click',
+      target: baseTarget({
+        description: 'Place order',
+        name: 'Place order',
+        role: 'button',
+        locators: [{ kind: 'role', selector: 'internal:role=button[name="Place order"i]' }],
+      }),
+    },
+  ] });
+  const candidates = [candidate({ role: 'button', name: '', testid: '', text: 'Place order' })];
+  const payload = payloadFor(flow, 1, candidates);
+
+  const decision = proposeHeal({ flow, payload });
+  assert.ok(decision, 'test setup: this scenario should clear the acceptance rule');
+  assert.equal(decision.locator.kind, 'other');
+
+  const healed = applyHeal(flow, decision);
+  const target = healed.steps[1].target;
+  const [originalEntry, appendedEntry] = target.locators;
+
+  assert.notEqual(
+    candidateKey(target, originalEntry),
+    candidateKey(target, appendedEntry),
+    "the appended heal must not dedupe away against the step's original locator",
+  );
+
+  const page = {
+    getByRole: (role, opts) => ({ via: 'getByRole', role, name: opts.name }),
+    locator: (selector) => ({ via: 'page.locator', selector }),
+  };
+  assert.deepEqual(
+    candidateLocator(target, appendedEntry, page),
+    { via: 'page.locator', selector: appendedEntry.selector },
+    'a role+text heal must reach the verbatim page.locator branch, not be silently ignored',
+  );
+});
+
+// ============================================================
 // Step 5: applyHeal purity
 // ============================================================
 
