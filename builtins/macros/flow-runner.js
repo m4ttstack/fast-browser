@@ -412,7 +412,35 @@ async (page, args) => {
   // literal text) proves the action never dispatched -- the identical
   // consent basis as the probe-miss case above ("the step's own action
   // never fired"), so rung 3 eligibility extends to act-phase failures
-  // matching that signature ONLY. Every other budget is unchanged:
+  // matching that signature ONLY.
+  //
+  // ANCHORING (review fix round 1, controller-amended ruling): the bare
+  // substring is forgeable. `playwright-core`'s `connection.ts` appends
+  // `formatCallLog` to EVERY channel error's message, and that call log
+  // routinely contains a `locator resolved to <previewNode>` line whose
+  // `<previewNode>` renders the target element's OWN attributes and text
+  // verbatim (confirmed against the vendored `injectedScript`'s
+  // `previewNode`) -- so a page author's `<button aria-label="intercepts
+  // pointer events">` embeds the phrase inside the call log of ANY
+  // failure on that element, including one that already dispatched (page
+  // closed by the click handler, context destroyed by a resulting
+  // navigation) -- `resolvedForAct` stays truthy in exactly that case, so
+  // an unanchored match would re-act after the first act already fired:
+  // click/press/drag are not idempotent, so that is a double-mutate, not
+  // a safe no-op repeat attempt. Anchoring to the LINE'S END defeats this:
+  // `previewNode` always closes its output with `/>`, `>`, or `</tag>` --
+  // every code path in its implementation ends there -- so an attacker's
+  // injected attribute/text value can never be a rendered line's tail;
+  // only a genuine interception message (the thrown
+  // `${hitTargetDescription} intercepts pointer events`, or the identical
+  // text as a call-log line reached by the SAME code path) ends its own
+  // line with the phrase. The trailing `(\x1b\[[0-9;]*m)*` tolerates
+  // `colors.dim`'s ANSI reset: `formatCallLog` wraps the WHOLE joined
+  // call log in a single `colors.dim(...)` call (not per line), so a
+  // trailing reset code can only ever appear after the LAST call-log
+  // line -- exactly where a persistent interception's final logged
+  // attempt (right before the overall action timeout aborts the loop)
+  // lands. Every other budget is unchanged:
   // probe-miss and act-interception SHARE one quirk attempt per step,
   // never two -- structurally guaranteed below, since a step's FIRST
   // failure is exactly one throw, either a locator miss or an act throw,
@@ -459,7 +487,14 @@ async (page, args) => {
   // re-resolving from scratch would be, without spending a second probe or
   // recording a spurious `locatorFallbacks` entry for a resolution that
   // never actually had any trouble -- only the act was blocked.
-  const INTERCEPTION_SIGNATURE = /intercepts pointer events/;
+  //
+  // `\x1b` (ESC, 0x1B) is included explicitly in the ANSI group: a real
+  // `colors.dim` reset is `\x1b[22m` (dim's own "normal intensity" close
+  // code, not a generic `\x1b[0m`), and the escape byte is REQUIRED for
+  // that to be an actual ANSI sequence rather than a literal `[22m`
+  // substring -- verified directly against `colors.dim`'s call site in
+  // the vendored `connection.ts` bundle rather than assumed.
+  const INTERCEPTION_SIGNATURE = /intercepts pointer events[ \t]*(\x1b\[[0-9;]*m)*$/m;
   const rawQuirks = Array.isArray(input.quirks) ? input.quirks : [];
   const quirks = rawQuirks.filter((quirk) => (
     quirk
@@ -806,6 +841,11 @@ async (page, args) => {
       if (!resolvedForAct) {
         throw new Error('no resolved target available for a post-quirk act re-attempt');
       }
+      // Keep this op list in sync with the ops that set `resolvedForAct` in
+      // `runStep`'s switch above (click/fill/select/press/hover/drag): a
+      // new op added to one switch without the other either never gets a
+      // post-quirk act attempt (if only `runStep` is updated) or hits the
+      // `default` throw below (if only this one is).
       switch (resolvedForAct.op) {
         case 'click': return resolvedForAct.locator.click();
         case 'fill': return resolvedForAct.locator.fill(resolvedForAct.value);
