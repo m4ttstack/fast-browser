@@ -9,7 +9,7 @@ import test from 'node:test';
 import { flows } from '../../lib/commands/flows.mjs';
 import { sites } from '../../lib/commands/sites.mjs';
 import { QUARANTINE_FAIL_STREAK_THRESHOLD } from '../../lib/flows/match.mjs';
-import { listTraceSessions } from '../../lib/flows/trace-reader.mjs';
+import { listTraceSessions, readTraceRecordsFrom } from '../../lib/flows/trace-reader.mjs';
 import { startOrderFixture } from '../fixtures/order-flow/server.mjs';
 import {
   classifyReplay, recordAndApprove, replayArgsFor, replayOneProfile, runHarness,
@@ -695,11 +695,21 @@ test(
 //
 // Pins the spec's at-most-once consent invariant end to end: a replay
 // killed mid-flow must never have fired its mutating action twice, and the
-// truncated trace session it leaves behind must sweep cleanly under
-// lib/flows/sweep.mjs's live-session deferral contract (module doc comment,
-// "incremental cursors: TWO of them" -- compilation deferred entirely until
+// session it leaves behind must sweep cleanly under lib/flows/sweep.mjs's
+// live-session deferral contract (module doc comment, "incremental
+// cursors: TWO of them" -- compilation deferred entirely until
 // `meta.endedAt` exists; replay-record PROVENANCE scanning is NOT deferred,
 // it runs every sweep, live or complete).
+//
+// WORDING NOTE (review round 1): that session is ABANDONED, not truncated.
+// "Truncated" implies a partial/incomplete record -- what actually happens
+// (the FINDING further down, ~90 lines below) is the opposite: the client
+// gives up on the call, but the SERVER keeps running the macro to its own
+// full natural conclusion regardless, so the trace this session ends up
+// with is a COMPLETE record of one failed attempt, not a cut-off fragment.
+// "Truncated" would describe a real host-level kill (SIGKILL on the runtime
+// process mid-macro) -- see the coverage-gap note near the bottom of this
+// test for why that scenario is NOT what this leg exercises.
 //
 // Independent of the matrix legs above (own fixture instance, own output
 // dir, own recording) -- per the plan's own Scope note that the kill leg
@@ -776,7 +786,7 @@ const killTestFlow = {
 };
 
 test(
-  'drift-harness: mid-flow kill never double-submits; truncated sessions sweep clean',
+  'drift-harness: mid-flow kill never double-submits; abandoned sessions sweep clean',
   {
     timeout: 300_000,
     skip: releaseDirConfigured ? false : 'FAST_BROWSER_RELEASE_DIR is not set; this leg needs a local runtime',
@@ -823,7 +833,33 @@ test(
 
     assert.equal(await readCount(KILL_REPLAY_TOKEN), 0, "sanity: the kill leg's own token must start unused");
 
+    // Snapshotted BEFORE creating the kill session (at this point only the
+    // already-closed recording session's own trace dir exists) so the poll
+    // below can identify the kill session's dir by DIFFERENCE, not by
+    // assuming it is whatever `listTraceSessions` returns last. Review
+    // round 1 caught a real bug here: querying `listTraceSessions`
+    // immediately after `tracedSession()` resolves is a genuine race -- the
+    // runtime does not necessarily have the trace-<epochMs> directory on
+    // disk the instant the MCP connection itself is established, so an
+    // "assume it exists at connection time" version of this lookup can (and
+    // in one real run, did) return the RECORDING session's own directory
+    // instead, silently corrupting every assertion downstream of it.
+    const priorTraceBasenames = new Set(
+      (await listTraceSessions(paths.dataDir)).map((session) => path.basename(session.dir)),
+    );
+
     const killSession = await tracedSession(t, paths.dataDir);
+
+    // COVERAGE GAP (review round 1, controller-filed): this leg kills the
+    // replay by abandoning it CLIENT-SIDE (AbortSignal on the MCP call --
+    // see below). It does NOT exercise the ORIGINAL scenario the spec's
+    // at-most-once language was written against: a true mid-execution kill
+    // (the host process dying, e.g. SIGKILL, partway through the macro).
+    // That scenario -- and whether runtime cancellation ever propagates
+    // into flow-runner.js's own execution rather than being silently
+    // ignored, per the FINDING below -- is real, separate coverage this
+    // leg does not provide. Backlog: true-kill coverage + runtime
+    // cancellation propagation.
     const controller = new AbortController();
 
     // Issued without awaiting yet: grabbed as a promise so the counter can
@@ -833,6 +869,35 @@ test(
     // further down.
     const replayPromise = killSession.callTool(invocation.tool, replayArgs, { signal: controller.signal });
     replayPromise.catch(() => {});
+
+    // Resolved by polling for a NEW trace directory (one absent from the
+    // pre-connection snapshot above) rather than by any assumption about
+    // exactly when it appears. Review round 1 caught a real bug here: an
+    // earlier version of this lookup ran BEFORE the replay call was even
+    // issued and assumed the directory already existed at connection time
+    // -- it does not (confirmed directly: that version timed out after
+    // 30s, since nothing is traced yet for a connection that has not been
+    // asked to do anything). Running the poll AFTER the call is issued,
+    // concurrently with the counter poll below, is correct regardless of
+    // exactly when the directory is created -- at the first action, or
+    // (per the FINDING further down) only once the whole macro call has
+    // run to its own natural completion.
+    async function pollUntilNewTraceSession(priorBasenames, { intervalMs = 50, timeoutMs = 30_000 } = {}) {
+      const deadline = Date.now() + timeoutMs;
+      for (;;) {
+        const sessions = await listTraceSessions(paths.dataDir);
+        const fresh = sessions.find((session) => !priorBasenames.has(path.basename(session.dir)));
+        if (fresh) return fresh;
+        if (Date.now() >= deadline) {
+          throw new Error('timed out waiting for the kill-leg trace session directory to appear');
+        }
+        await new Promise((resolve) => { setTimeout(resolve, intervalMs); });
+      }
+    }
+
+    const killTraceSessionAtStart = await pollUntilNewTraceSession(priorTraceBasenames);
+    const killSessionDir = killTraceSessionAtStart.dir;
+    const killBasename = path.basename(killSessionDir);
 
     // How we KNOW the mutation fired before we abort: not a timer or a
     // guess, a genuine independent HTTP read of the fixture's own counter
@@ -876,23 +941,51 @@ test(
     // promise above rejects near-instantly regardless of anything the
     // server does -- but the runtime keeps running the flow-runner macro to
     // its own natural conclusion. Measured directly (a standalone timing
-    // probe, not asserted here since it is host/timing-sensitive): the
-    // "Place order" step's own compiled `waitAfter.networkSettled` (set
-    // because the RECORDING observed a real awaited request from this
-    // task's own mutating fetch) adds flow-runner.js's `settleNetwork`'s
-    // full bounded 5000ms wait after the click, and "Confirm receipt" then
-    // spins its own genuine, real rung 1 + rung 2 walk (1500ms + 3000ms =
-    // 4500ms) before failing with "no locator candidate matched" -- roughly
-    // 9.5-10s of real server-side execution AFTER the mutating click, not
-    // merely the ~4.5s a locator-only stall would need. The grace period
-    // below is set well past that measured total so this test's own
-    // assertions reflect the call's TRUE natural end state, not a
-    // still-in-flight snapshot.
-    await new Promise((resolve) => { setTimeout(resolve, 14_000); });
-    const countAfterGrace = await readCount(KILL_REPLAY_TOKEN);
-    t.diagnostic(`kill leg: counter after grace period = ${countAfterGrace}`);
+    // probe, run separately from this test): the "Place order" step's own
+    // compiled `waitAfter.networkSettled` (set because the RECORDING
+    // observed a real awaited request from this task's own mutating fetch)
+    // adds flow-runner.js's `settleNetwork`'s full bounded 5000ms wait
+    // after the click, and "Confirm receipt" then spins its own genuine,
+    // real rung 1 + rung 2 walk (1500ms + 3000ms = 4500ms) before failing
+    // with "no locator candidate matched" -- roughly 9.5-10s of real
+    // server-side execution AFTER the mutating click, not merely the
+    // ~4.5s a locator-only stall would need.
+    //
+    // Rather than sleep a fixed duration tuned to that measurement (review
+    // round 1: the natural-completion window is downstream of runtime
+    // timing this test does not control, and a constant tuned to one
+    // observed run is exactly the kind of thing that quietly flakes on a
+    // slower host or a future runtime release), this polls the trace file
+    // itself, directly, until the replay's own record genuinely lands --
+    // bounded generously (60s) as a backstop, not as the expected wait.
+    async function pollUntilTraceRecordArrives(sessionDir, { intervalMs = 250, timeoutMs = 60_000 } = {}) {
+      const deadline = Date.now() + timeoutMs;
+      for (;;) {
+        const result = await readTraceRecordsFrom(sessionDir, 0);
+        if (result.readable && result.records.length > 0) return result.records;
+        if (Date.now() >= deadline) {
+          throw new Error(`timed out after ${timeoutMs}ms waiting for the kill-leg trace record to arrive`);
+        }
+        await new Promise((resolve) => { setTimeout(resolve, intervalMs); });
+      }
+    }
+
+    const arrivedRecords = await pollUntilTraceRecordArrives(killSessionDir);
+    t.diagnostic(`kill leg: trace record arrived (${arrivedRecords.length} record(s)) -- natural server-side completion confirmed`);
     assert.equal(
-      countAfterGrace,
+      arrivedRecords.length,
+      1,
+      'expected exactly one trace record for the kill-leg session -- a single browser_run_code_unsafe call, nothing else',
+    );
+
+    // At-most-once, checked at the moment we have real EVIDENCE (not a
+    // guess) that the server-side execution has run all the way to its own
+    // natural conclusion: the record above only exists once that call
+    // fully settled server-side.
+    const countAfterNaturalCompletion = await readCount(KILL_REPLAY_TOKEN);
+    t.diagnostic(`kill leg: counter after natural completion confirmed = ${countAfterNaturalCompletion}`);
+    assert.equal(
+      countAfterNaturalCompletion,
       1,
       'at-most-once: the mutating POST must never fire a second time, whether or not the abort actually cancelled server-side execution',
     );
@@ -900,10 +993,9 @@ test(
     // --- the sweep half: live-session deferral, then no double-count ---
 
     const sessionsBeforeClose = await listTraceSessions(paths.dataDir);
-    const killTraceSession = sessionsBeforeClose[sessionsBeforeClose.length - 1];
-    const killBasename = path.basename(killTraceSession.dir);
+    const killTraceSession = sessionsBeforeClose.find((session) => path.basename(session.dir) === killBasename);
     assert.equal(
-      typeof killTraceSession.meta?.endedAt,
+      typeof killTraceSession?.meta?.endedAt,
       'undefined',
       'expected the kill-leg trace session to still have no endedAt (not yet closed)',
     );
@@ -919,6 +1011,19 @@ test(
       firstCursorEntry.incomplete,
       true,
       'expected the still-live kill-leg session to be marked incomplete (provenance-swept only, per the live-session deferral contract)',
+    );
+    // The `incomplete` flag alone is a summary someone else could get right
+    // by accident; the actual TWO-CURSOR deferral it summarizes is these
+    // two numbers disagreeing (review round 1: pin the values, not just the
+    // flag). `lines` (compilation) stays frozen at 0 -- deferred entirely,
+    // since this session has no `meta.endedAt` yet -- while
+    // `provenanceLines` (replay-record scanning, NOT deferred by liveness)
+    // has already caught all the way up to 1, having just seen the one real
+    // record the poll above proved exists.
+    assert.deepEqual(
+      { lines: firstCursorEntry.lines, provenanceLines: firstCursorEntry.provenanceLines },
+      { lines: 0, provenanceLines: 1 },
+      'expected compilation frozen at 0 (deferred while live) while provenance scanning already reached 1 -- the two-cursor deferral model, pinned as real cursor values',
     );
     assert.deepEqual(firstSweep.compiled, [], 'expected nothing new compiled from a pure-replay session, live or not');
 
@@ -984,6 +1089,16 @@ test(
       secondCursorEntry.incomplete,
       undefined,
       'expected the now-closed session to no longer be marked incomplete',
+    );
+    // Compilation catches up to match provenance now that the session is
+    // complete -- both cursors land on the same value, 1, exactly the
+    // `provenanceLines >= lines` invariant converging once `lines` is no
+    // longer frozen (sweep.mjs's own module doc comment: "both land on the
+    // same value" once a session completes).
+    assert.deepEqual(
+      { lines: secondCursorEntry.lines, provenanceLines: secondCursorEntry.provenanceLines },
+      { lines: 1, provenanceLines: 1 },
+      'expected compilation to catch up to provenance (both at 1) now that the session has ended',
     );
     assert.deepEqual(secondSweep.compiled, [], 'expected still nothing to compile from a pure-replay session, complete or not');
 

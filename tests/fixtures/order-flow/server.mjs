@@ -63,8 +63,13 @@ export function renderProfile(profileName) {
 // `killTest` (null | { token, stall }) is the orthogonal SERVER-MODE toggle
 // (not a mutation PROFILE -- see index.html's own doc comment) that decides
 // what the NEXT '/' request embeds: `setKillTest(null)` (the default)
-// injects nothing, so every OTHER suite's own request to '/' is byte-for-
-// byte what it was before this task.
+// injects nothing into the `<!--FIXTURE_KILLTEST-->` placeholder. This is
+// BEHAVIORALLY identical to before this task for every other suite -- not
+// byte-for-byte: index.html itself gained real script lines (the
+// KILL_TEST_TOKEN/KILL_TEST_STALL consts, the delegated listener, the
+// conditional in showComplete) that are served on every request regardless
+// of `killTest` state, all of them dead code (guarded on a token that is
+// always null/undefined) unless a test explicitly calls `setKillTest`.
 //
 // Stall mechanism choice: the brief names two options -- "the server holds
 // the response" or "the client script never renders the next element."
