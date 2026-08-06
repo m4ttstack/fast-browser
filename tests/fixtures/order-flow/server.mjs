@@ -49,10 +49,75 @@ export function renderProfile(profileName) {
   return profile.transform(renderBase());
 }
 
+// WS4a Task 5 (at-most-once kill test): a per-token counter of real
+// mutating POSTs to '/order', plus a '/order/count' read endpoint -- both
+// plain HTTP, deliberately independent of any browser session, so a caller
+// can observe "did the mutation fire" (and re-observe it after a kill)
+// without needing the (possibly-killed) browser connection to still be
+// usable. `submissionCounts` lives per fixture instance (a fresh
+// `startOrderFixture()` call -- every e2e test's own pattern -- starts
+// empty), and within one instance is keyed per TOKEN (the brief's own
+// chosen semantics): an unseen token reads 0 with no explicit reset step
+// needed, and two different tokens never interfere with each other's
+// count -- see tests/unit/fixture-profiles.test.mjs for the direct proof.
+// `killTest` (null | { token, stall }) is the orthogonal SERVER-MODE toggle
+// (not a mutation PROFILE -- see index.html's own doc comment) that decides
+// what the NEXT '/' request embeds: `setKillTest(null)` (the default)
+// injects nothing, so every OTHER suite's own request to '/' is byte-for-
+// byte what it was before this task.
+//
+// Stall mechanism choice: the brief names two options -- "the server holds
+// the response" or "the client script never renders the next element."
+// This fixture uses the SECOND. Holding an HTTP response open on this
+// server would only stall whatever THAT ONE in-flight request is (there is
+// nothing for the client to keep waiting ON unless it deliberately issues a
+// second, held-open fetch of its own); it says nothing about whether the
+// NEXT interactive element the replay's own following step targets ever
+// exists on the page. Withholding the render directly (index.html's
+// `showComplete`, gated on `KILL_TEST_STALL`) makes that next step's own
+// locator walk genuinely, honestly miss -- the actual mechanism
+// `flow-runner.js`'s `resolveTarget` is built to handle, and the one this
+// task's kill leg needs to exercise for real.
 export async function startOrderFixture({ port = 0 } = {}) {
   let currentProfile = 'base';
+  let killTest = null;
+  const submissionCounts = new Map();
+
   const server = http.createServer((request, response) => {
     const url = new URL(request.url, 'http://127.0.0.1');
+
+    if (url.pathname === '/order' && request.method === 'POST') {
+      let raw = '';
+      request.on('data', (chunk) => { raw += chunk; });
+      request.on('end', () => {
+        let token = null;
+        try {
+          const parsed = JSON.parse(raw || '{}');
+          if (typeof parsed.token === 'string' && parsed.token.length > 0) token = parsed.token;
+        } catch {
+          token = null;
+        }
+        if (!token) {
+          response.writeHead(400, { 'content-type': 'text/plain; charset=utf-8' });
+          response.end('missing or invalid token');
+          return;
+        }
+        const nextCount = (submissionCounts.get(token) ?? 0) + 1;
+        submissionCounts.set(token, nextCount);
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({ ok: true, count: nextCount }));
+      });
+      return;
+    }
+
+    if (url.pathname === '/order/count' && request.method === 'GET') {
+      const token = url.searchParams.get('token');
+      const count = token ? (submissionCounts.get(token) ?? 0) : 0;
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ count }));
+      return;
+    }
+
     if (url.pathname !== '/') {
       response.writeHead(404);
       response.end();
@@ -70,8 +135,18 @@ export async function startOrderFixture({ port = 0 } = {}) {
       response.end(`unknown fixture profile: ${requestedProfile}`);
       return;
     }
+    // `renderProfile`/`renderBase` stay pure and kill-test-unaware (their
+    // own direct callers -- tests/unit/fixture-profiles.test.mjs's purity
+    // checks -- see the placeholder left untouched, a harmless HTML
+    // comment). The substitution happens here, at the one real HTTP
+    // boundary, mirroring the OVERLAY placeholder's own unconditional
+    // replace-with-empty-string default.
+    const killTestScript = killTest
+      ? `<script>window.__KILL_TEST_TOKEN__ = ${JSON.stringify(killTest.token)}; window.__KILL_TEST_STALL__ = ${killTest.stall === true};</script>`
+      : '';
+    const finalBody = body.replace('<!--FIXTURE_KILLTEST-->', killTestScript);
     response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-    response.end(body);
+    response.end(finalBody);
   });
   // A real browser tab can leave a connected-but-idle socket open (Chrome
   // keep-alive) that server.close() would otherwise wait on indefinitely.
@@ -101,6 +176,14 @@ export async function startOrderFixture({ port = 0 } = {}) {
       }
       currentProfile = profileName;
     },
+    // WS4a Task 5: flips what the NEXT '/' request embeds (same
+    // never-touches-an-in-flight-request contract as `setProfile` above).
+    // `config` is `null` (the default -- see the module doc comment) or
+    // `{ token: string, stall: boolean }`. Deliberately no shape-checking
+    // here (unlike `setProfile`'s unknown-name guard): this is a test-only
+    // toggle with exactly one real caller, not a value that ever crosses an
+    // HTTP boundary the way a profile name does.
+    setKillTest: (config) => { killTest = config; },
   };
 }
 

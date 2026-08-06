@@ -167,8 +167,18 @@ export async function startMcpClient({ outputDir, releaseDir, extraArgs = [] } =
   const recorder = createMetrics();
 
   return {
-    callTool: (name, args) => recorder.measure(name, async () => textResult(
-      await client.callTool({ name, arguments: args }),
+    // `options` (WS4a Task 5) is an optional third arg forwarded verbatim to
+    // the SDK's own `client.callTool(params, resultSchema, options)` --
+    // every existing caller passes exactly two args, so `options` is
+    // `undefined` for them, identical to never having been passed at all.
+    // The one thing this exists for: `{ signal }`, so a caller can abort an
+    // in-flight call (the kill test's own use -- see drift-harness.test.mjs)
+    // via the SDK's real cancellation surface (protocol.js's own
+    // `options?.signal` handling: a local reject plus a
+    // `notifications/cancelled` sent to the server) rather than inventing a
+    // parallel one.
+    callTool: (name, args, options) => recorder.measure(name, async () => textResult(
+      await client.callTool({ name, arguments: args }, undefined, options),
     )),
     metrics: () => recorder.summary(),
     close: () => client.close(),

@@ -255,3 +255,94 @@ test('fixture server: a recognized ?profile= serves that profile directly', asyn
     await fixture.close();
   }
 });
+
+// --- WS4a Task 5 (TDD Step 1): the mutating-submission counter, exercised
+// entirely over real HTTP -- no browser -- proving the endpoint itself
+// (increments once per POST, keyed by session token, readable back) before
+// tests/e2e/drift-harness.test.mjs's kill leg ever depends on it.
+
+test('fixture server: POST /order increments a counter keyed independently per token', async () => {
+  const fixture = await startOrderFixture();
+  try {
+    const post = (token) => fetch(`${fixture.origin}/order`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ token }),
+    });
+    const count = async (token) => {
+      const response = await fetch(`${fixture.origin}/order/count?token=${encodeURIComponent(token)}`);
+      assert.equal(response.status, 200);
+      return (await response.json()).count;
+    };
+
+    // An unseen token reads 0 -- no explicit reset call exists or is
+    // needed (the module doc comment's "per fresh server instance or per
+    // token" semantics: a token simply never seen by THIS server instance
+    // starts at 0).
+    assert.equal(await count('token-a'), 0);
+
+    const firstResponse = await post('token-a');
+    assert.equal(firstResponse.status, 200);
+    assert.deepEqual(await firstResponse.json(), { ok: true, count: 1 });
+    assert.equal(await count('token-a'), 1);
+
+    // A DIFFERENT token is counted independently -- the counter is
+    // genuinely keyed per session token, not one global counter this
+    // fixture instance happens to expose two read paths for.
+    assert.equal(await count('token-b'), 0);
+    await post('token-b');
+    assert.equal(await count('token-b'), 1);
+    assert.equal(await count('token-a'), 1, "token-b's submission must not affect token-a's own count");
+
+    // A second submission for the SAME token increments again: at-most-once
+    // is a property of how the flow-runner replay loop calls this endpoint
+    // (each step runs its own action at most once -- builtins/macros/
+    // flow-runner.js's own header doc comment), never something this
+    // endpoint enforces on its own.
+    await post('token-a');
+    assert.equal(await count('token-a'), 2);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test('fixture server: POST /order without a usable token is a 400, and never silently counted', async () => {
+  const fixture = await startOrderFixture();
+  try {
+    const missing = await fetch(`${fixture.origin}/order`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    assert.equal(missing.status, 400);
+
+    const malformed = await fetch(`${fixture.origin}/order`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: 'not json',
+    });
+    assert.equal(malformed.status, 400);
+
+    // Neither bad request left a trace under any real token this fixture
+    // otherwise recognizes -- both are rejected outright, not counted
+    // against an empty-string or "undefined" token key.
+    const emptyTokenCount = await fetch(`${fixture.origin}/order/count?token=`);
+    assert.equal((await emptyTokenCount.json()).count, 0);
+  } finally {
+    await fixture.close();
+  }
+});
+
+// `/order/count` with no `?token=` at all degrades to 0 rather than
+// throwing -- mirrors the counter's own "unseen token reads 0" contract for
+// the degenerate case of no token supplied at all.
+test('fixture server: GET /order/count with no token param reads 0', async () => {
+  const fixture = await startOrderFixture();
+  try {
+    const response = await fetch(`${fixture.origin}/order/count`);
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { count: 0 });
+  } finally {
+    await fixture.close();
+  }
+});

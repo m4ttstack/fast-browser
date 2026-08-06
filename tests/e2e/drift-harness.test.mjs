@@ -9,11 +9,12 @@ import test from 'node:test';
 import { flows } from '../../lib/commands/flows.mjs';
 import { sites } from '../../lib/commands/sites.mjs';
 import { QUARANTINE_FAIL_STREAK_THRESHOLD } from '../../lib/flows/match.mjs';
+import { listTraceSessions } from '../../lib/flows/trace-reader.mjs';
 import { startOrderFixture } from '../fixtures/order-flow/server.mjs';
 import {
   classifyReplay, recordAndApprove, replayArgsFor, replayOneProfile, runHarness,
 } from './helpers/drift-harness.mjs';
-import { installFlowRunner, pathsForOutputDir } from './helpers/flow-fixtures.mjs';
+import { installFlowRunner, pathsForOutputDir, tracedSession } from './helpers/flow-fixtures.mjs';
 
 // WS4a Task 3: drift-harness driver + rung classifier.
 //
@@ -684,6 +685,321 @@ test(
     assert.ok(
       quarantineCandidate.reasons.includes('quarantined: re-record likely cheaper'),
       `expected a quarantine reason: ${JSON.stringify(quarantineCandidate.reasons)}`,
+    );
+
+    t.after(() => rm(outputDir, { recursive: true, force: true }));
+  },
+);
+
+// --- Task 5: the at-most-once kill test ---
+//
+// Pins the spec's at-most-once consent invariant end to end: a replay
+// killed mid-flow must never have fired its mutating action twice, and the
+// truncated trace session it leaves behind must sweep cleanly under
+// lib/flows/sweep.mjs's live-session deferral contract (module doc comment,
+// "incremental cursors: TWO of them" -- compilation deferred entirely until
+// `meta.endedAt` exists; replay-record PROVENANCE scanning is NOT deferred,
+// it runs every sweep, live or complete).
+//
+// Independent of the matrix legs above (own fixture instance, own output
+// dir, own recording) -- per the plan's own Scope note that the kill leg
+// must not share isolation state with the rung-distribution matrix.
+//
+// The mutating step + stall mechanism (tests/fixtures/order-flow/server.mjs
+// / index.html, both amended by this task):
+//   - `fixture.setKillTest({ token, stall })` is a server MODE (not a
+//     mutation PROFILE -- profiles.mjs is untouched by this task): the
+//     NEXT '/' request embeds `window.__KILL_TEST_TOKEN__`/
+//     `__KILL_TEST_STALL__`, read once at page load, same "flips what the
+//     next request serves, never touches one in flight" contract
+//     `setProfile` already has.
+//   - The "Place order" click fires a REAL `POST /order` (index.html,
+//     delegated at the `app` container so the existing mutation profiles'
+//     own exact-substring targeting of showReview()'s click-wiring line
+//     stays completely untouched -- see that file's own doc comment).
+//     server.mjs counts it per TOKEN in an in-memory Map; `GET
+//     /order/count?token=` reads it back over plain HTTP, independent of
+//     any browser session -- this is how this test PROVES the mutation
+//     fired, rather than assuming it from timing.
+//   - The stall itself is the brief's own SECOND documented option ("the
+//     client script never renders the next element"), not the first
+//     ("server holds the response"): under `stall: true`, `showComplete()`
+//     still renders "Order complete" (the mutating action's own visible
+//     effect completes) but withholds the "Confirm receipt" button
+//     entirely -- the kill-test flow's own compiled step immediately AFTER
+//     the mutating click. `flow-runner.js` has no code path that can hang a
+//     replay call truly forever (its own header comment: "a settle wait
+//     that can never hang the replay" is a deliberate design property, not
+//     an oversight) -- the withheld button instead makes the runner's own
+//     bounded, real locator walk (rung 1's 1500ms + rung 2's 3000ms =
+//     4500ms worst case, builtins/macros/flow-runner.js's `resolveTarget`)
+//     spin genuinely, for a real window strictly AFTER the mutation has
+//     already fired -- long enough to reliably land a kill inside it, which
+//     is what "hangs after the mutation" needs to mean for a runner that
+//     intentionally never hangs forever. That window alone is bounded at
+//     4500ms; the grace-period comment further down measures the actual
+//     observed total (longer -- an extra settle-wait stacks on top of it,
+//     for a reason explained there).
+//
+// The kill itself: `tests/e2e/helpers/mcp-client.mjs`'s `callTool` now
+// forwards an optional third `options` argument straight to the MCP SDK's
+// own `client.callTool(params, resultSchema, options)` -- `{ signal }` is
+// the SDK's real cancellation surface (`protocol.js`: on abort, the LOCAL
+// call rejects and a `notifications/cancelled` is sent to the server).
+// Whether the SERVER actually stops executing the in-flight
+// `browser_run_code_unsafe` macro on receiving that notification, or keeps
+// running it to its own natural conclusion regardless, is exactly the
+// empirical question this test is built to observe rather than assume --
+// see the report for what was actually observed.
+
+async function recordKillTestFlow(session, origin, { customerName, plan, seats }) {
+  await session.callTool('browser_navigate', { url: origin });
+  await session.callTool('browser_click', { target: 'role=button[name="Start order"]' });
+  await session.callTool('browser_type', { target: 'role=textbox[name="Customer name"]', text: customerName });
+  await session.callTool('browser_click', { target: 'role=button[name="Continue"]' });
+  await session.callTool('browser_select_option', { target: 'role=combobox[name="Plan"]', values: [plan] });
+  await session.callTool('browser_type', { target: 'role=spinbutton[name="Seats"]', text: seats });
+  await session.callTool('browser_click', { target: 'role=button[name="Review order"]' });
+  await session.callTool('browser_click', { target: 'role=button[name="Place order"]' });
+  // Recorded ONLY when kill-test mode is on (stall: false at record time --
+  // see the test body below) -- "Confirm receipt" is the element that never
+  // renders under stall at REPLAY time, giving the compiled flow a real
+  // step immediately after the mutating click.
+  await session.callTool('browser_click', { target: 'role=button[name="Confirm receipt"]' });
+}
+
+const KILL_RECORDED = { customerName: 'Kilo', plan: 'team', seats: '2' };
+
+const killTestFlow = {
+  name: 'order-flow-kill-test',
+  record: (session, origin) => recordKillTestFlow(session, origin, KILL_RECORDED),
+};
+
+test(
+  'drift-harness: mid-flow kill never double-submits; truncated sessions sweep clean',
+  {
+    timeout: 300_000,
+    skip: releaseDirConfigured ? false : 'FAST_BROWSER_RELEASE_DIR is not set; this leg needs a local runtime',
+  },
+  async (t) => {
+    const outputDir = await mkdtemp(path.join(os.tmpdir(), 'fast-browser-drift-kill-'));
+    const paths = pathsForOutputDir(outputDir);
+    await installFlowRunner(paths);
+
+    const fixture = await startOrderFixture();
+    t.after(() => fixture.close());
+
+    // Two DISTINCT tokens: RECORD is a throwaway used only so "Confirm
+    // receipt" renders during recording (stall off) and can be clicked into
+    // the compiled flow; REPLAY is the one this test's own assertions read
+    // back. Never touched before this leg sets it, so it starts genuinely
+    // at 0 -- the counter-reset semantics this task pins ("per fresh server
+    // instance or per token" -- here, per token, on a fresh server
+    // instance).
+    const KILL_RECORD_TOKEN = 'kill-leg-record-probe';
+    const KILL_REPLAY_TOKEN = 'kill-leg-replay-probe';
+
+    fixture.setKillTest({ token: KILL_RECORD_TOKEN, stall: false });
+    const recorded = await recordAndApprove(t, killTestFlow, fixture, paths);
+
+    const findReport = await flows(
+      { sub: 'find', intent: 'place an order', origin: fixture.origin, url: null, json: true },
+      { paths },
+    );
+    assert.ok(findReport.candidates.length > 0, 'expected the kill-test flow to be findable');
+    const invocation = findReport.candidates[0].invocation;
+    const replayArgs = replayArgsFor(invocation, { customerName: 'Killed', plan: 'team', seats: '1' });
+
+    // Flips what the replay's OWN internal `goto` step picks up (never
+    // touches a request already in flight -- server.mjs's own doc
+    // comment): stall now ON, and a fresh token this test hasn't used yet.
+    fixture.setKillTest({ token: KILL_REPLAY_TOKEN, stall: true });
+
+    const countUrl = (token) => `${fixture.origin}/order/count?token=${encodeURIComponent(token)}`;
+    async function readCount(token) {
+      const response = await fetch(countUrl(token));
+      return (await response.json()).count;
+    }
+
+    assert.equal(await readCount(KILL_REPLAY_TOKEN), 0, "sanity: the kill leg's own token must start unused");
+
+    const killSession = await tracedSession(t, paths.dataDir);
+    const controller = new AbortController();
+
+    // Issued without awaiting yet: grabbed as a promise so the counter can
+    // be polled concurrently, then aborted mid-flight. The .catch here is
+    // purely to stop Node from ever surfacing the eventual (expected)
+    // rejection as an unhandled-rejection warning before the real `await`
+    // further down.
+    const replayPromise = killSession.callTool(invocation.tool, replayArgs, { signal: controller.signal });
+    replayPromise.catch(() => {});
+
+    // How we KNOW the mutation fired before we abort: not a timer or a
+    // guess, a genuine independent HTTP read of the fixture's own counter
+    // (a plain `fetch`, entirely outside the MCP session about to be
+    // killed). `count` can only read 1 once the server has actually
+    // processed and durably stored the increment -- polling until that's
+    // true is the only way to prove ordering here, since the single
+    // `browser_run_code_unsafe` call is opaque from the caller's side; no
+    // partial progress is otherwise observable.
+    async function pollUntilCount(token, target, { intervalMs = 25, timeoutMs = 15_000 } = {}) {
+      const deadline = Date.now() + timeoutMs;
+      for (;;) {
+        const count = await readCount(token);
+        if (count >= target) return count;
+        if (Date.now() >= deadline) {
+          throw new Error(`timed out waiting for token "${token}" to reach count ${target}; last observed ${count}`);
+        }
+        await new Promise((resolve) => { setTimeout(resolve, intervalMs); });
+      }
+    }
+
+    const observedAtAbort = await pollUntilCount(KILL_REPLAY_TOKEN, 1);
+    assert.equal(observedAtAbort, 1, 'expected the mutating POST to have fired exactly once before the kill');
+
+    const abortedAt = Date.now();
+    controller.abort();
+
+    let replayOutcome;
+    try {
+      const result = await replayPromise;
+      replayOutcome = { settled: 'resolved', result };
+    } catch (error) {
+      replayOutcome = { settled: 'rejected', message: error?.message ?? String(error) };
+    }
+    const localSettleMs = Date.now() - abortedAt;
+    t.diagnostic(`kill leg: local call settled "${replayOutcome.settled}" ${localSettleMs}ms after abort() -- ${JSON.stringify(replayOutcome).slice(0, 400)}`);
+
+    // FINDING (see the report): aborting the MCP call does NOT cancel the
+    // server-side browser_run_code_unsafe execution. A `notifications/
+    // cancelled` IS sent (protocol.js's own `cancel()`), and the LOCAL
+    // promise above rejects near-instantly regardless of anything the
+    // server does -- but the runtime keeps running the flow-runner macro to
+    // its own natural conclusion. Measured directly (a standalone timing
+    // probe, not asserted here since it is host/timing-sensitive): the
+    // "Place order" step's own compiled `waitAfter.networkSettled` (set
+    // because the RECORDING observed a real awaited request from this
+    // task's own mutating fetch) adds flow-runner.js's `settleNetwork`'s
+    // full bounded 5000ms wait after the click, and "Confirm receipt" then
+    // spins its own genuine, real rung 1 + rung 2 walk (1500ms + 3000ms =
+    // 4500ms) before failing with "no locator candidate matched" -- roughly
+    // 9.5-10s of real server-side execution AFTER the mutating click, not
+    // merely the ~4.5s a locator-only stall would need. The grace period
+    // below is set well past that measured total so this test's own
+    // assertions reflect the call's TRUE natural end state, not a
+    // still-in-flight snapshot.
+    await new Promise((resolve) => { setTimeout(resolve, 14_000); });
+    const countAfterGrace = await readCount(KILL_REPLAY_TOKEN);
+    t.diagnostic(`kill leg: counter after grace period = ${countAfterGrace}`);
+    assert.equal(
+      countAfterGrace,
+      1,
+      'at-most-once: the mutating POST must never fire a second time, whether or not the abort actually cancelled server-side execution',
+    );
+
+    // --- the sweep half: live-session deferral, then no double-count ---
+
+    const sessionsBeforeClose = await listTraceSessions(paths.dataDir);
+    const killTraceSession = sessionsBeforeClose[sessionsBeforeClose.length - 1];
+    const killBasename = path.basename(killTraceSession.dir);
+    assert.equal(
+      typeof killTraceSession.meta?.endedAt,
+      'undefined',
+      'expected the kill-leg trace session to still have no endedAt (not yet closed)',
+    );
+
+    const preSweepArtifact = JSON.parse(await readFile(recorded.flowFilePath, 'utf8'));
+
+    const firstSweep = await flows({ sub: 'compile', json: true }, { paths });
+    t.diagnostic(`kill leg: first sweep (session still live) = ${JSON.stringify(firstSweep)}`);
+
+    const firstCursorEntry = firstSweep.cursor[killBasename];
+    assert.ok(firstCursorEntry, 'expected a cursor entry for the kill-leg trace session after the first sweep');
+    assert.equal(
+      firstCursorEntry.incomplete,
+      true,
+      'expected the still-live kill-leg session to be marked incomplete (provenance-swept only, per the live-session deferral contract)',
+    );
+    assert.deepEqual(firstSweep.compiled, [], 'expected nothing new compiled from a pure-replay session, live or not');
+
+    // FINDING, pinned: because the server-side execution ran to its own
+    // natural conclusion despite the abort (see the grace-period comment
+    // above), the trace already carries a completed (failed) replay record
+    // by the time this FIRST sweep runs -- and sweep.mjs's own contract
+    // (module doc comment: "replay-record PROVENANCE scanning is NOT
+    // deferred, it runs every sweep, live or complete") means THIS sweep,
+    // while the session is still live/incomplete, already applies it:
+    // `updated` carries a real entry, `failStreak` goes from 0 to 1
+    // (the mutating action fired -- successRuns stays 0, this attempt did
+    // not succeed -- "Confirm receipt" never resolved). This is "provenance
+    // -swept only" exactly as the contract promises: a replay was counted,
+    // but nothing compiled, and the cursor above still reads `incomplete:
+    // true`.
+    const postFirstSweepArtifact = JSON.parse(await readFile(recorded.flowFilePath, 'utf8'));
+    const firstUpdatedEntry = firstSweep.updated.find((entry) => entry.name === recorded.compiledName);
+    t.diagnostic(
+      `kill leg: pre-sweep provenance=${JSON.stringify(preSweepArtifact.provenance)} `
+      + `post-first-sweep provenance=${JSON.stringify(postFirstSweepArtifact.provenance)} `
+      + `updated-entry=${JSON.stringify(firstUpdatedEntry)}`,
+    );
+    assert.deepEqual(preSweepArtifact.provenance.successRuns, 0);
+    assert.deepEqual(preSweepArtifact.provenance.failStreak, 0);
+    assert.deepEqual(
+      firstUpdatedEntry,
+      { name: recorded.compiledName, successRuns: 0, failStreak: 1 },
+      'expected the first (live-session) sweep to already count the killed replay as one failed attempt via provenance scanning',
+    );
+    assert.equal(postFirstSweepArtifact.provenance.successRuns, 0);
+    assert.equal(postFirstSweepArtifact.provenance.failStreak, 1);
+
+    // Now let the session actually end (writes meta.endedAt) and sweep
+    // again -- the live-session deferral contract's OTHER half: a
+    // SUBSEQUENT sweep, once the session is complete, must not double-count
+    // whatever the first (live) sweep already counted via provenance
+    // scanning (sweep.mjs's own two-cursor model: `provenanceLines` already
+    // caught all the way up on the first pass, regardless of whether that
+    // pass found zero replay records or one).
+    let closeError = null;
+    try {
+      await killSession.close();
+    } catch (error) {
+      closeError = error?.message ?? String(error);
+    }
+    t.diagnostic(`kill leg: killSession.close() ${closeError ? `threw: ${closeError}` : 'succeeded'}`);
+
+    const sessionsAfterClose = await listTraceSessions(paths.dataDir);
+    const killTraceSessionAfterClose = sessionsAfterClose.find((session) => path.basename(session.dir) === killBasename);
+    assert.equal(
+      typeof killTraceSessionAfterClose?.meta?.endedAt,
+      'string',
+      'expected the kill-leg trace session to now carry a real endedAt after closing',
+    );
+
+    const secondSweep = await flows({ sub: 'compile', json: true }, { paths });
+    t.diagnostic(`kill leg: second sweep (session now closed) = ${JSON.stringify(secondSweep)}`);
+
+    const secondCursorEntry = secondSweep.cursor[killBasename];
+    assert.ok(secondCursorEntry, 'expected the cursor entry to persist across the second sweep');
+    assert.equal(
+      secondCursorEntry.incomplete,
+      undefined,
+      'expected the now-closed session to no longer be marked incomplete',
+    );
+    assert.deepEqual(secondSweep.compiled, [], 'expected still nothing to compile from a pure-replay session, complete or not');
+
+    const postSecondSweepArtifact = JSON.parse(await readFile(recorded.flowFilePath, 'utf8'));
+    assert.deepEqual(
+      postSecondSweepArtifact.provenance,
+      postFirstSweepArtifact.provenance,
+      'expected the SECOND sweep (now that the session has ended) to make no further provenance change -- '
+      + 'whatever the FIRST (live) sweep already counted via provenance scanning must not be counted again',
+    );
+    const secondUpdatedEntry = secondSweep.updated.find((entry) => entry.name === recorded.compiledName);
+    assert.equal(
+      secondUpdatedEntry,
+      undefined,
+      "expected the second sweep's own `updated` report to carry NO entry for this flow -- any provenance-affecting "
+      + "replay record was already fully consumed by the first (live) sweep's cursor advance",
     );
 
     t.after(() => rm(outputDir, { recursive: true, force: true }));
