@@ -33,6 +33,22 @@ sweep reads this same evidence and heals the artifact automatically when
 it is unambiguous. If the flow keeps failing, it quarantines on its own;
 re-record it instead.
 
+## Scripts vs. discrete steps
+
+`flows find` first stays the rule no matter what runs next. Scripts
+(`browser_run_code_unsafe`) remain right for exploration and one-off tasks;
+the fast loop below is built around them.
+
+When the task is a repeatable multi-step journey on a site with no matching
+flow, drive it with discrete tool calls (`browser_click`, `browser_type`,
+`browser_navigate`, and so on) instead of one script. The flywheel only
+compiles discrete-call sessions into replayable steps. A scripted run
+compiles to a single opaque `js` step instead, the same "contains js step:
+not replayable in v1" case already covered above, so it never becomes a
+runnable candidate on its own. Driving the journey with discrete calls now is
+what lets the next `flows compile` sweep turn it into something a later
+session can run directly.
+
 ## Know the site
 
 Before scouting an unfamiliar page on a known origin, run `fast-browser
