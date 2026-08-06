@@ -1,12 +1,15 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { createPrivateKey, createPublicKey } from 'node:crypto';
+import { createHash, createPrivateKey, createPublicKey } from 'node:crypto';
 import net from 'node:net';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import test from 'node:test';
 
+import { parseFlow, serializeFlow } from '../../lib/flows/artifact.mjs';
 import { BODY_LIMIT_BYTES, PUSH_MAX_FLOWS } from '../lib/http.mjs';
+import { verify } from '../lib/signing.mjs';
+import { baseFlow } from './helpers/fixtures.mjs';
 import { generateSigningKeyPem, startTestServer, TEST_TOKEN } from './helpers/server.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -215,7 +218,20 @@ test('GET /v1/pull and GET /v1/search both require auth too', async () => {
   }
 });
 
-test('the correct bearer token unlocks push/pull/search, currently placeholder 501s', async () => {
+test('the correct bearer token unlocks pull/search, currently placeholder 501s', async () => {
+  const { close, baseUrl, token } = await startTestServer();
+  try {
+    const pull = await fetch(`${baseUrl}/v1/pull`, { headers: { Authorization: `Bearer ${token}` } });
+    assert.equal(pull.status, 501);
+
+    const search = await fetch(`${baseUrl}/v1/search?intent=hello`, { headers: { Authorization: `Bearer ${token}` } });
+    assert.equal(search.status, 501);
+  } finally {
+    await close();
+  }
+});
+
+test('the correct bearer token unlocks POST /v1/push, which is real (Task 5) and accepts an empty flows array', async () => {
   const { close, baseUrl, token } = await startTestServer();
   try {
     const push = await fetch(`${baseUrl}/v1/push`, {
@@ -223,15 +239,9 @@ test('the correct bearer token unlocks push/pull/search, currently placeholder 5
       headers: { Authorization: `Bearer ${token}` },
       body: JSON.stringify({ flows: [] }),
     });
-    assert.equal(push.status, 501);
-    const pushPayload = await push.json();
-    assert.equal(pushPayload.error.code, 'not_implemented');
-
-    const pull = await fetch(`${baseUrl}/v1/pull`, { headers: { Authorization: `Bearer ${token}` } });
-    assert.equal(pull.status, 501);
-
-    const search = await fetch(`${baseUrl}/v1/search?intent=hello`, { headers: { Authorization: `Bearer ${token}` } });
-    assert.equal(search.status, 501);
+    assert.equal(push.status, 200);
+    const payload = await push.json();
+    assert.deepEqual(payload, { results: [] });
   } finally {
     await close();
   }
@@ -253,16 +263,314 @@ test('malformed JSON on POST /v1/push (correct token) is rejected 400, not 501',
   }
 });
 
-test('an empty POST /v1/push body (correct token) is not treated as malformed JSON', async () => {
+test('an empty POST /v1/push body (correct token) is not treated as malformed JSON -- it is a 422 whole-request validation failure', async () => {
   const { close, baseUrl, token } = await startTestServer();
   try {
     const response = await fetch(`${baseUrl}/v1/push`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}` },
     });
-    // No body at all -> falls through to the (currently placeholder) 501,
-    // never the 400 malformed-JSON path.
-    assert.equal(response.status, 501);
+    // No body at all -> `body` is undefined, not an object -- this is
+    // validatePushRequest's 422 path, never the 400 malformed-JSON path
+    // (readBody/JSON.parse never even runs against an absent body).
+    assert.equal(response.status, 422);
+    const payload = await response.json();
+    assert.equal(payload.error.code, 'invalid_push_request');
+  } finally {
+    await close();
+  }
+});
+
+// --- POST /v1/push (WS4b Task 5): whole-request validation + real ingest,
+// through the full HTTP layer ---
+
+function contentHashOf(flow) {
+  return createHash('sha256').update(serializeFlow(flow)).digest('hex');
+}
+
+function pushEnvelopeFor(flowOverrides = {}) {
+  const flow = parseFlow(baseFlow(flowOverrides));
+  return { artifact: flow, contentHash: contentHashOf(flow) };
+}
+
+test('POST /v1/push rejects a whole request with too many flows (over PUSH_MAX_FLOWS) with 422, never touching the store', async () => {
+  const { close, baseUrl, token } = await startTestServer();
+  try {
+    const flows = Array.from({ length: PUSH_MAX_FLOWS + 1 }, (_, i) => pushEnvelopeFor({ name: `flow-${i}` }));
+    const response = await fetch(`${baseUrl}/v1/push`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ flows }),
+    });
+    assert.equal(response.status, 422);
+    const payload = await response.json();
+    assert.equal(payload.error.code, 'invalid_push_request');
+    assert.match(payload.error.message, new RegExp(String(PUSH_MAX_FLOWS)));
+  } finally {
+    await close();
+  }
+});
+
+test('POST /v1/push rejects a whole request whose flows is not an array with 422', async () => {
+  const { close, baseUrl, token } = await startTestServer();
+  try {
+    const response = await fetch(`${baseUrl}/v1/push`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ flows: 'not-an-array' }),
+    });
+    assert.equal(response.status, 422);
+    const payload = await response.json();
+    assert.equal(payload.error.code, 'invalid_push_request');
+  } finally {
+    await close();
+  }
+});
+
+test('POST /v1/push rejects a whole request with a flow entry missing contentHash with 422', async () => {
+  const { close, baseUrl, token } = await startTestServer();
+  try {
+    const flow = parseFlow(baseFlow());
+    const response = await fetch(`${baseUrl}/v1/push`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ flows: [{ artifact: flow }] }),
+    });
+    assert.equal(response.status, 422);
+    const payload = await response.json();
+    assert.equal(payload.error.code, 'invalid_push_request');
+  } finally {
+    await close();
+  }
+});
+
+test('POST /v1/push with exactly PUSH_MAX_FLOWS entries is accepted (the boundary is "over", not "at")', async () => {
+  const { close, baseUrl, token } = await startTestServer();
+  try {
+    const flows = Array.from({ length: PUSH_MAX_FLOWS }, (_, i) => pushEnvelopeFor({ name: `boundary-flow-${i}` }));
+    const response = await fetch(`${baseUrl}/v1/push`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ flows }),
+    });
+    assert.equal(response.status, 200);
+    const payload = await response.json();
+    assert.equal(payload.results.length, PUSH_MAX_FLOWS);
+    assert.ok(payload.results.every((result) => result.outcome === 'created'));
+  } finally {
+    await close();
+  }
+});
+
+test('POST /v1/push creates a new canonical, signed and verifiable against the served public key', async () => {
+  const { close, baseUrl, token, publicKeyPem } = await startTestServer();
+  try {
+    const flow = parseFlow(baseFlow({ name: 'push-create-flow' }));
+    const response = await fetch(`${baseUrl}/v1/push`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ flows: [{ artifact: flow, contentHash: contentHashOf(flow) }] }),
+    });
+    assert.equal(response.status, 200);
+    const payload = await response.json();
+    assert.equal(payload.results.length, 1);
+    const [result] = payload.results;
+    assert.equal(result.name, 'push-create-flow');
+    assert.equal(result.outcome, 'created');
+    assert.equal(typeof result.canonicalId, 'string');
+    assert.deepEqual(result.reasons, []);
+  } finally {
+    await close();
+  }
+});
+
+test('POST /v1/push re-pushing the exact same content is idempotent: deduped, not created twice', async () => {
+  const { close, baseUrl, token } = await startTestServer();
+  try {
+    const envelope = pushEnvelopeFor({ name: 'push-idempotent-flow' });
+    const first = await fetch(`${baseUrl}/v1/push`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ flows: [envelope] }),
+    });
+    const firstPayload = await first.json();
+    assert.equal(firstPayload.results[0].outcome, 'created');
+
+    const second = await fetch(`${baseUrl}/v1/push`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ flows: [envelope] }),
+    });
+    const secondPayload = await second.json();
+    assert.equal(secondPayload.results[0].outcome, 'deduped');
+    assert.equal(secondPayload.results[0].canonicalId, firstPayload.results[0].canonicalId);
+  } finally {
+    await close();
+  }
+});
+
+test('POST /v1/push rejects a per-flow contentHash mismatch as "rejected" (200 overall, not 422 -- a per-flow failure)', async () => {
+  const { close, baseUrl, token } = await startTestServer();
+  try {
+    const flow = parseFlow(baseFlow({ name: 'push-hash-mismatch-flow' }));
+    const response = await fetch(`${baseUrl}/v1/push`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ flows: [{ artifact: flow, contentHash: '0'.repeat(64) }] }),
+    });
+    assert.equal(response.status, 200);
+    const payload = await response.json();
+    assert.equal(payload.results[0].outcome, 'rejected');
+    assert.ok(payload.results[0].reasons.some((reason) => reason.rule === 'content-hash-mismatch'));
+  } finally {
+    await close();
+  }
+});
+
+test('POST /v1/push rejects a PII-tainted flow as "rejected" with the lint reasons', async () => {
+  const { close, baseUrl, token } = await startTestServer();
+  try {
+    const flow = parseFlow(baseFlow({
+      name: 'push-pii-flow',
+      description: 'Contact support at jane.doe@example.com if this fails',
+    }));
+    const response = await fetch(`${baseUrl}/v1/push`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ flows: [{ artifact: flow, contentHash: contentHashOf(flow) }] }),
+    });
+    assert.equal(response.status, 200);
+    const payload = await response.json();
+    assert.equal(payload.results[0].outcome, 'rejected');
+    assert.deepEqual(payload.results[0].reasons, [{ path: 'description', rule: 'email' }]);
+  } finally {
+    await close();
+  }
+});
+
+test('POST /v1/push processes multiple flows in order, one rejection never blocking the rest', async () => {
+  const { close, baseUrl, token } = await startTestServer();
+  try {
+    const good = parseFlow(baseFlow({ name: 'push-multi-good' }));
+    const bad = parseFlow(baseFlow({ name: 'push-multi-bad', description: 'sk-abcdEFGH12345678ijklMNOP' }));
+    const response = await fetch(`${baseUrl}/v1/push`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: JSON.stringify({
+        flows: [
+          { artifact: good, contentHash: contentHashOf(good) },
+          { artifact: bad, contentHash: contentHashOf(bad) },
+        ],
+      }),
+    });
+    assert.equal(response.status, 200);
+    const payload = await response.json();
+    assert.equal(payload.results.length, 2);
+    assert.equal(payload.results[0].name, 'push-multi-good');
+    assert.equal(payload.results[0].outcome, 'created');
+    assert.equal(payload.results[1].name, 'push-multi-bad');
+    assert.equal(payload.results[1].outcome, 'rejected');
+  } finally {
+    await close();
+  }
+});
+
+test('POST /v1/push with a keyless service (no VOYAGE_API_KEY) creates with embedding null and never clusters', async () => {
+  const { close, baseUrl, token } = await startTestServer();
+  try {
+    const a = pushEnvelopeFor({ name: 'push-keyless-a' });
+    const b = pushEnvelopeFor({ name: 'push-keyless-b' });
+    const response = await fetch(`${baseUrl}/v1/push`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ flows: [a, b] }),
+    });
+    const payload = await response.json();
+    // Two structurally-identical (but differently-named) flows, pushed
+    // with no embedder configured at all -- clustering is skipped
+    // entirely, so both land as 'created', never 'clustered'.
+    assert.deepEqual(payload.results.map((result) => result.outcome), ['created', 'created']);
+  } finally {
+    await close();
+  }
+});
+
+test('POST /v1/push clusters two near-duplicate flows (stubbed cosine 0.96, same origin + opSequence): alternates union into the canonical, re-signed and verifiable', async () => {
+  // Two flows sharing everything an ingest cluster-match cares about (same
+  // origin, same steps/stepSignature/opSequence) but differing ONLY in
+  // their click step's locator alternates -- exactly the "same UI action,
+  // captured twice, DOM gave a different fallback selector this time"
+  // shape clustering exists to collapse.
+  const canonicalFlowInput = baseFlow({ name: 'push-cluster-canonical' });
+  const incomingLocator = { kind: 'testid', selector: 'place-order-button' };
+  const incomingFlowInput = baseFlow({
+    name: 'push-cluster-incoming',
+    steps: canonicalFlowInput.steps.map((step, index) => {
+      if (index !== 2) return step; // the click step
+      return {
+        ...step,
+        target: { ...step.target, locators: [...step.target.locators, incomingLocator] },
+      };
+    }),
+  });
+
+  // A call-order queue, not a fixed constant: the FIRST embed call (the
+  // canonical's own creation) returns [1, 0]; every call after that
+  // returns a vector at exactly cosine 0.96 from it ([0.96, sqrt(1 -
+  // 0.96^2)], norm 1 by construction) -- this is what actually produces a
+  // real 0.96 cosine between the incoming flow's embedding and the
+  // canonical's STORED embedding, rather than two calls that happen to
+  // return the identical vector (which would trivially cosine to 1.0 and
+  // prove nothing about the 0.95 threshold).
+  const vectors = [[1, 0], [0.96, Math.sqrt(1 - 0.96 ** 2)]];
+  let embedCall = 0;
+  const stubEmbedder = async () => {
+    const vector = vectors[Math.min(embedCall, vectors.length - 1)];
+    embedCall += 1;
+    return Float64Array.from(vector);
+  };
+  const { close, baseUrl, token, publicKeyPem, store } = await startTestServer({}, { embedder: stubEmbedder });
+  try {
+    const canonicalEnvelope = pushEnvelopeFor(canonicalFlowInput);
+    const first = await fetch(`${baseUrl}/v1/push`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ flows: [canonicalEnvelope] }),
+    });
+    const firstPayload = await first.json();
+    assert.equal(firstPayload.results[0].outcome, 'created');
+    const canonicalId = firstPayload.results[0].canonicalId;
+
+    const incomingEnvelope = pushEnvelopeFor(incomingFlowInput);
+    const second = await fetch(`${baseUrl}/v1/push`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ flows: [incomingEnvelope] }),
+    });
+    assert.equal(second.status, 200);
+    const secondPayload = await second.json();
+    assert.equal(secondPayload.results[0].outcome, 'clustered');
+    assert.equal(secondPayload.results[0].canonicalId, canonicalId);
+
+    // GET /v1/pull is still a Task 6 placeholder, so the only way to
+    // inspect the merged canonical through the real push path is the
+    // store this same booted server is using -- proving the full
+    // HTTP -> ingest -> store round trip, not just the response shape.
+    const stored = await store.get(canonicalId);
+    assert.equal(stored.mergedCount, 1, 'a single cluster-merge increments mergedCount by exactly 1');
+    const clickStepLocators = stored.content.steps[2].target.locators;
+    // Append-only: every ORIGINAL canonical locator survives, in order,
+    // and the incoming flow's new alternate is appended after them.
+    assert.deepEqual(
+      clickStepLocators,
+      [...canonicalFlowInput.steps[2].target.locators, incomingLocator],
+    );
+
+    // The canonical was re-signed over its refreshed content -- verify
+    // independently against the server's own served public key, the same
+    // way a real pull-side client would.
+    const canonicalFlow = parseFlow(stored.content);
+    assert.equal(verify(serializeFlow(canonicalFlow), stored.signature, publicKeyPem), true);
   } finally {
     await close();
   }

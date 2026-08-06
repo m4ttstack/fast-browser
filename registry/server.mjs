@@ -14,6 +14,8 @@ import { fileURLToPath } from 'node:url';
 
 import { createStore } from './lib/store.mjs';
 import { createRequestListener } from './lib/http.mjs';
+import { createEmbedder } from './lib/embedder.mjs';
+import { sign } from './lib/signing.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const { version: REGISTRY_VERSION } = JSON.parse(readFileSync(join(HERE, 'package.json'), 'utf8'));
@@ -94,10 +96,22 @@ function derivePublicKeyPem(signingKeyPem) {
 // below -- so tests can call boot() directly with a synthetic env and get
 // a rejected Promise (naming the missing var) instead of losing the test
 // process.
-export async function boot({ env = process.env } = {}) {
+//
+// `embedder` is the Task 5 test-injection seam: when omitted (the
+// `undefined` default), boot derives the real one from
+// `env.VOYAGE_API_KEY` via registry/lib/embedder.mjs's createEmbedder --
+// production behavior, and what every non-embedder-focused test already
+// gets for free. Passing an explicit value (a stub `async (text) ->
+// Float64Array | null` function, or `null` to force keyless behavior
+// regardless of env) overrides that derivation entirely, so
+// registry/tests/http.test.mjs can exercise real clustering through the
+// full HTTP layer with deterministic vectors instead of a live Voyage call.
+export async function boot({ env = process.env, embedder: embedderOverride } = {}) {
   const token = requireEnv(env, 'REGISTRY_TOKEN');
   const signingKeyPem = requireEnv(env, 'REGISTRY_SIGNING_KEY');
   const publicKeyPem = derivePublicKeyPem(signingKeyPem);
+  const signer = { sign: (bytes) => sign(bytes, signingKeyPem) };
+  const embedder = embedderOverride !== undefined ? embedderOverride : createEmbedder({ env });
 
   const driver = selectStoreDriver(env);
   let store;
@@ -117,8 +131,13 @@ export async function boot({ env = process.env } = {}) {
   const listener = createRequestListener({
     token,
     store,
+    signer,
+    embedder,
     publicKeyPem,
     version: REGISTRY_VERSION,
+    // Reflects env.VOYAGE_API_KEY specifically (not whether `embedder` was
+    // overridden for a test) -- /health's `clustering` flag documents the
+    // service's real configuration, per the plan's Shared shapes.
     clustering: Boolean(env.VOYAGE_API_KEY),
   });
 

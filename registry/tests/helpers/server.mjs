@@ -23,14 +23,22 @@ export function generateSigningKeyPem() {
 // signing key, ephemeral port) -- e.g. pass { VOYAGE_API_KEY: 'x' } to
 // flip health's clustering flag, or { REGISTRY_TOKEN: 'other' } to test a
 // different configured token, without repeating the rest.
-export async function startTestServer(envOverrides = {}) {
+//
+// `embedder` (WS4b Task 5's HTTP-level clustering injection seam) passes
+// straight through to boot()'s own `embedder` override -- a stub
+// `async (text) -> Float64Array | null` function, so a test can exercise
+// real push-through-clustering over the full HTTP layer with
+// deterministic vectors instead of a live Voyage call. Omit it to get
+// boot()'s default (derived from env.VOYAGE_API_KEY, i.e. keyless unless
+// envOverrides sets that key).
+export async function startTestServer(envOverrides = {}, { embedder } = {}) {
   const env = {
     REGISTRY_TOKEN: TEST_TOKEN,
     REGISTRY_SIGNING_KEY: generateSigningKeyPem(),
     PORT: '0',
     ...envOverrides,
   };
-  const instance = await boot({ env });
+  const instance = await boot({ env, embedder });
   return {
     ...instance,
     baseUrl: `http://127.0.0.1:${instance.port}`,

@@ -1,8 +1,8 @@
 // HTTP surface for the registry service (WS4b plan, Task 3): routing,
 // bearer auth, request-body limits, and the JSON error envelope every
-// endpoint uses. Owns none of the API's actual behavior beyond health --
-// POST /v1/push, GET /v1/pull, and GET /v1/search are wired here as 501
-// placeholders; Task 5 (push/ingest) and Task 6 (pull/search) replace the
+// endpoint uses. Owns none of the API's actual behavior beyond health and,
+// from Task 5, POST /v1/push -- GET /v1/pull and GET /v1/search are still
+// wired here as 501 placeholders; Task 6 (pull/search) replaces those
 // placeholder handlers with real ones, in this same route table, without
 // touching auth/body-limit/error plumbing.
 //
@@ -12,10 +12,11 @@
 
 import { createHash, timingSafeEqual } from 'node:crypto';
 
-// Pinned constants (plan's Shared shapes). PUSH_MAX_FLOWS is not yet
-// enforced here -- POST /v1/push is a placeholder until Task 5 -- but it
-// is pinned in exactly one place now so Task 5 imports it rather than
-// re-guessing the value.
+import { ingest } from './ingest.mjs';
+
+// Pinned constants (plan's Shared shapes). PUSH_MAX_FLOWS is enforced by
+// `validatePushRequest` below: a push with more than this many flows is a
+// whole-request 422, never a per-flow rejection.
 export const PUSH_MAX_FLOWS = 50;
 export const BODY_LIMIT_BYTES = 5_000_000;
 
@@ -173,6 +174,75 @@ function notImplemented(routeLabel) {
   };
 }
 
+// Whole-REQUEST validation for POST /v1/push (Shared shapes: "422 only for
+// a malformed request as a whole -- not per-flow failures", which ride
+// each flow's own 'rejected' outcome instead, from ingest() itself). This
+// deliberately checks only the SHAPE a push envelope must have to be
+// worth handing to ingest() at all (an object with an `artifact` object
+// and a `contentHash` string) -- it never validates the artifact's own
+// schema; that is parseFlow's job, one layer down, and a schema failure
+// there is a per-flow 'rejected', not a 422.
+function validatePushRequest(body) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    return { ok: false, message: 'request body must be a JSON object' };
+  }
+  if (!Array.isArray(body.flows)) {
+    return { ok: false, message: 'flows must be an array' };
+  }
+  if (body.flows.length > PUSH_MAX_FLOWS) {
+    return { ok: false, message: `flows must not exceed ${PUSH_MAX_FLOWS} entries` };
+  }
+  for (let index = 0; index < body.flows.length; index += 1) {
+    const entry = body.flows[index];
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      return { ok: false, message: `flows[${index}] must be an object` };
+    }
+    if (!entry.artifact || typeof entry.artifact !== 'object' || Array.isArray(entry.artifact)) {
+      return { ok: false, message: `flows[${index}].artifact must be an object` };
+    }
+    if (typeof entry.contentHash !== 'string' || entry.contentHash.length === 0) {
+      return { ok: false, message: `flows[${index}].contentHash must be a non-empty string` };
+    }
+  }
+  return { ok: true, flows: body.flows };
+}
+
+// POST /v1/push (WS4b plan Task 5): validates the request as a whole
+// (422 on failure, see validatePushRequest above), then runs ingest() once
+// per flow, IN ORDER, accumulating each outcome into `results` -- a
+// per-flow ingest failure never aborts the rest of the push; only a
+// whole-request shape failure does. `signer`/`embedder` are threaded
+// straight through to ingest() unchanged (registry/server.mjs's boot()
+// builds both; registry/tests/helpers/server.mjs's test harness can
+// override the embedder to a stub, see that module's own doc comment).
+function push({ store, signer, embedder }) {
+  return async function handler(_req, res, { body }) {
+    const validation = validatePushRequest(body);
+    if (!validation.ok) {
+      sendError(res, 422, 'invalid_push_request', validation.message);
+      return;
+    }
+
+    const results = [];
+    for (const envelope of validation.flows) {
+      // Deliberately sequential, not Promise.all: push results must
+      // preserve request order, and ingest() calls are not independent of
+      // store state (an earlier flow in this same push can be the exact
+      // duplicate or cluster target of a later one in the same push), so
+      // they cannot run concurrently without changing behavior.
+      const result = await ingest({ envelope, store, signer, embedder });
+      results.push({
+        name: result.name,
+        outcome: result.outcome,
+        canonicalId: result.canonicalId,
+        reasons: result.reasons,
+      });
+    }
+
+    sendJson(res, 200, { results });
+  };
+}
+
 function health({ publicKeyPem, version, clustering }) {
   return async function handler(_req, res) {
     sendJson(res, 200, { ok: true, version, publicKey: publicKeyPem, clustering });
@@ -182,13 +252,17 @@ function health({ publicKeyPem, version, clustering }) {
 // Builds the request listener node:http.createServer() takes. `token` is
 // the configured REGISTRY_TOKEN; `publicKeyPem`/`version`/`clustering` feed
 // GET /health verbatim (registry/server.mjs computes all three at boot).
-// `store` is threaded through to every route handler's context even though
-// no Task 3 handler reads it yet -- Tasks 5/6 add real handlers to this
-// same table and need it there.
-export function createRequestListener({ token, store, publicKeyPem, version, clustering }) {
+// `store` is threaded through to every route handler's context. `signer`
+// (registry/lib/signing.mjs's sign, bound to the boot private key) and
+// `embedder` (registry/lib/embedder.mjs's createEmbedder output, or a test
+// stub with the same `async (text) -> Float64Array | null` shape, or
+// `null` when keyless) are threaded to POST /v1/push's ingest() calls --
+// Task 6 adds real GET /v1/pull and GET /v1/search handlers to this same
+// table and will need `store`/`signer` too.
+export function createRequestListener({ token, store, signer, embedder, publicKeyPem, version, clustering }) {
   const routes = [
     { method: 'GET', path: '/health', auth: false, hasBody: false, handler: health({ publicKeyPem, version, clustering }) },
-    { method: 'POST', path: '/v1/push', auth: true, hasBody: true, handler: notImplemented('POST /v1/push') },
+    { method: 'POST', path: '/v1/push', auth: true, hasBody: true, handler: push({ store, signer, embedder }) },
     { method: 'GET', path: '/v1/pull', auth: true, hasBody: false, handler: notImplemented('GET /v1/pull') },
     { method: 'GET', path: '/v1/search', auth: true, hasBody: false, handler: notImplemented('GET /v1/search') },
   ];
