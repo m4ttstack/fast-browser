@@ -99,19 +99,50 @@ test('class-rename: css hook moves from id to class; role/text/testid untouched'
   assert.equal(testidCount(output), testidCount(base));
 });
 
-test('dom-reshuffle: confirm/place-order buttons reparent into a wrapping section; every attribute is untouched', () => {
+test('dom-reshuffle: confirm/place-order buttons reparent into ONE well-formed wrapping section, not split across two fragment parses; every attribute is untouched', () => {
   const base = renderBase();
   const output = PROFILES['dom-reshuffle'].transform(base);
 
-  assert.ok(output.includes('<section class="actions"><button type="button" id="confirm-order">Confirm order</button>'), 'expected "Confirm order" reparented as the section\'s first child');
-  assert.ok(output.includes('<button type="button" id="place-order">Place order</button></section>'), 'expected "Place order" reparented as the section\'s last child, closing it');
+  // The critical, DOM-shape-provable assertion (review round 1 fix): the
+  // base script emits these two buttons via TWO SEPARATE
+  // `insertAdjacentHTML` calls (one per if/else block in showReview), each
+  // parsed by the browser as its OWN, independent HTML fragment. Splitting
+  // `<section class="actions">`/`</section>` across those two calls -- what
+  // an earlier version of this transform did -- auto-closes the dangling
+  // open tag at the end of the FIRST fragment and silently drops the
+  // unmatched close tag in the SECOND, so "Place order" (the element the
+  // recorded flow actually targets) was never reparented at all, only
+  // "Confirm order" was, into an orphaned section. Asserting the WHOLE
+  // insertAdjacentHTML call -- open tag through close tag, both buttons,
+  // one literal argument string -- as ONE contiguous substring is what
+  // makes "both buttons genuinely share one fragment" provable without a
+  // browser or jsdom: if they were still split across two calls, this
+  // exact substring could never appear (unrelated source text -- the
+  // 'drifted' if/else branch -- sits between them in that case).
+  assert.ok(
+    output.includes(
+      "app.insertAdjacentHTML('beforeend', '<section class=\"actions\">"
+      + '<button type="button" id="confirm-order">Confirm order</button>'
+      + '<button type="button" id="place-order">Place order</button>'
+      + "</section>');",
+    ),
+    'expected both buttons inside ONE well-formed <section> fragment, inserted by a single call',
+  );
+  // The old, separate place-order insertion call must be gone entirely --
+  // not duplicated, not left behind as inert dead code.
+  assert.ok(
+    !output.includes("app.insertAdjacentHTML('beforeend', '<button type=\"button\" id=\"place-order\">Place order</button>');"),
+    'expected the old standalone place-order insertion call removed',
+  );
+
   // Every attribute both buttons carried in base is still present verbatim
   // -- only their PARENT changed.
   assert.ok(output.includes('id="confirm-order"'));
   assert.ok(output.includes('id="place-order"'));
   assert.ok(output.includes('>Confirm order<'));
   assert.ok(output.includes('>Place order<'));
-  // The click wiring is untouched -- id-based, and ids survive reparenting.
+  // The click wiring is untouched -- id-based, and ids survive reparenting
+  // (querySelector searches the whole document, not a fixed ancestor).
   assert.ok(output.includes("document.querySelector('#place-order').addEventListener('click', showComplete);"));
   const testidCount = (string) => (string.match(/data-testid=/g) || []).length;
   assert.equal(testidCount(output), testidCount(base));

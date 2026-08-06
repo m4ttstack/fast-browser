@@ -120,8 +120,27 @@ const CLASS_RENAME_LISTENER_CALL = "document.querySelector('.place-order-btn').a
 // query the whole document, not a fixed ancestor path), so this is expected
 // to resolve on the very first probe exactly like the unreshuffled base --
 // declared 'clean'.
-const RESHUFFLE_CONFIRM_OPEN = `<section class="actions">${CONFIRM_ORDER_TAG}`;
-const RESHUFFLE_PLACE_CLOSE = `${PLACE_ORDER_TAG}</section>`;
+//
+// FIX (review round 1, Critical): the base script emits the two buttons via
+// TWO SEPARATE `insertAdjacentHTML` calls (one per if/else block -- see
+// index.html's `showReview`), each parsed by the browser as its OWN,
+// independent HTML fragment. An earlier version of this transform split
+// `<section class="actions">` and `</section>` across those two calls --
+// each fragment parses standalone, so the dangling open tag in the FIRST
+// fragment auto-closes at that fragment's own end (spec-compliant fragment
+// parsing), and the unmatched `</section>` in the SECOND fragment is simply
+// dropped. Net effect: "Confirm order" landed in an orphaned, self-closed
+// section and "Place order" -- the element the recorded flow actually
+// targets -- was never reparented at all, a silent no-op this profile
+// exists to NOT be. Fixed by folding both buttons into the FIRST call's own
+// fragment string (one well-formed `<section>...</section>`, one insertion,
+// one parse) and removing the second call entirely -- the listener-
+// attachment line right after it is untouched and still finds `#place-order`
+// via `document.querySelector`, since by execution order the first call has
+// already inserted it (ids survive reparenting; `querySelector` searches the
+// whole document, not a fixed ancestor).
+const CONFIRM_ORDER_INSERT_CALL = `app.insertAdjacentHTML('beforeend', '${CONFIRM_ORDER_TAG}');`;
+const RESHUFFLE_INSERT_CALL = `app.insertAdjacentHTML('beforeend', '<section class="actions">${CONFIRM_ORDER_TAG}${PLACE_ORDER_TAG}</section>');`;
 
 // text-rename-far: the accessible text becomes "Checkout" -- zero tokens
 // shared with the recorded name "Place order" (heal.mjs's lexical jaccard
@@ -181,10 +200,10 @@ export const PROFILES = {
     expected: { rung: 'clean' },
   },
   'dom-reshuffle': {
-    description: 'The "Confirm order"/"Place order" buttons are reparented into a wrapping <section class="actions"> instead of being direct children of #app; every attribute on both is untouched. Expected to survive without a heal (locators are not structural).',
+    description: 'The "Confirm order"/"Place order" buttons are reparented into a wrapping <section class="actions"> instead of being direct children of #app -- both inserted in ONE fragment so the section is never orphaned or auto-closed; every attribute on both is untouched. Expected to survive without a heal (locators are not structural).',
     transform: (html) => html
-      .replace(CONFIRM_ORDER_TAG, RESHUFFLE_CONFIRM_OPEN)
-      .replace(PLACE_ORDER_TAG, RESHUFFLE_PLACE_CLOSE),
+      .replace(CONFIRM_ORDER_INSERT_CALL, RESHUFFLE_INSERT_CALL)
+      .replace(PLACE_ORDER_INSERT_CALL, ''),
     expected: { rung: 'clean' },
   },
   'text-rename-far': {
