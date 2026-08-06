@@ -481,7 +481,32 @@ test('healing: a plain button with no data-testid heals from derived role and te
   assert.equal(roleCandidate.role, 'button');
   assert.equal(roleCandidate.name, '');
   assert.equal(roleCandidate.testid, '');
+  // Every candidate in this payload, not just the winner: proves the
+  // kind:'testid' path genuinely never entered the running for this leg
+  // (this file's own doc comment above claims exactly that; this makes it
+  // a real assertion rather than an inferred property of one candidate).
+  assert.ok(
+    failurePayload.candidates.every((candidate) => candidate.testid === ''),
+    `expected no candidate on this leg to carry a testid: ${JSON.stringify(failurePayload.candidates)}`,
+  );
 
+  // WS3b Task 7 review, fix round 2 (folded minor): the heal below clears
+  // HEAL_MIN_MARGIN against this leg's real candidate set because the
+  // step's stored `target.description` is empty here (this fixture's
+  // recorded button carries no description, only a derived role/name) --
+  // heal.mjs's lexical `rankCandidates` corpus is built from
+  // description+name, so an empty description means the winning margin
+  // comes entirely from the name/text overlap and role bonus computed
+  // above. This is a LATENT SENSITIVITY, not a bug: if a future recorder
+  // starts populating `target.description` for a plain button (e.g. from
+  // an aria-description or a nearby label), the corpus grows and the
+  // lexical jaccard denominator changes, which could shift the winning
+  // margin below HEAL_MIN_MARGIN and fail this pin. That is intentional --
+  // this e2e leg is meant to fail loudly the moment the real margin math
+  // it exercises actually changes, rather than silently keep asserting
+  // stale expectations against a scorer that no longer computes what this
+  // test assumes it does.
+  //
   // --- 3. sweep -> heal: report.healed names the flow and step, kind
   // 'other' (heal.mjs's DEVIATION note: a role+name/text heal is always
   // synthesized as kind 'other', never kind 'role' -- see that module's

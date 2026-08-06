@@ -748,6 +748,125 @@ test('a ranker with no minScore/minMargin properties (the lexical default, or a 
 });
 
 // ============================================================
+// Fix round 2 (final review, MUST-FIX): NaN threshold guard
+// ============================================================
+
+test('a NaN minScore/minMargin on the ranker falls back to HEAL_MIN_SCORE/HEAL_MIN_MARGIN (Number.isFinite, not typeof)', () => {
+  const flow = baseFlow({ steps: [
+    { op: 'goto', url: '/checkout' },
+    { op: 'click', target: baseTarget({ description: 'Place order', name: 'Place order', role: 'button' }) },
+  ] });
+  const candidates = [candidate({ role: 'button', name: 'Place order', testid: 'weak-match', text: '' })];
+  const payload = payloadFor(flow, 1, candidates);
+  // `typeof NaN === 'number'` is true, so the pre-fix-round-2 guard would
+  // have accepted NaN as a "real" threshold -- and `x < NaN` is ALWAYS
+  // false for any real `x`, so both acceptance gates below would have
+  // silently passed regardless of how weak this 0.1 score actually is,
+  // healing a candidate the unmodified lexical thresholds (0.1 < 0.6)
+  // correctly reject. Number.isFinite(NaN) is false, so this must fall
+  // back to HEAL_MIN_SCORE and reject.
+  const nanStub = ({ candidates: given }) => given.map((_, index) => ({ index, score: 0.1 }));
+  nanStub.minScore = NaN;
+  nanStub.minMargin = NaN;
+
+  const decision = proposeHeal({ flow, payload, ranker: nanStub });
+  assert.equal(decision, null, 'a NaN threshold must fall back to HEAL_MIN_SCORE (0.6), rejecting a 0.1 score');
+});
+
+// ============================================================
+// Fix round 2 (final review, NEW Important): degrade-path threshold
+// mismatch -- a lexical FALLBACK ranking must be gated by LEXICAL
+// thresholds, never by the failed ranker's own (possibly encoder-scale)
+// thresholds
+// ============================================================
+
+// Hand-picked token counts so the real lexical `rankCandidates` (not a
+// stub) produces an exact, known margin: target tokens {alpha, beta,
+// gamma, delta, epsilon} (5); the top candidate's 4-token name is a
+// subset (jaccard 4/5 = 0.8, role matches -> 0.85*0.8+0.15 = 0.83); the
+// runner-up's 3-token name is also a subset with a matching role
+// (jaccard 3/5 = 0.6 -> 0.85*0.6+0.15 = 0.66). Margin = 0.17: clears
+// ENCODER_MIN_MARGIN (0.05) but NOT HEAL_MIN_MARGIN (0.2) -- exactly the
+// "ambiguous lexical pair" the review flagged as wrongly healing when
+// gated by the failed ranker's own (encoder-scale) thresholds instead of
+// the lexical ones the fallback ranking was actually computed on.
+function ambiguousLexicalPairFixture() {
+  const flow = baseFlow({ steps: [
+    { op: 'goto', url: '/checkout' },
+    {
+      op: 'click',
+      target: baseTarget({
+        description: 'alpha beta gamma delta epsilon', name: '', role: 'button',
+      }),
+    },
+  ] });
+  const candidates = [
+    candidate({
+      role: 'button', name: 'alpha beta gamma delta', testid: 'top-btn', text: '',
+    }),
+    candidate({
+      role: 'button', name: 'alpha beta gamma', testid: 'runner-up-btn', text: '',
+    }),
+  ];
+  return { flow, payload: payloadFor(flow, 1, candidates) };
+}
+
+test('the ambiguous lexical pair fixture itself scores 0.83/0.66 under the real lexical rankCandidates (sanity check for the tests below)', () => {
+  const { flow, payload } = ambiguousLexicalPairFixture();
+  const target = flow.steps[1].target;
+  const ranked = rankCandidates({
+    target: { description: target.description, name: target.name, role: target.role },
+    candidates: payload.candidates,
+  });
+  assert.ok(Math.abs(ranked[0].score - 0.83) < 1e-9, `expected 0.83, got ${ranked[0].score}`);
+  assert.ok(Math.abs(ranked[1].score - 0.66) < 1e-9, `expected 0.66, got ${ranked[1].score}`);
+  const margin = ranked[0].score - ranked[1].score;
+  assert.ok(margin > ENCODER_MIN_MARGIN && margin < HEAL_MIN_MARGIN, `margin ${margin} must sit strictly between the two thresholds`);
+});
+
+test('when an injected encoder-shaped ranker REJECTS, the lexical fallback ranking is gated by LEXICAL thresholds, not the failed ranker\'s own -- the ambiguous pair does NOT heal', async () => {
+  const { flow, payload } = ambiguousLexicalPairFixture();
+
+  // An encoder-ranker-shaped stub: carries the SAME threshold properties a
+  // real `encoderRanker(encoder)` instance would (ENCODER_MIN_SCORE/
+  // ENCODER_MIN_MARGIN), but its function body always rejects -- exactly
+  // what a Voyage outage looks like from proposeHeal's point of view.
+  const failingEncoderRanker = async () => { throw new Error('voyage embeddings request failed: HTTP 500'); };
+  failingEncoderRanker.minScore = ENCODER_MIN_SCORE;
+  failingEncoderRanker.minMargin = ENCODER_MIN_MARGIN;
+
+  const decision = await proposeHeal({ flow, payload, ranker: failingEncoderRanker });
+  assert.equal(
+    decision,
+    null,
+    'a 0.17 margin must be rejected under LEXICAL thresholds (0.2) even though the failed ranker '
+      + 'carried a looser encoder threshold (0.05) -- the fallback ranking is on the lexical scale, '
+      + 'so it must be judged by lexical thresholds',
+  );
+});
+
+test('when the SAME injected encoder-shaped ranker instead SUCCEEDS, its own (looser) thresholds apply and the ambiguous pair DOES heal', async () => {
+  const { flow, payload } = ambiguousLexicalPairFixture();
+
+  // Mirrors the real lexical scores from the sanity-check test above
+  // (0.83/0.66, margin 0.17) so this is a genuine contrast with the
+  // rejecting case: the SAME numeric ranking, gated by the SAME ranker's
+  // thresholds, differs only in whether that ranker actually produced the
+  // ranking (accept) or failed and fell back to lexical (reject, tested
+  // above).
+  const succeedingEncoderRanker = async ({ candidates: given }) => given.map((_, index) => ({
+    index,
+    score: index === 0 ? 0.83 : 0.66,
+  }));
+  succeedingEncoderRanker.minScore = ENCODER_MIN_SCORE;
+  succeedingEncoderRanker.minMargin = ENCODER_MIN_MARGIN;
+
+  const decision = await proposeHeal({ flow, payload, ranker: succeedingEncoderRanker });
+  assert.ok(decision, 'a 0.17 margin clears ENCODER_MIN_MARGIN (0.05) when the ranker that produced it actually succeeded');
+  assert.equal(decision.locator.selector, 'internal:testid=[data-testid="top-btn"]');
+});
+
+// ============================================================
 // WS3b Task 8: heal synthesis widening (role + text)
 // ============================================================
 //
