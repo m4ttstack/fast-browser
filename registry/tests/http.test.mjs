@@ -191,11 +191,11 @@ test('router probes: trailing slash, path case, percent-encoded slash all 404; d
     // '/v1/./pull' IS a dot-segment normalization of a real route (URL's
     // own parser collapses it to '/v1/pull' before routing ever sees it),
     // so it must behave exactly like '/v1/pull': 401 unauthenticated, not
-    // 404.
+    // 404, and (Task 6) a real 200 once authenticated.
     const dotSegmentUnauthenticated = await fetch(`${baseUrl}/v1/./pull`);
     assert.equal(dotSegmentUnauthenticated.status, 401);
     const dotSegmentAuthenticated = await fetch(`${baseUrl}/v1/./pull`, { headers: { Authorization: `Bearer ${token}` } });
-    assert.equal(dotSegmentAuthenticated.status, 501);
+    assert.equal(dotSegmentAuthenticated.status, 200);
 
     // No route table entry handles OPTIONS anywhere -- falls through to
     // the generic 404, not a CORS-style 204/200.
@@ -218,14 +218,16 @@ test('GET /v1/pull and GET /v1/search both require auth too', async () => {
   }
 });
 
-test('the correct bearer token unlocks pull/search, currently placeholder 501s', async () => {
+test('the correct bearer token unlocks pull/search, both real (Task 6), empty store', async () => {
   const { close, baseUrl, token } = await startTestServer();
   try {
     const pull = await fetch(`${baseUrl}/v1/pull`, { headers: { Authorization: `Bearer ${token}` } });
-    assert.equal(pull.status, 501);
+    assert.equal(pull.status, 200);
+    assert.deepEqual(await pull.json(), { flows: [] });
 
     const search = await fetch(`${baseUrl}/v1/search?intent=hello`, { headers: { Authorization: `Bearer ${token}` } });
-    assert.equal(search.status, 501);
+    assert.equal(search.status, 200);
+    assert.deepEqual(await search.json(), { mode: 'lexical', results: [] });
   } finally {
     await close();
   }
@@ -552,10 +554,10 @@ test('POST /v1/push clusters two near-duplicate flows (stubbed cosine 0.96, same
     assert.equal(secondPayload.results[0].outcome, 'clustered');
     assert.equal(secondPayload.results[0].canonicalId, canonicalId);
 
-    // GET /v1/pull is still a Task 6 placeholder, so the only way to
-    // inspect the merged canonical through the real push path is the
-    // store this same booted server is using -- proving the full
-    // HTTP -> ingest -> store round trip, not just the response shape.
+    // Inspect the merged canonical through the store this same booted
+    // server is using -- proving the full HTTP -> ingest -> store round
+    // trip, not just the response shape (GET /v1/pull's own equivalent
+    // assertions live in the Task 6 pull/search test block below).
     const stored = await store.get(canonicalId);
     assert.equal(stored.mergedCount, 1, 'a single cluster-merge increments mergedCount by exactly 1');
     const clickStepLocators = stored.content.steps[2].target.locators;
@@ -571,6 +573,325 @@ test('POST /v1/push clusters two near-duplicate flows (stubbed cosine 0.96, same
     // way a real pull-side client would.
     const canonicalFlow = parseFlow(stored.content);
     assert.equal(verify(serializeFlow(canonicalFlow), stored.signature, publicKeyPem), true);
+  } finally {
+    await close();
+  }
+});
+
+// --- GET /v1/pull and GET /v1/search (WS4b Task 6): sync-pull and
+// server-side search, through the full HTTP layer ---
+
+test('GET /v1/pull returns signed, verifiable envelopes; artifact parses cleanly and reproduces the signed bytes', async () => {
+  const { close, baseUrl, token, publicKeyPem } = await startTestServer();
+  try {
+    const envelope = pushEnvelopeFor({ name: 'pull-verify-flow' });
+    const pushResponse = await fetch(`${baseUrl}/v1/push`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ flows: [envelope] }),
+    });
+    assert.equal((await pushResponse.json()).results[0].outcome, 'created');
+
+    const response = await fetch(`${baseUrl}/v1/pull`, { headers: { Authorization: `Bearer ${token}` } });
+    assert.equal(response.status, 200);
+    const payload = await response.json();
+    assert.equal(payload.flows.length, 1);
+    const [entry] = payload.flows;
+    assert.equal(typeof entry.contentHash, 'string');
+    assert.equal(typeof entry.signature, 'string');
+
+    // Exactly the client-side verify path the wire-shape doc pins: parse
+    // the shipped artifact (normalizes any jsonb-round-trip key reorder),
+    // re-serialize it, and check the CURRENT stored signature against
+    // those bytes -- never a signature this handler recomputed itself.
+    const parsedArtifact = parseFlow(entry.artifact);
+    assert.equal(verify(serializeFlow(parsedArtifact), entry.signature, publicKeyPem), true);
+    assert.equal(entry.contentHash, contentHashOf(parsedArtifact));
+  } finally {
+    await close();
+  }
+});
+
+test('GET /v1/pull filters by origin exactly and by since (a timestamp strictly between two pushes excludes the earlier one)', async () => {
+  const { close, baseUrl, token } = await startTestServer();
+  try {
+    const a = pushEnvelopeFor({ name: 'pull-since-a', origin: 'http://a.example' });
+    await fetch(`${baseUrl}/v1/push`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ flows: [a] }),
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const midpoint = new Date().toISOString();
+    await new Promise((resolve) => setTimeout(resolve, 5));
+
+    const b = pushEnvelopeFor({ name: 'pull-since-b', origin: 'http://b.example' });
+    await fetch(`${baseUrl}/v1/push`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ flows: [b] }),
+    });
+
+    const sinceResponse = await fetch(`${baseUrl}/v1/pull?since=${encodeURIComponent(midpoint)}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const sincePayload = await sinceResponse.json();
+    assert.deepEqual(sincePayload.flows.map((f) => f.artifact.name), ['pull-since-b']);
+
+    const originResponse = await fetch(`${baseUrl}/v1/pull?origin=${encodeURIComponent('http://a.example')}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const originPayload = await originResponse.json();
+    assert.deepEqual(originPayload.flows.map((f) => f.artifact.name), ['pull-since-a']);
+  } finally {
+    await close();
+  }
+});
+
+test('GET /v1/pull with a malformed since query param is rejected 422, never echoing the value', async () => {
+  const { close, baseUrl, token } = await startTestServer();
+  try {
+    // pg-store's own would-be failure mode for this is a 500 (an invalid
+    // timestamptz literal throws); memory-store's would-be failure mode is
+    // a silent 200 (a plain string compare against garbage). Validating
+    // `since` once, at the HTTP layer, before either store is consulted,
+    // means neither divergent behavior is ever reachable.
+    const response = await fetch(`${baseUrl}/v1/pull?since=${encodeURIComponent('not-a-real-date')}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    assert.equal(response.status, 422);
+    const payload = await response.json();
+    assert.equal(payload.error.code, 'invalid_pull_request');
+    assert.ok(!payload.error.message.includes('not-a-real-date'), 'error message must never echo the raw query value');
+  } finally {
+    await close();
+  }
+});
+
+test('GET /v1/pull on an empty store returns { flows: [] } with 200, not 404', async () => {
+  const { close, baseUrl, token } = await startTestServer();
+  try {
+    const response = await fetch(`${baseUrl}/v1/pull`, { headers: { Authorization: `Bearer ${token}` } });
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { flows: [] });
+  } finally {
+    await close();
+  }
+});
+
+// Fixture for the semantic-vs-lexical ordering test below: two flows
+// where lexical term-overlap and cosine similarity DISAGREE on which
+// ranks first for the same intent. `search-fixture-x`'s description
+// contains every query term (lexical score 1); `search-fixture-y`'s
+// contains only two of five (lexical score 0.4) -- so lexical mode must
+// rank x first. The XMARKER/YMARKER tokens let a stub embedder assign
+// each flow's STORED embedding independent of which query terms its
+// description happens to contain, so semantic mode can be pinned to the
+// opposite order (y first) by cosine alone.
+const SEARCH_FIXTURE_INTENT = 'place an order at checkout';
+const SEARCH_FIXTURE_X_OVERRIDES = {
+  name: 'search-fixture-x',
+  description: 'Fill the order form and place an order at checkout for real XMARKER',
+};
+const SEARCH_FIXTURE_Y_OVERRIDES = {
+  name: 'search-fixture-y',
+  description: 'Checkout at log tracking for account audits YMARKER',
+};
+
+test('GET /v1/search: semantic mode follows cosine even when it diverges from lexical term-overlap order', async () => {
+  // Call-content-keyed, not call-order-keyed (unlike the push cluster
+  // test above): both push-time embed calls (one per flow) AND the
+  // search-time embed call (over the raw intent, no marker) share one
+  // embedder, so the vector returned must be selected by what the text
+  // actually is, not by which call number this is.
+  const queryVector = [0, 1];
+  const xVector = [1, 0]; // orthogonal to queryVector -- cosine 0
+  const yVector = [0, 1]; // identical to queryVector -- cosine 1
+  const stubEmbedder = async (text) => {
+    if (text.includes('XMARKER')) return Float64Array.from(xVector);
+    if (text.includes('YMARKER')) return Float64Array.from(yVector);
+    return Float64Array.from(queryVector);
+  };
+  const { close, baseUrl, token } = await startTestServer({}, { embedder: stubEmbedder });
+  try {
+    const pushResponse = await fetch(`${baseUrl}/v1/push`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: JSON.stringify({
+        flows: [pushEnvelopeFor(SEARCH_FIXTURE_X_OVERRIDES), pushEnvelopeFor(SEARCH_FIXTURE_Y_OVERRIDES)],
+      }),
+    });
+    assert.deepEqual((await pushResponse.json()).results.map((r) => r.outcome), ['created', 'created']);
+
+    const response = await fetch(`${baseUrl}/v1/search?intent=${encodeURIComponent(SEARCH_FIXTURE_INTENT)}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    assert.equal(response.status, 200);
+    const payload = await response.json();
+    assert.equal(payload.mode, 'semantic');
+    assert.deepEqual(payload.results.map((r) => r.envelope.artifact.name), ['search-fixture-y', 'search-fixture-x']);
+    assert.ok(payload.results[0].score > payload.results[1].score);
+    assert.ok(payload.results[0].score >= 0 && payload.results[0].score <= 1);
+  } finally {
+    await close();
+  }
+});
+
+test('GET /v1/search: lexical mode (keyless service), for the identical two flows, ranks in the OPPOSITE order from semantic mode', async () => {
+  const { close, baseUrl, token } = await startTestServer();
+  try {
+    const pushResponse = await fetch(`${baseUrl}/v1/push`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: JSON.stringify({
+        flows: [pushEnvelopeFor(SEARCH_FIXTURE_X_OVERRIDES), pushEnvelopeFor(SEARCH_FIXTURE_Y_OVERRIDES)],
+      }),
+    });
+    assert.deepEqual((await pushResponse.json()).results.map((r) => r.outcome), ['created', 'created']);
+
+    const response = await fetch(`${baseUrl}/v1/search?intent=${encodeURIComponent(SEARCH_FIXTURE_INTENT)}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    assert.equal(response.status, 200);
+    const payload = await response.json();
+    assert.equal(payload.mode, 'lexical');
+    assert.deepEqual(payload.results.map((r) => r.envelope.artifact.name), ['search-fixture-x', 'search-fixture-y']);
+    assert.ok(payload.results[0].score > payload.results[1].score);
+  } finally {
+    await close();
+  }
+});
+
+test('GET /v1/search: a per-request embedder degrade (returns null) falls back to lexical mode honestly, never a fabricated semantic', async () => {
+  const degradedEmbedder = async () => null;
+  const { close, baseUrl, token } = await startTestServer({}, { embedder: degradedEmbedder });
+  try {
+    const pushResponse = await fetch(`${baseUrl}/v1/push`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ flows: [pushEnvelopeFor(SEARCH_FIXTURE_X_OVERRIDES)] }),
+    });
+    // A degraded embed at push time still creates (embedding null,
+    // clustering skipped for that one flow) -- same contract as keyless.
+    assert.equal((await pushResponse.json()).results[0].outcome, 'created');
+
+    const response = await fetch(`${baseUrl}/v1/search?intent=${encodeURIComponent(SEARCH_FIXTURE_INTENT)}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    assert.equal(response.status, 200);
+    const payload = await response.json();
+    assert.equal(payload.mode, 'lexical');
+    assert.equal(payload.results.length, 1);
+    assert.equal(payload.results[0].envelope.artifact.name, 'search-fixture-x');
+  } finally {
+    await close();
+  }
+});
+
+test('GET /v1/search origin filter narrows results in lexical mode', async () => {
+  const { close, baseUrl, token } = await startTestServer();
+  try {
+    const a = pushEnvelopeFor({ name: 'search-origin-a', origin: 'http://a.example', description: 'checkout order flow' });
+    const b = pushEnvelopeFor({ name: 'search-origin-b', origin: 'http://b.example', description: 'checkout order flow' });
+    await fetch(`${baseUrl}/v1/push`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ flows: [a, b] }),
+    });
+
+    const response = await fetch(
+      `${baseUrl}/v1/search?intent=${encodeURIComponent('checkout order')}&origin=${encodeURIComponent('http://a.example')}`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    assert.equal(response.status, 200);
+    const payload = await response.json();
+    assert.equal(payload.mode, 'lexical');
+    assert.deepEqual(payload.results.map((r) => r.envelope.artifact.name), ['search-origin-a']);
+  } finally {
+    await close();
+  }
+});
+
+test('GET /v1/search origin filter narrows results in semantic mode', async () => {
+  const stubEmbedder = async () => Float64Array.from([1, 0]);
+  const { close, baseUrl, token } = await startTestServer({}, { embedder: stubEmbedder });
+  try {
+    const a = pushEnvelopeFor({ name: 'search-origin-sem-a', origin: 'http://a.example' });
+    const b = pushEnvelopeFor({ name: 'search-origin-sem-b', origin: 'http://b.example' });
+    await fetch(`${baseUrl}/v1/push`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ flows: [a, b] }),
+    });
+
+    const response = await fetch(
+      `${baseUrl}/v1/search?intent=hello&origin=${encodeURIComponent('http://a.example')}`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    assert.equal(response.status, 200);
+    const payload = await response.json();
+    assert.equal(payload.mode, 'semantic');
+    assert.deepEqual(payload.results.map((r) => r.envelope.artifact.name), ['search-origin-sem-a']);
+  } finally {
+    await close();
+  }
+});
+
+test('GET /v1/search results carry the args schema surfaced from the stored artifact', async () => {
+  const { close, baseUrl, token } = await startTestServer();
+  try {
+    const envelope = pushEnvelopeFor({ name: 'search-args-flow', description: 'checkout order flow for args test' });
+    await fetch(`${baseUrl}/v1/push`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ flows: [envelope] }),
+    });
+
+    const response = await fetch(`${baseUrl}/v1/search?intent=${encodeURIComponent('checkout order flow')}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const payload = await response.json();
+    assert.equal(payload.results.length, 1);
+    assert.deepEqual(payload.results[0].args, { customer: { type: 'string', required: true } });
+  } finally {
+    await close();
+  }
+});
+
+test('GET /v1/search without an intent query param is rejected 422; an empty intent is rejected the same way', async () => {
+  const { close, baseUrl, token } = await startTestServer();
+  try {
+    const missing = await fetch(`${baseUrl}/v1/search`, { headers: { Authorization: `Bearer ${token}` } });
+    assert.equal(missing.status, 422);
+    const missingPayload = await missing.json();
+    assert.equal(missingPayload.error.code, 'invalid_search_request');
+
+    const empty = await fetch(`${baseUrl}/v1/search?intent=`, { headers: { Authorization: `Bearer ${token}` } });
+    assert.equal(empty.status, 422);
+  } finally {
+    await close();
+  }
+});
+
+test('GET /v1/search on an empty store returns { mode, results: [] } with 200, not 404', async () => {
+  const { close, baseUrl, token } = await startTestServer();
+  try {
+    const response = await fetch(`${baseUrl}/v1/search?intent=anything`, { headers: { Authorization: `Bearer ${token}` } });
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { mode: 'lexical', results: [] });
+  } finally {
+    await close();
+  }
+});
+
+test('GET /v1/search ignores a since query param entirely -- it is a pull-only filter, not part of the search wire shape', async () => {
+  const { close, baseUrl, token } = await startTestServer();
+  try {
+    const response = await fetch(`${baseUrl}/v1/search?intent=hello&since=not-a-real-date`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    assert.equal(response.status, 200);
   } finally {
     await close();
   }

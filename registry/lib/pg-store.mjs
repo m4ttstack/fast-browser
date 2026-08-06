@@ -284,8 +284,19 @@ export function createPgStore(options = {}) {
         conditions.push(`updated_at >= $${params.length}`);
       }
       const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+      // ORDER BY updated_at ASC, id ASC (WS4b Task 6 ledger finding,
+      // carried forward from Task 4): updated_at alone is not a total
+      // order -- rows sharing the exact same updated_at (a batch push, or
+      // hand-pinned test timestamps) otherwise come back in Postgres's own
+      // heap-scan order, which is an implementation detail (and, unlike
+      // memory-store's insertion order, not even a stable one across a
+      // table that has had UPDATEs -- an ON CONFLICT DO UPDATE, which is
+      // exactly what a cluster-merge's re-put is, can relocate a row's
+      // heap position). GET /v1/pull's result order must be
+      // store-independent, so this matches memory-store.mjs's identical
+      // tie-break exactly.
       const { rows } = await pool.query(
-        `SELECT * FROM canonical_flows ${where} ORDER BY updated_at ASC`,
+        `SELECT * FROM canonical_flows ${where} ORDER BY updated_at ASC, id ASC`,
         params,
       );
       return rows.map(rowToRecord);

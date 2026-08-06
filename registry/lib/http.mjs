@@ -1,10 +1,21 @@
 // HTTP surface for the registry service (WS4b plan, Task 3): routing,
 // bearer auth, request-body limits, and the JSON error envelope every
-// endpoint uses. Owns none of the API's actual behavior beyond health and,
-// from Task 5, POST /v1/push -- GET /v1/pull and GET /v1/search are still
-// wired here as 501 placeholders; Task 6 (pull/search) replaces those
-// placeholder handlers with real ones, in this same route table, without
-// touching auth/body-limit/error plumbing.
+// endpoint uses. From Task 5, POST /v1/push; from Task 6, GET /v1/pull
+// (sync-pull, since/origin filters) and GET /v1/search (server-side
+// semantic-or-lexical search) are real handlers in this same route table,
+// leaving auth/body-limit/error plumbing untouched.
+//
+// Neither GET route has a body (hasBody: false in the route table below),
+// so both read their input from the WHATWG URL the router already builds
+// per request (`context.url`, a `new URL(req.url, 'http://localhost')`) --
+// query params only, never a request body.
+//
+// Envelope shape (plan's Shared shapes, both routes): `{ artifact,
+// contentHash, signature }`, where `artifact` is the record's stored
+// `content` AS-IS (see `toEnvelope` below for why: it deliberately does
+// NOT re-serialize it) and `signature` is the CURRENT stored signature --
+// canonical bytes were signed once, at ingest time (registry/lib/
+// ingest.mjs); neither read path re-signs.
 //
 // Zero runtime deps: node:crypto only (registry/server.mjs owns node:http
 // itself -- createServer/listen -- this module only builds the request
@@ -168,9 +179,109 @@ export function readBody(req, limit) {
   });
 }
 
-function notImplemented(routeLabel) {
-  return async function handler(_req, res) {
-    sendError(res, 501, 'not_implemented', `${routeLabel} is not implemented yet`);
+// Builds the wire envelope both GET /v1/pull and GET /v1/search ship
+// (plan's Shared shapes): `{ artifact, contentHash, signature }`.
+//
+// `artifact` is `record.content` handed straight through, UNCHANGED --
+// deliberately not `serializeFlow(parseFlow(record.content))` or any other
+// re-serialization. CRITICAL (Task 4 ledger finding, carried forward by
+// ingest.mjs and pinned again here): content that has passed through a
+// store may have had its object keys reordered by a jsonb round trip
+// (pg-store). `signature` was computed once, at ingest time, over
+// canonical bytes recomputed via serializeFlow(parseFlow(...)) -- it is
+// NEVER recomputed here. A client verifies by doing exactly what ingest
+// did: parseFlow(artifact) to normalize the shape, then serializeFlow that
+// to reproduce the same canonical bytes independent of this object's key
+// order, then checking `signature` against those bytes. Shipping the
+// stored content object as-is is what makes that reproduction work --
+// re-serializing it here some other way risks producing bytes that don't
+// match what was actually signed.
+function toEnvelope(record) {
+  return { artifact: record.content, contentHash: record.contentHash, signature: record.signature };
+}
+
+// Validates the `since` query param for GET /v1/pull (WS4b Task 6 ledger
+// finding): pg-store's `updated_at >= $n` throws on an invalid timestamptz
+// literal (-> an unhandled 500), while memory-store's plain string compare
+// silently accepts garbage (-> a 200 with meaningless results) -- the two
+// stores diverge on a malformed `since` with no fix at the store layer,
+// since neither store owns HTTP-level input validation. Validated once,
+// here, before either store is ever consulted: `since` must parse as a
+// real date (`Number.isFinite(Date.parse(since))`); an absent or empty
+// value means "no since filter" (both query params are optional).
+function parseSinceQueryParam(url) {
+  const raw = url.searchParams.get('since');
+  if (raw === null || raw === '') return { ok: true, value: undefined };
+  if (!Number.isFinite(Date.parse(raw))) return { ok: false };
+  return { ok: true, value: raw };
+}
+
+// GET /v1/pull?since=<iso>&origin=<origin> (WS4b plan Task 6): both filters
+// optional, `since` inclusive on updatedAt (store.list's own documented
+// semantics -- see registry/lib/store.mjs), `origin` exact. Ordering is
+// the store's own (updatedAt ASC, id ASC tie-break -- WS4b Task 6 ledger
+// finding, fixed identically in both memory-store.mjs and pg-store.mjs),
+// so pull's result order is store-independent.
+function pull({ store }) {
+  return async function handler(_req, res, { url }) {
+    const since = parseSinceQueryParam(url);
+    if (!since.ok) {
+      // Never echo the raw `since` value back -- established hygiene
+      // (this file's sendError/sendErrorClosing convention): a client
+      // could put arbitrary text in a query string, and a 422 that
+      // interpolated it would be an unvalidated-input echo.
+      sendError(res, 422, 'invalid_pull_request', 'invalid since parameter');
+      return;
+    }
+    const origin = url.searchParams.get('origin') || undefined;
+
+    const records = await store.list({ since: since.value, origin });
+    sendJson(res, 200, { flows: records.map(toEnvelope) });
+  };
+}
+
+// GET /v1/search?intent=...&origin=... (WS4b plan Task 6): `intent` is
+// REQUIRED (missing or empty -> 422); `origin` is optional. `embedder` is
+// the same seam POST /v1/push's ingest() calls use (registry/server.mjs's
+// boot() derives it from VOYAGE_API_KEY, or a test stub with the same
+// `async (text) -> Float64Array | null` shape) -- this handler calls it
+// directly with the raw intent text (no helper needed: embedding an
+// arbitrary text string is already exactly what that function signature
+// does; ingest.mjs's own embedTextFor exists only to build ITS specific
+// `description | stepSignature` text and has nothing to add here).
+//
+// Mode is decided per-request, honestly: `embedder` absent (keyless
+// service) -> lexical; `embedder` present but this one call degrades to
+// null (a Voyage hiccup, or a test stub simulating one) -> lexical, same
+// as keyless, never a fabricated "semantic"; `embedder` present and this
+// call returns a real embedding -> semantic. Either way, the MODE
+// reported on the wire is store.search()'s own returned `mode` -- this
+// handler never claims a mode the store didn't actually run.
+function search({ store, embedder }) {
+  return async function handler(_req, res, { url }) {
+    const intent = url.searchParams.get('intent');
+    if (!intent) {
+      sendError(res, 422, 'invalid_search_request', 'intent is required');
+      return;
+    }
+    const origin = url.searchParams.get('origin') || undefined;
+
+    const embedding = embedder ? await embedder(intent) : null;
+    const searchResult = embedding
+      ? await store.search({ embedding, intentText: intent, origin })
+      : await store.search({ intentText: intent, origin });
+
+    sendJson(res, 200, {
+      mode: searchResult.mode,
+      results: searchResult.results.map(({ record, score }) => ({
+        envelope: toEnvelope(record),
+        score,
+        // args schema surfaced from the stored artifact -- record.content
+        // is the parsed flow (lib/flows/artifact.mjs's own `args` field),
+        // never recomputed or re-derived.
+        args: record.content.args,
+      })),
+    });
   };
 }
 
@@ -256,15 +367,16 @@ function health({ publicKeyPem, version, clustering }) {
 // (registry/lib/signing.mjs's sign, bound to the boot private key) and
 // `embedder` (registry/lib/embedder.mjs's createEmbedder output, or a test
 // stub with the same `async (text) -> Float64Array | null` shape, or
-// `null` when keyless) are threaded to POST /v1/push's ingest() calls --
-// Task 6 adds real GET /v1/pull and GET /v1/search handlers to this same
-// table and will need `store`/`signer` too.
+// `null` when keyless) is threaded to POST /v1/push's ingest() calls AND
+// (Task 6) GET /v1/search's own direct embed-intent call; `store` is
+// threaded to all three real routes' handlers; `signer` remains push-only
+// (neither GET route re-signs -- see toEnvelope's doc comment above).
 export function createRequestListener({ token, store, signer, embedder, publicKeyPem, version, clustering }) {
   const routes = [
     { method: 'GET', path: '/health', auth: false, hasBody: false, handler: health({ publicKeyPem, version, clustering }) },
     { method: 'POST', path: '/v1/push', auth: true, hasBody: true, handler: push({ store, signer, embedder }) },
-    { method: 'GET', path: '/v1/pull', auth: true, hasBody: false, handler: notImplemented('GET /v1/pull') },
-    { method: 'GET', path: '/v1/search', auth: true, hasBody: false, handler: notImplemented('GET /v1/search') },
+    { method: 'GET', path: '/v1/pull', auth: true, hasBody: false, handler: pull({ store }) },
+    { method: 'GET', path: '/v1/search', auth: true, hasBody: false, handler: search({ store, embedder }) },
   ];
 
   return async function requestListener(req, res) {

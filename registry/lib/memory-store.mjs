@@ -93,7 +93,16 @@ export function createMemoryStore() {
       let records = [...byId.values()];
       if (origin) records = records.filter((record) => record.origin === origin);
       if (since) records = records.filter((record) => record.updatedAt >= since);
-      records.sort((a, b) => a.updatedAt.localeCompare(b.updatedAt));
+      // Tie-break by id ascending (WS4b Task 6 ledger finding, carried
+      // forward from Task 4): updatedAt alone is not a total order --
+      // multiple records can share the exact same updatedAt (a batch
+      // push, or two fixtures with hand-pinned timestamps in tests), and
+      // sorting on updatedAt alone leaves their relative order to
+      // whatever this Map happened to iterate them in (insertion order,
+      // here) -- which pg-store's own heap-scan order does NOT agree
+      // with. GET /v1/pull's result order must be store-independent, so
+      // both stores add the SAME deterministic second key.
+      records.sort((a, b) => a.updatedAt.localeCompare(b.updatedAt) || a.id.localeCompare(b.id));
       return records.map((record) => structuredClone(record));
     },
 

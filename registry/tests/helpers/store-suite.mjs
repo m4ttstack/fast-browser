@@ -146,6 +146,32 @@ export function registerStoreSuite(label, createFreshStore, { skip = false } = {
     assert.deepEqual(all.map((r) => r.id), [early.id, middle.id, late.id]);
   });
 
+  // WS4b Task 6 ledger finding (carried forward from Task 4): ORDER BY
+  // updated_at with no tie-break is nondeterministic across store
+  // implementations -- pg's heap-scan order vs. memory-store's insertion
+  // order need not agree, and GET /v1/pull's result order must be
+  // store-independent. Records are inserted in the REVERSE of
+  // id-ascending order specifically so a passing result cannot be
+  // mistaken for "insertion order happened to match" luck.
+  test(`${label}: list ties on updatedAt are broken deterministically by id ascending, independent of insertion order`, { skip }, async () => {
+    const store = await createFreshStore();
+    const tiedAt = '2026-08-04T00:00:00.000Z';
+    const records = ['tie-a', 'tie-b', 'tie-c'].map((idSeed) => makeRecord({
+      idSeed,
+      flowOverrides: { name: `flow-${idSeed}` },
+      createdAt: tiedAt,
+      updatedAt: tiedAt,
+    }));
+    const expectedIds = records.map((record) => record.id).slice().sort((a, b) => a.localeCompare(b));
+    const insertOrder = records.slice().sort((a, b) => b.id.localeCompare(a.id));
+    for (const record of insertOrder) {
+      await store.putCanonical(record);
+    }
+
+    const listed = await store.list({});
+    assert.deepEqual(listed.map((r) => r.id), expectedIds);
+  });
+
   test(`${label}: findClusterCandidates prefilters by origin and opSequence exactly`, { skip }, async () => {
     const store = await createFreshStore();
     const flowA = parseFlow(baseFlow({ name: 'flow-a', origin: 'http://a.example' }));
