@@ -1386,6 +1386,28 @@ test('MAT-149: a digit-leading query key ("2fa_token") mints a sanitized arg nam
   assert.equal(JSON.stringify(flow).includes(value), false);
 });
 
+// Edge case: an all-digit base name (`upperFirst` runs against a single
+// character, so `text.slice(1)` is the empty string) -- distinct from
+// every other MAT-149 test above, which all pin a digit-leading name that
+// still has letters after the digit (`2faToken`, `3dsSession`, `2faCode`).
+// Confirms `sanitizeArgName`/`upperFirst` degrade cleanly to just `arg`
+// plus the single digit, not `argundefined` or a thrown error.
+test('MAT-149: an all-digit query key ("2") mints "arg2" -- the upperFirst no-op path on a single-character name', () => {
+  const value = 'aB3fG7kL9mN2pQ5rS8tU1vW4'; // 24 chars, high-entropy per isHighEntropyValue
+  const records = [
+    record({
+      seq: 1,
+      tool: 'browser_navigate',
+      params: { url: `https://example.com/verify?2=${value}` },
+    }),
+    record({ seq: 2, tool: 'browser_press_key', params: { key: 'Enter' } }),
+  ];
+  const result = compileSession({ records, meta });
+  const flow = result.flows[0];
+  assert.deepEqual(flow.args, { arg2: { type: 'string', required: true } });
+  assert.equal(flow.steps[0].url, '/verify?2={arg2}');
+});
+
 test('MAT-149: a digit-leading fragment key ("3ds_session") mints a sanitized arg name and the step url templates against it', () => {
   const value = 'zZ9xQ2wE5rT8yU1iO4pA7sD0'; // 24 chars, high-entropy per isHighEntropyValue
   const records = [
