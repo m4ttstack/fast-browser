@@ -2401,6 +2401,17 @@ test('a healed replay appends a healed runs-ledger record with healedKind set fr
   assert.equal(ledger[0].outcome, 'healed');
   assert.equal(ledger[0].healedKind, 'testid');
   assert.equal(ledger[0].quirkAttempted, null);
+
+  // Review round 1, Important 2: `flowId` names the identity THIS REPLAY
+  // ran against (the pre-heal artifact) -- pinned directly against the
+  // PRE-heal `stored.id`, and proven distinct from the post-heal on-disk
+  // id (a heal recomputes `id` from the appended locator, so the two must
+  // differ here or this pin would be vacuous).
+  const healedOnDisk = await readFlow(paths.flowsDir, 'view-details.flow.json');
+  assert.equal(ledger[0].flowId, stored.id);
+  assert.equal(ledger[0].flowName, name);
+  assert.notEqual(healedOnDisk.id, stored.id); // sanity: the heal really did change the on-disk id
+  assert.notEqual(ledger[0].flowId, healedOnDisk.id);
 });
 
 test('a heal that fails to durably write records "failed" in the ledger, not "healed" -- outcome tracks what actually landed on disk', async (t) => {
@@ -2522,6 +2533,44 @@ test('a replay record that names no known flow gets no runs-ledger line (nothing
   const result = await sweep({ paths });
   assert.equal(result.replaysSeen, 1);
   assert.deepEqual(await readRunsLedger(paths), []);
+});
+
+// Folded minor 2 (review round 1): N replays in one sweep produce exactly N
+// ledger lines, in the SAME order the replay records themselves appear in
+// the session -- not deduped, not batched, not reordered.
+test('two replays in the same sweep call append exactly two runs-ledger records, in replay order', async (t) => {
+  const paths = await tempPaths(t);
+  await writeSession(paths, 67500, {
+    meta: baseMeta(),
+    records: [
+      record({ seq: 1, tool: 'browser_navigate', params: { url: 'https://shop.example/cart' } }),
+      record({ seq: 2, targets: [traceTarget({ name: 'View details' })], mutating: false }),
+    ],
+  });
+  const first = await sweep({ paths });
+  const [{ name }] = first.compiled;
+  const stored = await readFlow(paths.flowsDir, 'view-details.flow.json');
+
+  await appendRecords(paths, 67500, [
+    record({
+      seq: 3,
+      tool: 'browser_run_code_unsafe',
+      params: { filename: 'flow-runner.js', args: { flow: { id: stored.id, name } } },
+    }),
+    record({
+      seq: 4,
+      tool: 'browser_run_code_unsafe',
+      params: { filename: 'flow-runner.js', args: { flow: { id: stored.id, name } } },
+      error: 'replay failed: locator not found',
+    }),
+  ]);
+
+  const result = await sweep({ paths });
+  assert.deepEqual(result.updated, [{ name, successRuns: 1, failStreak: 1 }]);
+  const ledger = await readRunsLedger(paths);
+  assert.equal(ledger.length, 2);
+  assert.equal(ledger[0].outcome, 'clean'); // seq 3, the success, first
+  assert.equal(ledger[1].outcome, 'failed'); // seq 4, the failure, second
 });
 
 // --- sweep degrade visibility: report.warnings (WS4a drift-harness plan, Task 7) ---

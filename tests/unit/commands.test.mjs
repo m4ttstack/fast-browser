@@ -4758,22 +4758,33 @@ function statsReport(overrides = {}) {
   };
 }
 
-test('CLI main dispatches stats and renders the human arm with outcome counts, rates, and the two tallies', async () => {
+// Review round 1, Important 1: the human breakdown line prints only the
+// three outcomes sweep.mjs can actually emit (clean/healed/failed) -- the
+// other three (fallback/escalated/quirk-recovered, still present in the
+// --json report below) are reserved-but-unreachable from this module
+// today, and printing them as inline zeros would read as "didn't happen"
+// rather than "cannot happen yet".
+test('CLI main dispatches stats and renders the human arm with the three reachable outcome counts, rates, and the two tallies', async () => {
   const writes = [];
   await main(
     { command: 'stats', json: false },
     { commands: { stats: async () => statsReport() }, write: (text) => writes.push(text) },
   );
+  const output = writes.join('');
   assert.equal(
-    writes.join(''),
+    output,
     [
-      'Replays: 12 (clean 6, fallback 2, escalated 1, quirk-recovered 1, healed 1, failed 1)',
+      'Replays: 12 (clean 6, healed 1, failed 1)',
       'Heal rate: 8.3%; clean rate: 50.0%',
       'Quarantined flows: 2',
       'Flows healed at least once: 3',
       '',
     ].join('\n'),
   );
+  // Belt and suspenders on the omission itself: even though the fixture
+  // report carries nonzero fallback/escalated/quirk-recovered counts (see
+  // statsReport() above), none of those words reach the human line.
+  assert.doesNotMatch(output, /fallback|escalated|quirk-recovered/);
 });
 
 test('CLI main --json passes the stats report straight through', async () => {
@@ -4809,7 +4820,7 @@ test('CLI main renders zero rates cleanly when the runs ledger is empty', async 
   assert.equal(
     writes.join(''),
     [
-      'Replays: 0 (clean 0, fallback 0, escalated 0, quirk-recovered 0, healed 0, failed 0)',
+      'Replays: 0 (clean 0, healed 0, failed 0)',
       'Heal rate: 0.0%; clean rate: 0.0%',
       'Quarantined flows: 0',
       'Flows healed at least once: 0',
