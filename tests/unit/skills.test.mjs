@@ -387,6 +387,30 @@ test('fast-browsing reconciles script-first automation with flow compilation', a
   assert.match(text, /`flows find` first stays the rule/);
 });
 
+// WS4a Task 9: the stats-surfacing sentence, pinned against the real
+// command name/flag and the real `stats()` return shape
+// (lib/commands/stats.mjs) rather than trusting the skill's own prose --
+// same posture as the sites-affordances pin immediately below.
+test('fast-browsing tells agents how to report flywheel health, pinned against the real stats command', async () => {
+  const text = await readFile(path.join(pluginRoot, 'skills/fast-browsing/SKILL.md'), 'utf8');
+  const parseArgsSource = await readFile(path.join(pluginRoot, 'lib/cli/parse-args.mjs'), 'utf8');
+  const statsSource = await readFile(path.join(pluginRoot, 'lib/commands/stats.mjs'), 'utf8');
+
+  assert.match(text, /fast-browser\s+stats --json/);
+  assert.match(parseArgsSource, /'stats'/, 'expected "stats" registered as a real CLI command');
+
+  const statsReturn = statsSource.match(/export async function stats\([\s\S]*?return \{([\s\S]*?)\};/);
+  assert.ok(statsReturn, 'stats() return shape found in lib/commands/stats.mjs');
+  const statsFields = [...statsReturn[1].matchAll(/^\s*(\w+)(?::|,)/gm)].map(([, name]) => name);
+  assert.deepEqual(
+    statsFields,
+    ['command', 'replays', 'outcomes', 'healRate', 'cleanRate', 'quarantined', 'flowsHealed'],
+  );
+  for (const field of ['replays', 'outcomes', 'healRate', 'cleanRate', 'quarantined', 'flowsHealed']) {
+    assert.match(text, new RegExp('`' + field + '`'), field);
+  }
+});
+
 // The know-the-site section quotes `sites affordances`/`sites show` field
 // names and command lines from memory; nothing gated them against CLI drift
 // the way the flows-first section is pinned elsewhere in this file. Cross-
