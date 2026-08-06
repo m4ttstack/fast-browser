@@ -3,6 +3,7 @@ import path from 'node:path';
 
 import { flows as flowsCommand } from '../../../lib/commands/flows.mjs';
 import { flowFileName } from '../../../lib/flows/artifact.mjs';
+import { proposeHeal } from '../../../lib/flows/heal.mjs';
 import { tracedSession } from './flow-fixtures.mjs';
 
 // WS4a Task 3: the drift-harness driver + rung classifier. Consumes the
@@ -344,4 +345,120 @@ export async function runHarness({
   printSummary(results);
 
   return { results, resultsPath, recordings };
+}
+
+// --- WS4a Task 6: tuning-report lines (Shared shapes) ---
+//
+// One line per (profile, ranker) pair -- `{ profile, flow, ranker, top,
+// runnerUp, margin, healed, correct }` -- computed from an ALREADY-RUN
+// ranking (`ranked`, the caller's own `[{index, score}]`, sorted desc, from
+// EITHER heal.mjs's lexical `rankCandidates` or encoder.mjs's
+// `encoderRanker(encoder)`), never computed by calling `ranker` itself a
+// second time here: a Voyage-backed ranker's one real network embed call
+// belongs entirely to the caller (see tests/e2e/drift-harness.test.mjs's
+// own call sites), so this function's own job is purely post-processing
+// numbers that already exist.
+//
+// `healed` is this line's OWN acceptance verdict -- recomputed from
+// `ranked`'s own top/runnerUp against `minScore`/`minMargin` (the same two
+// numbers `proposeHeal`'s own `finalize` would use for this ranker: either
+// heal.mjs's `HEAL_MIN_SCORE`/`HEAL_MIN_MARGIN`, or an encoder ranker's own
+// attached `.minScore`/`.minMargin`) -- not read off a real replay's
+// evidence, so a control row (a ranker whose real replay never even ran,
+// e.g. the far-rename profile's lexical control) still gets an honest
+// `healed` verdict for what THAT ranker alone would have decided.
+//
+// `correct` answers a DIFFERENT question than `healed`: "is the top-ranked
+// candidate the fixture's actual intended drift target", independent of
+// whether the score/margin cleared the real threshold -- the Shared
+// shapes' own "[would-heal] winner" phrasing. Answered by re-running
+// `proposeHeal` against the SAME `ranked` result through a synchronous stub
+// ranker whose thresholds are forced wide open (well below any real score
+// this codebase ever produces), so `finalize`'s real `synthesizeLocator`
+// step is always reached for whatever candidate ranked first -- this reuses
+// the exact production locator-synthesis logic (testid preferred, then
+// role+name-or-text, with the same quote-escaping) rather than a
+// hand-rolled duplicate that could quietly drift from it, and costs no
+// extra network call: the stub never touches `encoder.embed`, it just
+// returns the array the caller already computed.
+const FORCE_OPEN_THRESHOLD = -1000;
+
+// Extracts the SAME `{ description, name, role }` shape `proposeHeal`
+// itself builds internally (lib/flows/heal.mjs's own `rankArgs.target`) for
+// a failed replay's target step -- exported so a caller computing a tuning
+// line's `ranked` result up front (this file's own doc comment on
+// `tuningLineFor`: the ranker call happens exactly once, by the caller)
+// builds its ranker args from the identical fields `proposeHeal` would use
+// for the real heal attempt, never a hand-derived subset that could drift
+// from it.
+export function targetForFailedStep(flow, payload) {
+  const step = flow.steps[payload.failedStep];
+  return { description: step.target.description, name: step.target.name, role: step.target.role };
+}
+
+export function tuningLineFor({
+  profile, flowName, rankerName, ranked, minScore, minMargin, flow, payload, expectedSelector,
+}) {
+  const top = ranked.length > 0 ? ranked[0].score : 0;
+  const runnerUp = ranked.length > 1 ? ranked[1].score : 0;
+  const margin = top - runnerUp;
+  const healed = ranked.length > 0 && top >= minScore && margin >= minMargin;
+
+  const openRanker = () => ranked;
+  openRanker.minScore = FORCE_OPEN_THRESHOLD;
+  openRanker.minMargin = FORCE_OPEN_THRESHOLD;
+  const wouldHealDecision = proposeHeal({ flow, payload, ranker: openRanker });
+  const correct = Boolean(wouldHealDecision && wouldHealDecision.locator.selector === expectedSelector);
+
+  return {
+    profile, flow: flowName, ranker: rankerName, top, runnerUp, margin, healed, correct,
+  };
+}
+
+// Groups tuning lines by (ranker, profile) and reports min/median `top` and
+// `margin` per group -- Task 7's own consumption target ("the harness
+// prints the aggregate"). A group with a single line reports that line's
+// own values for both min and median (both are well-defined for n=1).
+function median(values) {
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
+}
+
+export function aggregateTuning(lines) {
+  const groups = new Map();
+  for (const line of lines) {
+    const key = `${line.ranker}::${line.profile}`;
+    if (!groups.has(key)) {
+      groups.set(key, {
+        ranker: line.ranker, profile: line.profile, tops: [], margins: [],
+      });
+    }
+    const group = groups.get(key);
+    group.tops.push(line.top);
+    group.margins.push(line.margin);
+  }
+  return [...groups.values()].map((group) => ({
+    ranker: group.ranker,
+    profile: group.profile,
+    n: group.tops.length,
+    minTop: Math.min(...group.tops),
+    medianTop: median(group.tops),
+    minMargin: Math.min(...group.margins),
+    medianMargin: median(group.margins),
+  }));
+}
+
+// Prints the aggregate via `console.table`, mirroring `printSummary`'s own
+// zero-deps convention. Prints a plain "no data" line rather than an empty
+// table when `lines` is empty (the keyless, no-runtime run: neither
+// gated leg contributed anything) -- still a normal, expected outcome, not
+// a failure.
+export function printTuningAggregate(lines) {
+  console.log('\ndrift-harness tuning aggregate:');
+  if (lines.length === 0) {
+    console.log('  (no tuning lines collected this run -- gated legs did not execute)');
+    return;
+  }
+  console.table(aggregateTuning(lines));
 }
