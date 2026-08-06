@@ -1421,6 +1421,61 @@ test('a failed replay with a heal-worthy payload heals the artifact: alternate a
   assert.deepEqual(await listFlowFiles(paths.flowsPendingDir), []); // heal never moves tiers
 });
 
+// WS3b Task 7: `sweep({ ranker })` is this module's own plain pass-through
+// down to every `proposeHeal` call it makes (see `applyReplayRecords`'s doc
+// comment) -- lib/commands/flows.mjs is what actually resolves
+// `config.encoder` into a real ranker in production; this test only proves
+// the forwarding itself, with a stub standing in for that resolved ranker.
+test('sweep forwards its configured ranker down to proposeHeal, overriding the lexical default', async (t) => {
+  const paths = await tempPaths(t);
+  await writeSession(paths, 32000, {
+    meta: baseMeta(),
+    records: [
+      record({ seq: 1, tool: 'browser_navigate', params: { url: 'https://shop.example/cart' } }),
+      record({ seq: 2, targets: [traceTarget({ name: 'View details' })], mutating: false }),
+    ],
+  });
+  const first = await sweep({ paths });
+  const [{ name }] = first.compiled;
+  const stored = await readFlow(paths.flowsDir, 'view-details.flow.json');
+
+  await appendRecords(paths, 32000, [
+    record({
+      seq: 3,
+      tool: 'browser_run_code_unsafe',
+      params: { filename: 'flow-runner.js', args: { flow: { id: stored.id, name } } },
+      // Candidate 1 (testid 'vd-btn') is what the LEXICAL scorer would pick
+      // -- full role/name token overlap with the target. The stub ranker
+      // below instead scores candidate 0 (testid 'wrong-btn') the winner,
+      // so a passing assertion on 'wrong-btn' below proves sweep actually
+      // threaded the ranker through rather than silently keeping lexical.
+      error: failurePayload(1, [
+        { role: 'button', name: 'Nothing alike', testid: 'wrong-btn', text: '' },
+        { role: 'button', name: 'View details', testid: 'vd-btn', text: 'View details' },
+      ]),
+    }),
+  ]);
+
+  let rankerInvoked = false;
+  const ranker = () => {
+    rankerInvoked = true;
+    return [{ index: 0, score: 1 }, { index: 1, score: 0 }];
+  };
+
+  const second = await sweep({ paths, ranker });
+  assert.equal(rankerInvoked, true, 'the injected ranker must have been called');
+  assert.deepEqual(second.healed, [{ name, stepIndex: 1, kind: 'testid' }]);
+
+  const healedFlow = await readFlow(paths.flowsDir, 'view-details.flow.json');
+  assert.deepEqual(
+    healedFlow.steps[1].target.locators,
+    [
+      ...stored.steps[1].target.locators,
+      { kind: 'testid', selector: 'internal:testid=[data-testid="wrong-btn"]' },
+    ],
+  );
+});
+
 test('a failed replay whose payload scores below the heal threshold leaves the artifact\'s steps/id untouched; failStreak still increments', async (t) => {
   const paths = await tempPaths(t);
   await writeSession(paths, 31000, {

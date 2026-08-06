@@ -7,6 +7,7 @@ import path from 'node:path';
 import test from 'node:test';
 
 import { flows } from '../../lib/commands/flows.mjs';
+import { MAX_EMBED_TEXT_CHARS, MAX_EMBED_TEXTS } from '../../lib/flows/encoder.mjs';
 import { matchFlows } from '../../lib/flows/match.mjs';
 import { resolvePaths } from '../../lib/core/paths.mjs';
 
@@ -395,6 +396,288 @@ test('find caps embedded quirks at 10, dropping the rest with a warning naming t
     reason: '1 quirk dropped from the replay invocation (max 10)',
   }]);
 });
+
+// --- find: WS3b Task 7 rerank stage ---
+
+test('find never reranks by default (no config, no env key): the lexical match order is unchanged', async () => {
+  const paths = { flowsDir: '/h/flows', flowsPendingDir: '/h/pending', macrosDir: '/h/macros' };
+  const flowA = validFlow({ name: 'flow-a' });
+  const flowB = validFlow({ name: 'flow-b' });
+  const matches = [
+    { flow: flowA, score: 100, runnable: true, reasons: [], urlPatternHit: false, nameTokenHit: false },
+    { flow: flowB, score: 90, runnable: true, reasons: [], urlPatternHit: false, nameTokenHit: false },
+  ];
+
+  const report = await flows(
+    {
+      sub: 'find', intent: 'find something', origin: null, url: null, json: true,
+    },
+    {
+      paths,
+      sweep: async () => ({}),
+      listFlowFiles: async (dir) => (dir === paths.flowsDir ? ['flow-a.flow.json', 'flow-b.flow.json'] : []),
+      readFlowFile: async (filePath) => (
+        filePath.endsWith('flow-a.flow.json') ? JSON.stringify(flowA) : JSON.stringify(flowB)
+      ),
+      matchFlows: () => matches,
+      readSite: noQuirks,
+      // Deliberately no createEncoder/env/loadConfig override -- the real
+      // defaults resolve to an inactive lexical encoder (no configFile on
+      // this fake `paths`, no config.encoder override), which is exactly
+      // the case this test pins.
+    },
+  );
+
+  assert.deepEqual(report.candidates.map((candidate) => candidate.name), ['flow-a', 'flow-b']);
+  assert.deepEqual(report.warnings, []);
+});
+
+test(
+  'find rerank stage reorders candidates WITHIN a band only, never crossing an exact-first band boundary',
+  async () => {
+    const paths = { flowsDir: '/h/flows', flowsPendingDir: '/h/pending', macrosDir: '/h/macros' };
+    const flowA = validFlow({ name: 'flow-a' });
+    const flowB = validFlow({ name: 'flow-b' });
+    const flowC = validFlow({ name: 'flow-c' });
+    const flowD = validFlow({ name: 'flow-d' });
+
+    // Band X (exact-first: both flags true) contains A then B by lexical
+    // score; band Y (neither flag) contains C then D. The stubbed encoder
+    // below scores B > A and D > C -- the OPPOSITE of lexical order within
+    // each band -- so a passing assertion on [B, A, D, C] proves the
+    // reorder happened WITHIN each band while band X stayed wholly ahead
+    // of band Y (never interleaved).
+    const matches = [
+      {
+        flow: flowA, score: 300, runnable: true, reasons: [], urlPatternHit: true, nameTokenHit: true,
+      },
+      {
+        flow: flowB, score: 290, runnable: true, reasons: [], urlPatternHit: true, nameTokenHit: true,
+      },
+      {
+        flow: flowC, score: 50, runnable: true, reasons: [], urlPatternHit: false, nameTokenHit: false,
+      },
+      {
+        flow: flowD, score: 40, runnable: true, reasons: [], urlPatternHit: false, nameTokenHit: false,
+      },
+    ];
+
+    let capturedTexts = null;
+    const encoder = {
+      active: true,
+      kind: 'voyage',
+      embed: async (texts) => {
+        capturedTexts = texts;
+        // [intent, A, B, C, D] -- 1-dimensional vectors are enough since
+        // cosineSimilarity is a plain dot product; the encoder itself is
+        // fully stubbed here (encoder.mjs's own request-shape/normalization
+        // contract is covered separately in flows-encoder.test.mjs).
+        return [[1], [0.1], [0.9], [0.05], [0.8]];
+      },
+    };
+
+    const flowFiles = [flowA, flowB, flowC, flowD];
+    const report = await flows(
+      {
+        sub: 'find', intent: 'find something', origin: null, url: null, json: true,
+      },
+      {
+        paths,
+        sweep: async () => ({}),
+        listFlowFiles: async (dir) => (
+          dir === paths.flowsDir ? flowFiles.map((flow) => `${flow.name}.flow.json`) : []
+        ),
+        readFlowFile: async (filePath) => {
+          const found = flowFiles.find((flow) => filePath.endsWith(`${flow.name}.flow.json`));
+          return JSON.stringify(found);
+        },
+        matchFlows: () => matches,
+        readSite: noQuirks,
+        createEncoder: () => encoder,
+        env: { FAST_BROWSER_VOYAGE_API_KEY: 'sk-test' },
+        loadConfig: async () => ({ encoder: 'voyage' }),
+      },
+    );
+
+    assert.deepEqual(
+      report.candidates.map((candidate) => candidate.name),
+      ['flow-b', 'flow-a', 'flow-d', 'flow-c'],
+    );
+    assert.deepEqual(report.warnings, []);
+    assert.equal(capturedTexts.length, 5);
+    assert.equal(capturedTexts[0], 'find something');
+  },
+);
+
+test('find rerank never calls embed with fewer than 2 candidates', async () => {
+  const paths = { flowsDir: '/h/flows', flowsPendingDir: '/h/pending', macrosDir: '/h/macros' };
+  const flow = validFlow({ name: 'log-in' });
+  let embedCalled = false;
+  const encoder = {
+    active: true,
+    kind: 'voyage',
+    embed: async () => { embedCalled = true; return []; },
+  };
+
+  await flows(
+    {
+      sub: 'find', intent: 'log in', origin: null, url: null, json: true,
+    },
+    {
+      paths,
+      sweep: async () => ({}),
+      listFlowFiles: async (dir) => (dir === paths.flowsDir ? ['log-in.flow.json'] : []),
+      readFlowFile: async () => JSON.stringify(flow),
+      matchFlows: () => [{
+        flow, score: 100, runnable: true, reasons: [], urlPatternHit: false, nameTokenHit: true,
+      }],
+      readSite: noQuirks,
+      createEncoder: () => encoder,
+      env: { FAST_BROWSER_VOYAGE_API_KEY: 'sk-test' },
+      loadConfig: async () => ({ encoder: 'voyage' }),
+    },
+  );
+
+  assert.equal(embedCalled, false, 'a single candidate must never trigger an embed call');
+});
+
+test('find rerank never calls embed with an empty intent, even with 2+ candidates', async () => {
+  const paths = { flowsDir: '/h/flows', flowsPendingDir: '/h/pending', macrosDir: '/h/macros' };
+  const flowA = validFlow({ name: 'flow-a' });
+  const flowB = validFlow({ name: 'flow-b' });
+  let embedCalled = false;
+  const encoder = {
+    active: true,
+    kind: 'voyage',
+    embed: async () => { embedCalled = true; return []; },
+  };
+
+  await flows(
+    {
+      sub: 'find', intent: '', origin: null, url: null, json: true,
+    },
+    {
+      paths,
+      sweep: async () => ({}),
+      listFlowFiles: async (dir) => (dir === paths.flowsDir ? ['flow-a.flow.json', 'flow-b.flow.json'] : []),
+      readFlowFile: async (filePath) => (
+        filePath.endsWith('flow-a.flow.json') ? JSON.stringify(flowA) : JSON.stringify(flowB)
+      ),
+      matchFlows: () => [
+        {
+          flow: flowA, score: 100, runnable: true, reasons: [], urlPatternHit: false, nameTokenHit: false,
+        },
+        {
+          flow: flowB, score: 90, runnable: true, reasons: [], urlPatternHit: false, nameTokenHit: false,
+        },
+      ],
+      readSite: noQuirks,
+      createEncoder: () => encoder,
+      env: { FAST_BROWSER_VOYAGE_API_KEY: 'sk-test' },
+      loadConfig: async () => ({ encoder: 'voyage' }),
+    },
+  );
+
+  assert.equal(embedCalled, false, 'an empty intent must never trigger an embed call');
+});
+
+test(
+  'find rerank degrades to lexical order and reports exactly one encoder-degraded warning when embed fails',
+  async () => {
+    const paths = { flowsDir: '/h/flows', flowsPendingDir: '/h/pending', macrosDir: '/h/macros' };
+    const flowA = validFlow({ name: 'flow-a' });
+    const flowB = validFlow({ name: 'flow-b' });
+    const matches = [
+      {
+        flow: flowA, score: 100, runnable: true, reasons: [], urlPatternHit: false, nameTokenHit: false,
+      },
+      {
+        flow: flowB, score: 90, runnable: true, reasons: [], urlPatternHit: false, nameTokenHit: false,
+      },
+    ];
+    const encoder = {
+      active: true,
+      kind: 'voyage',
+      embed: async () => { throw new Error('voyage embeddings request failed: HTTP 500'); },
+    };
+
+    const report = await flows(
+      {
+        sub: 'find', intent: 'find something', origin: null, url: null, json: true,
+      },
+      {
+        paths,
+        sweep: async () => ({}),
+        listFlowFiles: async (dir) => (dir === paths.flowsDir ? ['flow-a.flow.json', 'flow-b.flow.json'] : []),
+        readFlowFile: async (filePath) => (
+          filePath.endsWith('flow-a.flow.json') ? JSON.stringify(flowA) : JSON.stringify(flowB)
+        ),
+        matchFlows: () => matches,
+        readSite: noQuirks,
+        createEncoder: () => encoder,
+        env: { FAST_BROWSER_VOYAGE_API_KEY: 'sk-test' },
+        loadConfig: async () => ({ encoder: 'voyage' }),
+      },
+    );
+
+    // Lexical order preserved -- the rerank's own failure never reorders,
+    // never drops, never touches runnable/reasons.
+    assert.deepEqual(report.candidates.map((candidate) => candidate.name), ['flow-a', 'flow-b']);
+    assert.deepEqual(report.warnings, [
+      { kind: 'encoder-degraded', reason: 'voyage embeddings request failed: HTTP 500' },
+    ]);
+  },
+);
+
+test(
+  'find rerank clamps the embed batch at this call site: MAX_EMBED_TEXTS texts, each <= MAX_EMBED_TEXT_CHARS',
+  async () => {
+    const paths = { flowsDir: '/h/flows', flowsPendingDir: '/h/pending', macrosDir: '/h/macros' };
+    const manyFlows = Array.from(
+      { length: 40 },
+      (_, index) => validFlow({ name: `flow-${index}`, description: 'd'.repeat(3000) }),
+    );
+    const matches = manyFlows.map((flow, index) => ({
+      flow, score: 1000 - index, runnable: true, reasons: [], urlPatternHit: false, nameTokenHit: false,
+    }));
+    let capturedTexts = null;
+    const encoder = {
+      active: true,
+      kind: 'voyage',
+      embed: async (texts) => {
+        capturedTexts = texts;
+        return texts.map(() => [1]);
+      },
+    };
+
+    await flows(
+      {
+        sub: 'find', intent: 'x'.repeat(5000), origin: null, url: null, json: true,
+      },
+      {
+        paths,
+        sweep: async () => ({}),
+        listFlowFiles: async (dir) => (
+          dir === paths.flowsDir ? manyFlows.map((flow) => `${flow.name}.flow.json`) : []
+        ),
+        readFlowFile: async (filePath) => {
+          const found = manyFlows.find((flow) => filePath.endsWith(`${flow.name}.flow.json`));
+          return JSON.stringify(found);
+        },
+        matchFlows: () => matches,
+        readSite: noQuirks,
+        createEncoder: () => encoder,
+        env: { FAST_BROWSER_VOYAGE_API_KEY: 'sk-test' },
+        loadConfig: async () => ({ encoder: 'voyage' }),
+      },
+    );
+
+    assert.equal(capturedTexts.length, MAX_EMBED_TEXTS);
+    for (const text of capturedTexts) {
+      assert.ok(text.length <= MAX_EMBED_TEXT_CHARS, `text length ${text.length} exceeds the clamp`);
+    }
+  },
+);
 
 // --- list ---
 

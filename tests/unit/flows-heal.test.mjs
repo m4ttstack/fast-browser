@@ -531,6 +531,102 @@ test('rankCandidates and proposeHeal do not mutate their inputs', () => {
 });
 
 // ============================================================
+// WS3b Task 7: injected ranker
+// ============================================================
+
+test('proposeHeal uses an injected ranker instead of the lexical default, pinning the call args it receives', () => {
+  const flow = baseFlow({ steps: [
+    { op: 'goto', url: '/checkout' },
+    { op: 'click', target: baseTarget({ description: 'Place order', name: 'Place order', role: 'button' }) },
+  ] });
+  // Two candidates the LEXICAL scorer would clearly rank the second one
+  // ahead of (full name/role match vs. no overlap at all) -- the stub
+  // ranker below instead picks the FIRST one, so a passing test proves
+  // proposeHeal actually deferred to the injected ranker's own ordering
+  // rather than silently falling back to rankCandidates.
+  const candidates = [
+    candidate({ role: 'button', name: 'Nothing alike', testid: 'wrong-btn', text: '' }),
+    candidate({ role: 'button', name: 'Place order', testid: 'place-order-v2', text: 'Place order' }),
+  ];
+  const payload = payloadFor(flow, 1, candidates);
+
+  let capturedArgs = null;
+  const ranker = (args) => {
+    capturedArgs = args;
+    return [{ index: 0, score: 1 }, { index: 1, score: 0 }];
+  };
+
+  const decision = proposeHeal({ flow, payload, ranker });
+
+  assert.deepEqual(capturedArgs, {
+    target: { description: 'Place order', name: 'Place order', role: 'button' },
+    candidates,
+  });
+  assert.ok(decision);
+  assert.equal(decision.locator.selector, 'internal:testid=[data-testid="wrong-btn"]');
+});
+
+test('proposeHeal defaults to the lexical rankCandidates when no ranker is supplied', () => {
+  const flow = baseFlow({ steps: [
+    { op: 'goto', url: '/checkout' },
+    { op: 'click', target: baseTarget({ description: 'Place order', name: 'Place order', role: 'button' }) },
+  ] });
+  const candidates = [candidate({ role: 'button', name: 'Place order', testid: 'place-order-v2', text: 'Place order' })];
+  const payload = payloadFor(flow, 1, candidates);
+
+  const withoutRanker = proposeHeal({ flow, payload });
+  const withExplicitLexicalRanker = proposeHeal({ flow, payload, ranker: rankCandidates });
+  assert.deepEqual(withoutRanker, withExplicitLexicalRanker);
+  assert.ok(withoutRanker);
+});
+
+test('proposeHeal degrades to lexical when a synchronous ranker throws', () => {
+  const flow = baseFlow({ steps: [
+    { op: 'goto', url: '/checkout' },
+    { op: 'click', target: baseTarget({ description: 'Place order', name: 'Place order', role: 'button' }) },
+  ] });
+  const candidates = [candidate({ role: 'button', name: 'Place order', testid: 'place-order-v2', text: 'Place order' })];
+  const payload = payloadFor(flow, 1, candidates);
+  const brokenRanker = () => { throw new Error('encoder offline'); };
+
+  const decision = proposeHeal({ flow, payload, ranker: brokenRanker });
+  const lexicalDecision = proposeHeal({ flow, payload });
+  assert.deepEqual(decision, lexicalDecision);
+});
+
+test('proposeHeal degrades to lexical when an asynchronous ranker rejects, returning a Promise', async () => {
+  const flow = baseFlow({ steps: [
+    { op: 'goto', url: '/checkout' },
+    { op: 'click', target: baseTarget({ description: 'Place order', name: 'Place order', role: 'button' }) },
+  ] });
+  const candidates = [candidate({ role: 'button', name: 'Place order', testid: 'place-order-v2', text: 'Place order' })];
+  const payload = payloadFor(flow, 1, candidates);
+  const brokenAsyncRanker = () => Promise.reject(new Error('voyage embeddings request failed: HTTP 500'));
+
+  const result = proposeHeal({ flow, payload, ranker: brokenAsyncRanker });
+  assert.equal(typeof result.then, 'function', 'an async ranker must make proposeHeal return a Promise');
+  const decision = await result;
+  const lexicalDecision = proposeHeal({ flow, payload });
+  assert.deepEqual(decision, lexicalDecision);
+});
+
+test('proposeHeal returns a Promise end to end when a well-behaved asynchronous ranker is supplied', async () => {
+  const flow = baseFlow({ steps: [
+    { op: 'goto', url: '/checkout' },
+    { op: 'click', target: baseTarget({ description: 'Place order', name: 'Place order', role: 'button' }) },
+  ] });
+  const candidates = [candidate({ role: 'button', name: 'Place order', testid: 'place-order-v2', text: 'Place order' })];
+  const payload = payloadFor(flow, 1, candidates);
+  const asyncRanker = async ({ candidates: given }) => given.map((_, index) => ({ index, score: 1 }));
+
+  const result = proposeHeal({ flow, payload, ranker: asyncRanker });
+  assert.equal(typeof result.then, 'function');
+  const decision = await result;
+  assert.ok(decision);
+  assert.equal(decision.locator.selector, 'internal:testid=[data-testid="place-order-v2"]');
+});
+
+// ============================================================
 // Step 5: applyHeal purity
 // ============================================================
 

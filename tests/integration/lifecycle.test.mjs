@@ -54,6 +54,7 @@ function migrationConfig() {
     annotation: { palette: null },
     video: null,
     trace: true,
+    encoder: 'lexical',
   };
 }
 
@@ -388,6 +389,12 @@ test('the reinstall branch rewrites its declared fields and carries everything e
     annotation: { palette: 'crimson' },
     video: { width: 1024, height: 768 },
     trace: false,
+    // WS3b Task 7: config.encoder is a `configure` choice, same as trace/
+    // annotation/video/connection above -- setup's reinstall branch has no
+    // flag for it and no claim on it, so a reinstall must carry it through
+    // unchanged. A non-default value ('voyage', not 'lexical') proves it
+    // was actually carried, not just coincidentally still the default.
+    encoder: 'voyage',
   };
   assert.deepEqual(
     Object.keys(defaultConfig()).sort(),

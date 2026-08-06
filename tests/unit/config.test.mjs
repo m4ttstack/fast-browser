@@ -34,6 +34,7 @@ test('safe config contains no secret and disables recording', () => {
     annotation: { palette: null },
     video: null,
     trace: true,
+    encoder: 'lexical',
   });
 });
 
@@ -60,6 +61,7 @@ test('parsing returns a clean supported config without unknown keys', () => {
     annotation: { palette: null },
     video: null,
     trace: true,
+    encoder: 'lexical',
   });
 });
 
@@ -251,5 +253,28 @@ test('rejects a non-boolean trace value', () => {
   assert.throws(
     () => parseConfig(configFor({ trace: 'yes' })),
     /trace/,
+  );
+});
+
+// --- encoder (WS3b Task 7) ---
+
+test('encoder defaults to lexical so find/heal ranking is unchanged unless opted in', () => {
+  assert.equal(defaultConfig().encoder, 'lexical');
+});
+
+test('parseConfig honors an explicit encoder: voyage', () => {
+  assert.equal(parseConfig(configFor({ encoder: 'voyage' })).encoder, 'voyage');
+});
+
+test('an existing v1 config without an encoder field still parses as lexical', () => {
+  const legacy = defaultConfig();
+  delete legacy.encoder;
+  assert.equal(parseConfig(legacy).encoder, 'lexical');
+});
+
+test('rejects an encoder value that is neither lexical nor voyage', () => {
+  assert.throws(
+    () => parseConfig(configFor({ encoder: 'openai' })),
+    /encoder/,
   );
 });
