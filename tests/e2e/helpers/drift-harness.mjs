@@ -280,6 +280,16 @@ export async function replayOneProfile({
     provenance: sweepUpdated && {
       successRuns: sweepUpdated.successRuns, failStreak: sweepUpdated.failStreak,
     },
+    // WS4a Task 7: sweep's own `warnings` (lib/flows/sweep.mjs's
+    // heal-degrade visibility), passed straight through from THIS leg's own
+    // sweep call -- not filtered by flow name the way `sweepHealed` above
+    // is, since a `{ kind: 'encoder-degraded', reason }` entry carries no
+    // flow identity to filter on in the first place (sweep.mjs's own
+    // `warningTrackingRanker` observes the ranker call itself, independent
+    // of which flow the failed replay it was ranking for belongs to). Every
+    // existing caller of `replayOneProfile` ignores this new field (Tasks
+    // 3-6 destructure `rung`/`evidence` only), so this is additive-only.
+    warnings: sweepReport.warnings ?? [],
   };
 }
 

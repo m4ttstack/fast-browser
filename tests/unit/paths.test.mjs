@@ -48,3 +48,9 @@ test('resolvePaths exposes sitesDir under the data dir', () => {
   const paths = resolvePaths({ homeDir: '/home/u', pluginRoot: '/p' });
   assert.equal(paths.sitesDir, path.join('/home/u', '.fast-browser', 'sites'));
 });
+
+test('resolvePaths exposes the runs ledger directory and file under the data dir', () => {
+  const paths = resolvePaths({ homeDir: '/home/u', pluginRoot: '/p' });
+  assert.equal(paths.runsDir, path.join('/home/u', '.fast-browser', 'runs'));
+  assert.equal(paths.runsFile, path.join('/home/u', '.fast-browser', 'runs', 'runs.jsonl'));
+});

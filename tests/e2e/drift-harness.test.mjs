@@ -1403,27 +1403,56 @@ test(
     assert.ok(checkoutCandidate, `expected a candidate carrying the drifted "Checkout" text: ${JSON.stringify(firstPayload.candidates)}`);
     assert.equal(checkoutCandidate.role, 'button', 'expected the derived native-button role on the drifted candidate');
 
-    // OBSERVATIONAL (see this leg's own doc comment above and the task
-    // report): the live sweep's own encoder call is made concurrently with
-    // a real browser session and can occasionally miss its own timeout
-    // budget, degrading to lexical -- either real outcome is accepted
-    // here; this leg's hard proof is the isolated contrast below, not this
-    // branch. (Review round 1, folded minor a: the branch below's own
-    // `if`/`else` -- `assert.equal(firstAttempt.rung, 'fail')` in the
-    // `else` -- already pins the specific observed rung either way; a
-    // preceding `rung === 'heal' || rung === 'fail'` check added nothing
-    // beyond what that branch already asserts, so it's gone rather than
-    // kept as dead weight.)
-    //
-    // DEFERRED to Task 7 (per review round 1): once sweep's own `warnings`
-    // surface (`encoder-degraded` entries) ships, this branch should
-    // assert the XOR directly -- either a `warnings` entry naming the
-    // degrade-to-lexical reason (the `else` branch below) OR a healed
-    // entry with the OBSERVED selector (the `if` branch below), never
-    // neither and never both -- rather than inferring the live call's
-    // fate from `rung` alone as this leg currently must.
-    if (firstAttempt.rung === 'heal') {
-      assert.equal(firstAttempt.evidence.healed.length, 1);
+    // Task 7: sweep's own `warnings` surface (`{ kind: 'encoder-degraded',
+    // reason }` entries, lib/flows/sweep.mjs's `warningTrackingRanker`) now
+    // ships, so this leg's own OBSERVATIONAL branch (see the doc comment
+    // above and the task report -- the live sweep's own encoder call is
+    // made concurrently with a real browser session and can occasionally
+    // miss its own timeout budget, degrading to lexical) is asserted
+    // EXHAUSTIVELY rather than inferred from `rung` alone: EITHER this
+    // replay's sweep reported a warning naming the degrade-to-lexical
+    // reason (rung stays 'fail' -- lexical cannot clear its own threshold
+    // on this zero-token-overlap payload), OR it healed with the OBSERVED
+    // selector -- never neither (a silent third outcome would mean this
+    // leg stopped covering what it claims to), never both (a warning would
+    // mean the ranker never actually ran, contradicting a heal that
+    // required it to).
+    const sweepWarnedDegraded = firstAttempt.warnings.some((warning) => warning.kind === 'encoder-degraded');
+    const healedThisAttempt = firstAttempt.evidence.healed.length === 1;
+    assert.notEqual(
+      sweepWarnedDegraded,
+      healedThisAttempt,
+      `expected exactly one of {sweep warned encoder-degraded, this replay healed}, got warned=${sweepWarnedDegraded} healed=${healedThisAttempt} (warnings=${JSON.stringify(firstAttempt.warnings)})`,
+    );
+
+    // Review round 1 (Important 3), folded re-review minor: pin the
+    // INERTNESS itself, not just `ok: true`, via a completely independent,
+    // real HTTP-level signal -- Task 5's own kill-test instrumentation
+    // (`fixture.setKillTest` + `GET /order/count`), reused here for a
+    // different purpose than the kill leg's own at-most-once proof.
+    // Armed ONCE, BEFORE either branch below runs any replay -- the
+    // re-review minor found the original draft only enabled this inside
+    // the 'heal' branch, silently skipping the inertness pin on a degrade
+    // run; arming it unconditionally here means the `/order/count`
+    // assertion after the branch below covers BOTH outcomes uniformly.
+    // Enabling it makes the fixture's delegated `app`-level click listener
+    // attempt a real `POST /order` whenever the CLICKED element's `id` is
+    // exactly "place-order" -- honest caveat: under `text-rename-far`
+    // NEITHER candidate carries that id at all ("Confirm order" has
+    // `id="confirm-order"`; the drifted "Checkout" button has no id --
+    // that is literally what this profile drifts, per profiles.mjs's own
+    // doc comment), so this counter cannot distinguish "clicked the wrong
+    // button" from "clicked the right one" for this specific profile -- it
+    // structurally cannot fire for EITHER. What it still proves: a
+    // completely separate, out-of-band, server-side signal confirms
+    // neither this leg's first attempt (a locator-resolution failure that
+    // never reached a click) nor whatever follows below ever triggered a
+    // real mutating action, not merely that flow-runner's own step
+    // resolved without throwing.
+    const KILL_TEST_TOKEN = 'encoder-leg-wrong-target-probe';
+    fixture.setKillTest({ token: KILL_TEST_TOKEN, stall: false });
+
+    if (healedThisAttempt) {
       assert.equal(firstAttempt.evidence.healed[0].stepIndex, placeOrderStepIndex);
       assert.equal(firstAttempt.evidence.healed[0].kind, 'other');
 
@@ -1449,46 +1478,25 @@ test(
       // compiles to NO step), so nothing in the REPLAYED artifact ever
       // actually checks that the order completed -- the replay reports
       // success purely because the click resolved and threw nothing.
-      //
-      // Review round 1 (Important 3): pin the INERTNESS itself, not just
-      // `ok: true`, via a completely independent, real HTTP-level signal
-      // -- Task 5's own kill-test instrumentation (`fixture.setKillTest`
-      // + `GET /order/count`), reused here for a different purpose than
-      // the kill leg's own at-most-once proof. Enabling it makes the
-      // fixture's delegated `app`-level click listener attempt a real `POST
-      // /order` whenever the CLICKED element's `id` is exactly
-      // "place-order" -- honest caveat: under `text-rename-far` NEITHER
-      // candidate carries that id at all ("Confirm order" has
-      // `id="confirm-order"`; the drifted "Checkout" button has no id --
-      // that is literally what this profile drifts, per profiles.mjs's own
-      // doc comment), so this counter cannot distinguish "clicked the
-      // wrong button" from "clicked the right one" for this specific
-      // profile -- it structurally cannot fire for EITHER. What it still
-      // proves, independent of the DOM-level observation above: a
-      // completely separate, out-of-band, server-side signal confirms this
-      // "successful" replay triggered NO real mutating action at all, not
-      // merely that flow-runner's own click resolved without throwing.
-      const KILL_TEST_TOKEN = 'encoder-leg-wrong-target-probe';
-      fixture.setKillTest({ token: KILL_TEST_TOKEN, stall: false });
-
       const secondAttempt = await replayOneProfile({
         t, flow: orderFlow, fixture, paths, recorded, profileName: 'text-rename-far', restore: false,
       });
       t.diagnostic(`encoder leg: second attempt (OBSERVED "success" is NOT functional -- see doc comment) rung=${secondAttempt.rung} evidence=${JSON.stringify(secondAttempt.evidence)}`);
       assert.equal(secondAttempt.evidence.ok, true);
       assert.deepEqual(secondAttempt.evidence.healed, [], 'expected no NEW heal on the second replay (idempotence: the locator is already present)');
-
-      const countResponse = await fetch(`${fixture.origin}/order/count?token=${encodeURIComponent(KILL_TEST_TOKEN)}`);
-      const { count: orderCount } = await countResponse.json();
-      t.diagnostic(`encoder leg: /order/count after the wrong-target replay = ${orderCount}`);
-      assert.equal(
-        orderCount,
-        0,
-        'expected the wrong-target click to have submitted NOTHING, confirmed via the fixture\'s own independent HTTP-level mutation counter',
-      );
     } else {
-      t.diagnostic('encoder leg: OBSERVED -- the live sweep\'s own encoder call did not clear the gate this run (see the task report\'s reliability finding); the isolated contrast below is this leg\'s hard proof and does not depend on this branch');
+      assert.equal(firstAttempt.rung, 'fail', 'expected the degrade-to-lexical branch to leave this replay unhealed (rung "fail")');
+      t.diagnostic(`encoder leg: OBSERVED -- the live sweep's own encoder call degraded to lexical this run (warnings=${JSON.stringify(firstAttempt.warnings)}); the isolated contrast below is this leg's hard proof and does not depend on this branch`);
     }
+
+    const countResponse = await fetch(`${fixture.origin}/order/count?token=${encodeURIComponent(KILL_TEST_TOKEN)}`);
+    const { count: orderCount } = await countResponse.json();
+    t.diagnostic(`encoder leg: /order/count after this leg's replay(s) = ${orderCount}`);
+    assert.equal(
+      orderCount,
+      0,
+      'expected no real mutating action to have been submitted by this leg\'s replay(s) (heal-branch wrong-target click, or a degrade-branch locator-resolution failure), confirmed via the fixture\'s own independent HTTP-level mutation counter',
+    );
 
     // --- the lexical contrast: the SAME captured payload, two verdicts ---
     //
