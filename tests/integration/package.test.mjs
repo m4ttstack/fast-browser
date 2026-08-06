@@ -130,6 +130,28 @@ async function walk(root, directory = root) {
   return entries;
 }
 
+// WS4b (registry) scope decision: the zero-deps constraint applies
+// per-package. The plugin (this root package.json) MUST stay
+// dependencies: {} forever -- it is the thing installed onto a user's
+// machine and must not pull in a runtime dependency tree. The registry
+// service (registry/package.json, a separate Railway deployable that is
+// never npm-packed from here -- it isn't listed in this package's `files`)
+// gets its own allowance: exactly {} today, and Task 4 of the WS4b plan
+// updates this second pin to exactly { pg } once the Postgres store lands,
+// so a stray dependency added to either package.json fails a test instead
+// of silently drifting.
+test('root package.json declares no runtime dependencies', async () => {
+  const packageJson = JSON.parse(await readFile(path.join(pluginRoot, 'package.json'), 'utf8'));
+  assert.deepEqual(packageJson.dependencies, {});
+});
+
+test('registry/package.json declares no runtime dependencies yet (pg arrives in WS4b Task 4)', async () => {
+  const registryPackageJson = JSON.parse(
+    await readFile(path.join(pluginRoot, 'registry/package.json'), 'utf8'),
+  );
+  assert.deepEqual(registryPackageJson.dependencies, {});
+});
+
 test('npm package contains only portable deployable Fast Browser assets', async (t) => {
   const temporary = await mkdtemp(path.join(os.tmpdir(), 'fast-browser-package-'));
   t.after(() => rm(temporary, { recursive: true, force: true }));
