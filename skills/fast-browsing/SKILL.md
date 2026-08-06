@@ -25,8 +25,13 @@ needs re-recording. Do not attempt either yourself.
 
 If the call errors with a message starting `FLOW_RUNNER_FAILURE: `, parse
 the JSON payload after that prefix (`failedStep`, `error`, `url`,
-`stepsCompleted`, `locatorFallbacks`). Do not retry the flow: fall through
-to macros, then the fast loop below.
+`stepsCompleted`, `locatorFallbacks`, and on a locator-miss failure,
+`candidates`, showing what the page actually offered at that step). Do not
+retry the flow: fall through to macros, then the fast loop below. Never
+hand-edit the flow artifact to fix a failure: the next `flows compile`
+sweep reads this same evidence and heals the artifact automatically when
+it is unambiguous. If the flow keeps failing, it quarantines on its own;
+re-record it instead.
 
 ## Know the site
 

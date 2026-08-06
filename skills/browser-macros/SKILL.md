@@ -23,6 +23,10 @@ The `## flow-runner` entry in `~/.fast-browser/macros/MACROS.md` documents
 the replay contract itself: the success shape and the `FLOW_RUNNER_FAILURE:
 ` error shape.
 
+Recording a quirk with `fast-browser sites quirk add` also feeds live
+interrupt recovery: a flow replay tries that recorded click once per step,
+only after its full locator walk has missed.
+
 ## Run a macro
 
 1. Read `~/.fast-browser/macros/MACROS.md`.

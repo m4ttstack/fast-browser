@@ -117,36 +117,313 @@ async (page, args) => {
       : page.locator(candidate.selector)
   );
 
-  // Walks `target.locators` in order, probing each with a bounded waitFor
-  // before it is trusted. The first candidate that clears the probe wins;
-  // every earlier candidate having missed is exactly what "a fallback
-  // happened" means, so only then is an entry appended to
-  // `locatorFallbacks` -- the common case (index 0 hits) leaves the list
-  // untouched. No semantic healing: an empty `locators` array, or every
-  // candidate missing, is a step failure. `part` is an optional tag
+  // The same resolution precedence as `candidateLocator` above, collapsed
+  // to a string: two candidates that would resolve to the identical
+  // locator -- same `kind`, same selector they actually probe (a `role`
+  // candidate ignores its own `selector` once `target.role`/`target.name`
+  // are both set) -- share a key. Used by rung 1 below to probe each
+  // distinct locator at most once per pass.
+  const candidateKey = (target, candidate) => (
+    candidate.kind === 'role' && target.role && target.name
+      ? `role:${target.role}:${target.name}`
+      : `${candidate.kind}:${candidate.selector}`
+  );
+
+  // Walks `target.locators`, probing each DISTINCT candidate (rung 1: two
+  // byte-identical candidates are deduplicated up front, since probing the
+  // same locator twice teaches the walk nothing the first probe didn't
+  // already) with a bounded waitFor before it is trusted.
+  //
+  // Rung 1 is one pass at 1500ms per deduped candidate; the first one that
+  // clears the probe wins outright. Rung 2 fires only when that whole pass
+  // comes up empty: one more, probe-only pass over the SAME deduped
+  // candidates at 3000ms each, in case the page was merely slow to settle
+  // rather than genuinely different -- this never performs the step's own
+  // action, only locates; the caller still acts exactly once, after
+  // whichever pass returns a locator. Every earlier candidate (and, for
+  // rung 2, the whole first pass) having missed is exactly what "a
+  // fallback happened" means, so only then is an entry appended to
+  // `locatorFallbacks` -- the common case (index 0 hits on the first pass)
+  // leaves the list untouched -- and an entry the second pass produced
+  // also carries `escalated: true`, absent otherwise. No semantic
+  // healing: an empty `locators` array, or every candidate missing across
+  // both passes, is a step failure. `part` is an optional tag
   // ('source'/'dest') for `drag`, whose one step resolves two independent
   // targets -- every other op passes it as `undefined` and it is simply
   // omitted from the recorded entry.
-  const resolveTarget = async (target, stepIndex, probe, part) => {
+  //
+  // `dedupeLocators`/`probeCandidates`/`resolveEscalated` are split out of
+  // what used to be this function's own body so WS3a Task 3's post-quirk
+  // pass can reuse the exact same probe-and-record mechanics for a step's
+  // ORIGINAL target -- see `forcedEscalatedOnly` below -- instead of
+  // duplicating them.
+  const dedupeLocators = (target) => {
     const locators = target && Array.isArray(target.locators) ? target.locators : [];
+    const seenKeys = new Set();
+    const deduped = [];
     for (let i = 0; i < locators.length; i += 1) {
       const candidate = locators[i];
-      const located = candidateLocator(target, candidate);
+      const key = candidateKey(target, candidate);
+      if (seenKeys.has(key)) continue;
+      seenKeys.add(key);
+      deduped.push({ candidate, index: i });
+    }
+    return deduped;
+  };
+
+  // One probe pass over an already-deduped candidate list at a single
+  // timeout, returning the first hit (or null). Never touches
+  // `locatorFallbacks` itself -- that stays the caller's job, since WS3a
+  // Task 3's quirk walk below also calls this for a quirk's OWN target,
+  // which must never be recorded as a step fallback.
+  const probeCandidates = async (target, deduped, timeout, probe) => {
+    for (const candidateEntry of deduped) {
+      const located = candidateLocator(target, candidateEntry.candidate);
       try {
-        await located.waitFor({ timeout: 1500, ...probe });
+        await located.waitFor({ timeout, ...probe });
       } catch {
         continue;
       }
-      if (i > 0) {
-        const entry = { step: stepIndex, usedKind: candidate.kind, usedIndex: i };
+      return { located, candidateEntry };
+    }
+    return null;
+  };
+
+  // The escalated, single-pass probe: dedupes fresh (the caller may be
+  // probing a target this exact walk never touched before -- WS3a Task
+  // 3's post-quirk pass reuses this for the step's original target after
+  // rung 1+2 already missed) and, on a hit, ALWAYS records a
+  // `locatorFallbacks` entry with `escalated: true` regardless of which
+  // candidate index won -- needing the slower timeout at all is the
+  // fallback being recorded. Throws the same rung-2 miss message on a
+  // miss that `resolveTarget` always has.
+  const resolveEscalated = async (target, stepIndex, timeout, probe, part) => {
+    const deduped = dedupeLocators(target);
+    if (deduped.length === 0) {
+      throw new Error('target has no locator candidates');
+    }
+    const hit = await probeCandidates(target, deduped, timeout, probe);
+    if (!hit) {
+      throw new Error('no locator candidate matched');
+    }
+    const entry = {
+      step: stepIndex,
+      usedKind: hit.candidateEntry.candidate.kind,
+      usedIndex: hit.candidateEntry.index,
+      escalated: true,
+    };
+    if (part) entry.part = part;
+    locatorFallbacks.push(entry);
+    return hit.located;
+  };
+
+  // WS3a Task 3: when true, `resolveTarget` below skips straight to the
+  // single escalated 3000ms pass instead of running its own rung 1
+  // (1500ms) probe first. Set ONLY around the one post-quirk pass a step
+  // gets after a successful interrupt dismissal -- never during a step's
+  // normal walk -- and always reset in a `finally` immediately after, so
+  // it can never leak into a later step or a later target within the same
+  // step.
+  let forcedEscalatedOnly = false;
+
+  const resolveTarget = async (target, stepIndex, probe, part) => {
+    if (forcedEscalatedOnly) {
+      return resolveEscalated(target, stepIndex, 3000, probe, part);
+    }
+
+    const deduped = dedupeLocators(target);
+    if (deduped.length === 0) {
+      throw new Error('target has no locator candidates');
+    }
+
+    const firstHit = await probeCandidates(target, deduped, 1500, probe);
+    if (firstHit) {
+      if (firstHit.candidateEntry.index > 0) {
+        const entry = {
+          step: stepIndex,
+          usedKind: firstHit.candidateEntry.candidate.kind,
+          usedIndex: firstHit.candidateEntry.index,
+        };
         if (part) entry.part = part;
         locatorFallbacks.push(entry);
       }
-      return located;
+      return firstHit.located;
     }
-    throw new Error(
-      locators.length === 0 ? 'target has no locator candidates' : 'no locator candidate matched',
-    );
+
+    return resolveEscalated(target, stepIndex, 3000, probe, part);
+  };
+
+  // --- WS3a Task 2: candidate enrichment for a locator-miss step failure ---
+  // A locator-miss (both probe passes above exhausted every deduped
+  // candidate -- exactly the `'no locator candidate matched'` throw) is the
+  // one failure a host-side heal module can act on: it needs bounded
+  // evidence of what the page actually offers so it can propose a
+  // replacement locator. Every other failure path -- args validation, a
+  // refused js step, a precondition/goto navigation failure, or a step
+  // action that throws AFTER its target already resolved -- has nothing a
+  // healer could rank against (its target was never the problem, or there
+  // was no target), so `candidates` is attached only at the one call site
+  // below that checks for this exact message.
+  const MAX_CANDIDATES = 12;
+  const CANDIDATE_STRING_CAP = 80;
+  const MAX_PAYLOAD_LENGTH = 8192; // 8KB, treated as characters (see boundString above)
+  // One bounded compound-selector scan rather than one `page.getByRole()`
+  // query per role this runner's own targets can use (button, link,
+  // textbox, combobox, checkbox, radio, tab, menuitem): a single locator
+  // query costs one round trip through the page no matter how many of
+  // those roles are actually present, where enumerating each role
+  // separately costs one round trip PER role -- up to 8x the work for the
+  // same evidence. `button, a, input, select, [role]` covers every element
+  // any of those 8 roles could be declared on, explicit or implicit.
+  const CANDIDATE_SELECTOR = 'button, a, input, select, [role]';
+
+  const clampCandidateString = (value) => {
+    const text = value === null || value === undefined ? '' : String(value);
+    return text.length > CANDIDATE_STRING_CAP ? text.slice(0, CANDIDATE_STRING_CAP) : text;
+  };
+
+  // `.all()` snapshots the compound scan's match list in one call; only the
+  // first MAX_CANDIDATES elements are ever touched, so a page with
+  // hundreds of matches costs the same as one with twelve. Left fully
+  // unguarded here -- the ONE call site below wraps this whole function in
+  // its own try/catch, so any throw (a missing `.all()`/`.getAttribute()`
+  // method, a rejected page call, anything) is caught there rather than
+  // handled per-element, matching the documented all-or-nothing degrade.
+  // Every per-element call below passes an explicit `{ timeout: 1000 }`,
+  // same as every other page wait in this file (1500/3000/1500/5000/5000
+  // elsewhere) -- a locator miss is exactly the state where the page is
+  // likely to have re-rendered out from under a stale `.all()` handle, and
+  // Playwright's own 30s default would otherwise let one stale element
+  // stall the whole failure report by up to 30s before this function's
+  // own catch (see the call site below) can even fire.
+  const collectCandidates = async () => {
+    const elements = await page.locator(CANDIDATE_SELECTOR).all();
+    const candidates = [];
+    for (const element of elements.slice(0, MAX_CANDIDATES)) {
+      const [role, name, testid, text] = await Promise.all([
+        element.getAttribute('role', { timeout: 1000 }),
+        element.getAttribute('aria-label', { timeout: 1000 }),
+        element.getAttribute('data-testid', { timeout: 1000 }),
+        element.innerText({ timeout: 1000 }),
+      ]);
+      candidates.push({
+        role: clampCandidateString(role),
+        name: clampCandidateString(name),
+        testid: clampCandidateString(testid),
+        text: clampCandidateString(text),
+      });
+    }
+    return candidates;
+  };
+
+  // Drops candidates from the END, one at a time, until the WHOLE payload
+  // (`shape`'s existing keys plus `candidates`) re-serializes under 8KB --
+  // `shape` itself is untouched; the caller assigns whatever this returns.
+  const boundCandidatesToPayload = (shape, candidates) => {
+    const trimmed = candidates.slice();
+    while (
+      trimmed.length > 0
+      && JSON.stringify({ ...shape, candidates: trimmed }).length > MAX_PAYLOAD_LENGTH
+    ) {
+      trimmed.pop();
+    }
+    return trimmed;
+  };
+
+  // --- WS3a Task 3: quirk-based interrupt recovery (rung 3) ---
+  // v1 quirks are exclusively human/agent-authored through `sites quirk
+  // add` (source: 'agent' -- nothing here mines them). Running one during
+  // replay is permitted ONLY as interrupt recovery: it only ever runs
+  // after a step's full locator walk has already missed (rung 2
+  // included), which proves the step's own action never fired. At most
+  // one quirk attempt happens per step -- a fresh budget every step, so a
+  // later step's own miss is never blocked by an earlier step already
+  // having used one -- the quirk's own `action` is `click` only, that
+  // click is never attempted a second time, and after it the step gets
+  // exactly one more probe-then-act pass. Clicking a matched interrupt
+  // element is a dismissal a human already performed once by hand when
+  // recording the quirk with `sites quirk add`; that prior, manual
+  // dismissal is the consent basis for performing it again here,
+  // automatically, during replay.
+  //
+  // `args.quirks` is embedded by the caller (a later task: `flows find`)
+  // and is entirely advisory -- absent or empty disables this rung
+  // outright, and every entry is shape-checked before use (`name` a
+  // string, `target.locators` an array, `action === 'click'`) so a
+  // malformed or non-click entry is skipped silently rather than failing
+  // a replay over quirk data this runner never itself validated.
+  const rawQuirks = Array.isArray(input.quirks) ? input.quirks : [];
+  const quirks = rawQuirks.filter((quirk) => (
+    quirk
+    && typeof quirk === 'object'
+    && typeof quirk.name === 'string'
+    && quirk.target
+    && typeof quirk.target === 'object'
+    && Array.isArray(quirk.target.locators)
+    && quirk.action === 'click'
+  ));
+
+  // `urlPattern: null` matches the whole origin (always matches); a
+  // non-null pattern matches only via an EXACT string match against the
+  // current page's PATH -- no query, no hash, no `:id`-style collapse.
+  // This file has no URL parser of its own (see `originOf` above), so the
+  // path is hand-rolled the same way: everything after the origin
+  // prefix, cut at the first `?` or `#`, defaulting to '/' when nothing
+  // remains.
+  const pathOf = (href) => {
+    const text = typeof href === 'string' ? href : '';
+    const origin = originOf(text) || '';
+    const rest = text.slice(origin.length);
+    const cut = rest.search(/[?#]/);
+    const path = cut === -1 ? rest : rest.slice(0, cut);
+    return path.length > 0 ? path : '/';
+  };
+  const quirkMatchesUrl = (quirk) => (
+    quirk.urlPattern === null ? true : quirk.urlPattern === pathOf(page.url())
+  );
+
+  // Walks the shape-checked quirks in order, skipping any whose
+  // `urlPattern` does not match the CURRENT page -- checked fresh on
+  // every call, never cached, since an earlier step in the same replay
+  // may have navigated since the last check. The first one whose own
+  // target locator probes present (1500ms, a single pass -- this is a
+  // dismissal check, not the step's own walk, so it never escalates) is
+  // clicked and its name returned; the click itself is best-effort -- a
+  // throw from it is swallowed rather than attempted again, matching the
+  // consent ruling above -- and no later quirk is considered once one has
+  // been chosen, even when the click itself failed. Returns null, no
+  // click performed at all, when nothing matches or nothing is present.
+  //
+  // The shape check above only proves `target.locators` is an ARRAY, not
+  // that every element in it is well-formed -- a quirk is advisory data
+  // this runner does not otherwise trust (fix round, reviewer finding),
+  // so `dedupeLocators` (which reads `.kind`/`.selector` off each element)
+  // runs inside the SAME try as the probe below: a malformed element
+  // (`null`, a non-object, one missing `.selector`) is treated exactly
+  // like a probe miss -- this quirk does not pan out, move on -- rather
+  // than throwing a raw error out of a dismissal this whole function's
+  // caller expects to only ever return a name or null.
+  const dismissInterrupt = async () => {
+    for (const quirk of quirks) {
+      if (!quirkMatchesUrl(quirk)) continue;
+      let hit;
+      try {
+        const deduped = dedupeLocators(quirk.target);
+        if (deduped.length === 0) continue;
+        hit = await probeCandidates(quirk.target, deduped, 1500, undefined);
+      } catch {
+        continue;
+      }
+      if (!hit) continue;
+      try {
+        await hit.located.click();
+      } catch {
+        // Best-effort dismissal: never attempted a second time regardless
+        // of outcome (consent ruling above).
+      }
+      return quirk.name;
+    }
+    return null;
   };
 
   // --- rule 5, expect ---
@@ -287,98 +564,182 @@ async (page, args) => {
     // end, for the return value.
     const result = Object.create(null);
     let extracted = false;
+
+    // The whole per-op switch, extracted so WS3a Task 3's post-quirk pass
+    // can run it a second time for the SAME step without duplicating every
+    // case. It always calls `resolveTarget` by name, never a passed-in
+    // resolver -- `resolveTarget` itself is what changes behavior for
+    // that second run, via `forcedEscalatedOnly` above. This keeps "the
+    // step's own action happens at most once" intact: the second run is
+    // only ever reached from the catch below, and only after the FIRST
+    // run's target resolution -- never its action -- has thrown.
+    const runStep = async (step, index) => {
+      switch (step && step.op) {
+        case 'goto': {
+          await page.goto(`${origin}${template(step.url)}`);
+          await page.waitForLoadState('domcontentloaded');
+          break;
+        }
+        case 'click': {
+          const locator = await resolveTarget(step.target, index);
+          await locator.click();
+          break;
+        }
+        case 'fill': {
+          const locator = await resolveTarget(step.target, index);
+          await locator.fill(template(step.value));
+          break;
+        }
+        case 'select': {
+          const locator = await resolveTarget(step.target, index);
+          await locator.selectOption(template(step.value));
+          break;
+        }
+        case 'press': {
+          if (step.target) {
+            const locator = await resolveTarget(step.target, index);
+            await locator.press(step.key);
+          } else {
+            await page.keyboard.press(step.key);
+          }
+          break;
+        }
+        case 'hover': {
+          const locator = await resolveTarget(step.target, index);
+          await locator.hover();
+          break;
+        }
+        case 'drag': {
+          const source = await resolveTarget(step.target, index, undefined, 'source');
+          const destination = await resolveTarget(step.to, index, undefined, 'dest');
+          await source.dragTo(destination);
+          break;
+        }
+        case 'upload': {
+          const files = (Array.isArray(step.files) ? step.files : []).map((file) => template(file));
+          if (step.target) {
+            // File inputs are hidden by design (rule M1) -- the default
+            // probe's implicit 'visible' state would miss every real
+            // one, so this branch resolves against 'attached' instead.
+            const locator = await resolveTarget(step.target, index, { state: 'attached' });
+            await locator.setInputFiles(files);
+          } else {
+            const chooser = await waitForChooser();
+            await chooser.setFiles(files);
+          }
+          break;
+        }
+        case 'wait': {
+          const value = Number(step.value);
+          const ms = Number.isFinite(value) && value > 0 ? value : 0;
+          await page.waitForTimeout(Math.min(ms, 5000));
+          break;
+        }
+        case 'expect': {
+          if (step.state === 'visible' || step.state === 'hidden') {
+            await resolveTarget(step.target, index, { state: step.state });
+          } else {
+            const locator = await resolveTarget(step.target, index, { state: 'attached' });
+            await pollExpect(locator, step.state);
+          }
+          break;
+        }
+        case 'extract': {
+          const locator = await resolveTarget(step.target, index);
+          const text = await locator.innerText();
+          result[step.as] = boundString(text);
+          extracted = true;
+          break;
+        }
+        default: {
+          throw new Error(`unsupported step op: ${step && step.op}`);
+        }
+      }
+    };
+
     for (let index = startIndex; index < steps.length; index += 1) {
       const step = steps[index];
       try {
-        switch (step && step.op) {
-          case 'goto': {
-            await page.goto(`${origin}${template(step.url)}`);
-            await page.waitForLoadState('domcontentloaded');
-            break;
+        await runStep(step, index);
+      } catch (error) {
+        const message = String(error && error.message ? error.message : error);
+
+        // --- WS3a Task 3: one interrupt-recovery pass before failing ---
+        // Only a locator miss is eligible (never an action failure after
+        // resolution, never args/js/navigation) -- it is the one failure
+        // that proves the step's own action never fired (see the doc
+        // comment above `dismissInterrupt`). `quirks` empty (rung
+        // disabled) skips this whole block, and `quirkAttempted` starts
+        // fresh on every step, so an earlier step's attempt (successful or
+        // not) never affects a later one.
+        let quirkAttempted = null;
+        let recovered = false;
+        let finalMessage = message;
+        if (message === 'no locator candidate matched' && quirks.length > 0) {
+          // `dismissInterrupt` itself degrades malformed quirk data to "no
+          // dismissal" internally (see its own doc comment), but this call
+          // site is guarded too, defense in depth: ANY throw here -- from
+          // this function or a future change to it -- must never mask the
+          // step's ORIGINAL failure. `dismissedQuirk` stays null exactly
+          // like the no-match/nothing-present case, and control falls
+          // through to the normal (pre-rung-3) failure path below with
+          // `finalMessage` untouched.
+          let dismissedQuirk = null;
+          try {
+            dismissedQuirk = await dismissInterrupt();
+          } catch {
+            dismissedQuirk = null;
           }
-          case 'click': {
-            const locator = await resolveTarget(step.target, index);
-            await locator.click();
-            break;
-          }
-          case 'fill': {
-            const locator = await resolveTarget(step.target, index);
-            await locator.fill(template(step.value));
-            break;
-          }
-          case 'select': {
-            const locator = await resolveTarget(step.target, index);
-            await locator.selectOption(template(step.value));
-            break;
-          }
-          case 'press': {
-            if (step.target) {
-              const locator = await resolveTarget(step.target, index);
-              await locator.press(step.key);
-            } else {
-              await page.keyboard.press(step.key);
+          if (dismissedQuirk) {
+            quirkAttempted = dismissedQuirk;
+            forcedEscalatedOnly = true;
+            try {
+              await runStep(step, index);
+              recovered = true;
+            } catch (secondFailure) {
+              finalMessage = String(
+                secondFailure && secondFailure.message ? secondFailure.message : secondFailure,
+              );
+            } finally {
+              forcedEscalatedOnly = false;
             }
-            break;
-          }
-          case 'hover': {
-            const locator = await resolveTarget(step.target, index);
-            await locator.hover();
-            break;
-          }
-          case 'drag': {
-            const source = await resolveTarget(step.target, index, undefined, 'source');
-            const destination = await resolveTarget(step.to, index, undefined, 'dest');
-            await source.dragTo(destination);
-            break;
-          }
-          case 'upload': {
-            const files = (Array.isArray(step.files) ? step.files : []).map((file) => template(file));
-            if (step.target) {
-              // File inputs are hidden by design (rule M1) -- the default
-              // probe's implicit 'visible' state would miss every real
-              // one, so this branch resolves against 'attached' instead.
-              const locator = await resolveTarget(step.target, index, { state: 'attached' });
-              await locator.setInputFiles(files);
-            } else {
-              const chooser = await waitForChooser();
-              await chooser.setFiles(files);
-            }
-            break;
-          }
-          case 'wait': {
-            const value = Number(step.value);
-            const ms = Number.isFinite(value) && value > 0 ? value : 0;
-            await page.waitForTimeout(Math.min(ms, 5000));
-            break;
-          }
-          case 'expect': {
-            if (step.state === 'visible' || step.state === 'hidden') {
-              await resolveTarget(step.target, index, { state: step.state });
-            } else {
-              const locator = await resolveTarget(step.target, index, { state: 'attached' });
-              await pollExpect(locator, step.state);
-            }
-            break;
-          }
-          case 'extract': {
-            const locator = await resolveTarget(step.target, index);
-            const text = await locator.innerText();
-            result[step.as] = boundString(text);
-            extracted = true;
-            break;
-          }
-          default: {
-            throw new Error(`unsupported step op: ${step && step.op}`);
           }
         }
-      } catch (error) {
-        fail({
-          failedStep: index,
-          error: String(error && error.message ? error.message : error),
-          url: page.url(),
-          stepsCompleted: index,
-          locatorFallbacks,
-        });
+
+        // A recovered step falls through here with nothing further to do
+        // -- exactly like a step that never missed at all -- since the
+        // post-quirk pass just above already ran the step's one act.
+        if (!recovered) {
+          const shape = {
+            failedStep: index,
+            error: finalMessage,
+            url: page.url(),
+            stepsCompleted: index,
+            locatorFallbacks,
+          };
+          // Recorded whenever rung 3 fired, regardless of what the step
+          // ultimately failed with: `quirkAttempted` documents that a
+          // dismissal was tried, not that the miss itself was (once
+          // again) a locator miss -- the post-quirk pass's ACTION can
+          // still throw something else, and that failure still deserves
+          // the note.
+          if (quirkAttempted) shape.quirkAttempted = quirkAttempted;
+          // Gated on the exact message `resolveTarget`'s own rung-2 miss
+          // throws above -- not "any step failure" -- so an action that
+          // throws AFTER its target already resolved (or any other failure
+          // sharing this catch) never picks up candidates it has no use for.
+          if (finalMessage === 'no locator candidate matched') {
+            try {
+              const candidates = boundCandidatesToPayload(shape, await collectCandidates());
+              if (candidates.length > 0) shape.candidates = candidates;
+            } catch {
+              // Enrichment must never mask the original step failure: on any
+              // collection error, `shape` above (sans `candidates`) is
+              // exactly the pre-Task-2 payload.
+            }
+          }
+          fail(shape);
+        }
       }
 
       // Deliberately its OWN try, separate from the action's above: a

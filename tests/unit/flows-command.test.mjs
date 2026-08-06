@@ -46,6 +46,17 @@ async function tempPaths(t) {
   return resolvePaths({ homeDir, pluginRoot: '/plugin' });
 }
 
+// WS3a Task 4: a fake `readSite` standing in for lib/sites/store.mjs's real
+// one, matching this file's own DI style (fake the dependency, never touch
+// real fs outside a `[real fs]`-tagged test). Reports "no site memory for
+// this origin" -- store.mjs's own readSite resolves a never-seen origin to
+// this exact shape (the QuirksV1 record nested under `.quirks`, itself
+// carrying its own `.quirks` array -- store.mjs's `emptyQuirks()`), so this
+// is the fake's honest default, not a shortcut.
+async function noQuirks() {
+  return { quirks: { schemaVersion: 1, quirks: [] } };
+}
+
 test('exports a dependency-injected flows command function', () => {
   assert.equal(typeof flows, 'function');
 });
@@ -89,10 +100,15 @@ test('find sweeps first, then matches loaded artifacts and embeds the flow-runne
           flow: readyFlow, score: 200, runnable: true, reasons: [],
         }];
       },
+      readSite: noQuirks,
     },
   );
 
   assert.deepEqual(events, ['sweep', 'match']);
+  // Every other field pinned here (filename, the whole embedded flow, the
+  // args placeholder map) is unchanged by WS3a Task 4 -- only `quirks` is
+  // new, and it is `[]` because `readSite` (faked as `noQuirks` above)
+  // reports no stored site memory for this flow's origin.
   assert.deepEqual(report, {
     command: 'flows',
     sub: 'find',
@@ -107,7 +123,7 @@ test('find sweeps first, then matches loaded artifacts and embeds the flow-runne
         tool: 'browser_run_code_unsafe',
         arguments: {
           filename: path.join(paths.macrosDir, 'flow-runner.js'),
-          args: { flow: readyFlow, args: { username: '<REQUIRED: string>' } },
+          args: { flow: readyFlow, args: { username: '<REQUIRED: string>' }, quirks: [] },
         },
       },
     }],
@@ -135,6 +151,7 @@ test('tier is derived from which directory a flow was loaded from, not flowTier(
       listFlowFiles: async (dir) => (dir === paths.flowsDir ? ['place-order.flow.json'] : []),
       readFlowFile: async () => JSON.stringify(mutatingApprovedFlow),
       matchFlows,
+      readSite: noQuirks,
     },
   );
 
@@ -159,6 +176,7 @@ test('a matching flow still in flows-pending reports runnable: false with the ap
       listFlowFiles: async (dir) => (dir === paths.flowsPendingDir ? ['log-in.flow.json'] : []),
       readFlowFile: async () => JSON.stringify(pendingFlow),
       matchFlows,
+      readSite: noQuirks,
     },
   );
 
@@ -214,7 +232,9 @@ test('find reports an unreadable artifact file distinctly from an invalid one', 
     },
   );
 
-  assert.deepEqual(report.warnings, [{ file: 'gone.flow.json', tier: 'ready', reason: 'unreadable' }]);
+  assert.deepEqual(report.warnings, [{
+    kind: 'artifact-load', file: 'gone.flow.json', tier: 'ready', reason: 'unreadable',
+  }]);
 });
 
 // Fix round 1, item 5: the invocation's arg placeholder must be derived
@@ -245,6 +265,7 @@ test('find derives each arg placeholder from its own required flag and type', as
       matchFlows: () => [{
         flow, score: 100, runnable: true, reasons: [],
       }],
+      readSite: noQuirks,
     },
   );
 
@@ -254,13 +275,140 @@ test('find derives each arg placeholder from its own required flag and type', as
   });
 });
 
+// --- find: origin quirks (WS3a Task 4) ---
+//
+// The flow-runner macro (WS3a Task 3) consumes `args.quirks` to dismiss a
+// recorded page interrupt (a cookie banner, say) when its own locator walk
+// misses. These tests cover the producer side: `find` looks up the flow's
+// OWN origin's stored quirks (lib/sites/store.mjs's `readSite`) and embeds
+// them, mapped down to exactly the shape the macro reads.
+
+function storedQuirk(overrides = {}) {
+  return {
+    name: 'cookie-banner',
+    urlPattern: null,
+    target: { locators: [{ kind: 'css', selector: '#cookie-accept' }], description: 'Cookie banner accept button' },
+    action: 'click',
+    addedAt: '2026-01-01T00:00:00.000Z',
+    source: 'agent',
+    ...overrides,
+  };
+}
+
+test('find embeds the flow origin\'s stored quirks, dropping description/addedAt/source', async () => {
+  const paths = {
+    flowsDir: '/h/flows', flowsPendingDir: '/h/pending', macrosDir: '/h/macros',
+  };
+  const flow = validFlow({ name: 'log-in' });
+  const quirk = storedQuirk();
+
+  const report = await flows(
+    {
+      sub: 'find', intent: 'log in', origin: null, url: null, json: true,
+    },
+    {
+      paths,
+      sweep: async () => ({}),
+      listFlowFiles: async (dir) => (dir === paths.flowsDir ? ['log-in.flow.json'] : []),
+      readFlowFile: async () => JSON.stringify(flow),
+      matchFlows: () => [{
+        flow, score: 100, runnable: true, reasons: [],
+      }],
+      readSite: async (readSitePaths, origin) => {
+        assert.equal(readSitePaths, paths);
+        assert.equal(origin, flow.origin);
+        return { quirks: { schemaVersion: 1, quirks: [quirk] } };
+      },
+    },
+  );
+
+  assert.deepEqual(report.candidates[0].invocation.arguments.args.quirks, [{
+    name: 'cookie-banner',
+    urlPattern: null,
+    target: { locators: [{ kind: 'css', selector: '#cookie-accept' }] },
+    action: 'click',
+  }]);
+  assert.deepEqual(report.warnings, []);
+});
+
+test('find embeds an empty quirks array when the flow origin has no site memory', async () => {
+  const paths = {
+    flowsDir: '/h/flows', flowsPendingDir: '/h/pending', macrosDir: '/h/macros',
+  };
+  const flow = validFlow({ name: 'log-in' });
+
+  const report = await flows(
+    {
+      sub: 'find', intent: 'log in', origin: null, url: null, json: true,
+    },
+    {
+      paths,
+      sweep: async () => ({}),
+      listFlowFiles: async (dir) => (dir === paths.flowsDir ? ['log-in.flow.json'] : []),
+      readFlowFile: async () => JSON.stringify(flow),
+      matchFlows: () => [{
+        flow, score: 100, runnable: true, reasons: [],
+      }],
+      // store.mjs's own readSite resolves an origin it has never seen to
+      // this exact shape (never throws, per its own doc comment) -- the
+      // fake here stands in for that real "no site memory yet" case.
+      readSite: noQuirks,
+    },
+  );
+
+  assert.deepEqual(report.candidates[0].invocation.arguments.args.quirks, []);
+  assert.deepEqual(report.warnings, []);
+});
+
+test('find caps embedded quirks at 10, dropping the rest with a warning naming the drop count', async () => {
+  const paths = {
+    flowsDir: '/h/flows', flowsPendingDir: '/h/pending', macrosDir: '/h/macros',
+  };
+  const flow = validFlow({ name: 'log-in' });
+  const elevenQuirks = Array.from({ length: 11 }, (_, index) => storedQuirk({
+    name: `quirk-${index}`,
+    target: { locators: [{ kind: 'css', selector: `#quirk-${index}` }] },
+  }));
+
+  const report = await flows(
+    {
+      sub: 'find', intent: 'log in', origin: null, url: null, json: true,
+    },
+    {
+      paths,
+      sweep: async () => ({}),
+      listFlowFiles: async (dir) => (dir === paths.flowsDir ? ['log-in.flow.json'] : []),
+      readFlowFile: async () => JSON.stringify(flow),
+      matchFlows: () => [{
+        flow, score: 100, runnable: true, reasons: [],
+      }],
+      readSite: async () => ({ quirks: { schemaVersion: 1, quirks: elevenQuirks } }),
+    },
+  );
+
+  const embedded = report.candidates[0].invocation.arguments.args.quirks;
+  assert.equal(embedded.length, 10);
+  assert.deepEqual(embedded.map((q) => q.name), elevenQuirks.slice(0, 10).map((q) => q.name));
+  assert.deepEqual(report.warnings, [{
+    kind: 'quirks-dropped',
+    origin: flow.origin,
+    reason: '1 quirk dropped from the replay invocation (max 10)',
+  }]);
+});
+
 // --- list ---
 
+// WS3a Task 7: `lastHealed` is `flow.provenance.lastHealed` (artifact.mjs's
+// own nullable ISO string), carried through as an additive key on each list
+// entry -- distinct null/non-null values on the two fixtures here pin that
+// it is passed through verbatim, not just present.
 test('list reports both tiers with health, ready sorted before pending', async () => {
   const paths = { flowsDir: '/h/flows', flowsPendingDir: '/h/pending' };
   const ready = validFlow({
     name: 'b-flow',
-    provenance: { ...validFlow().provenance, successRuns: 3, failStreak: 1 },
+    provenance: {
+      ...validFlow().provenance, successRuns: 3, failStreak: 1, lastHealed: '2026-08-04T00:00:00.000Z',
+    },
   });
   const pending = validFlow({ name: 'a-flow', sideEffects: 'mutating' });
 
@@ -285,6 +433,7 @@ test('list reports both tiers with health, ready sorted before pending', async (
         description: ready.description,
         origin: ready.origin,
         health: { successRuns: 3, failStreak: 1 },
+        lastHealed: '2026-08-04T00:00:00.000Z',
       },
       {
         tier: 'pending',
@@ -292,6 +441,7 @@ test('list reports both tiers with health, ready sorted before pending', async (
         description: pending.description,
         origin: pending.origin,
         health: { successRuns: 0, failStreak: 0 },
+        lastHealed: null,
       },
     ],
   });

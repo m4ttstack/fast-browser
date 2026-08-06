@@ -128,8 +128,28 @@ test('macro index exposes only the portable built-in macros', async () => {
   assert.match(text, /`FLOW_RUNNER_FAILURE: `/);
   assert.match(
     text,
-    /failedStep: <step index or 'args'>, error, url, stepsCompleted,\s+locatorFallbacks \}`; parse that shape back out of the error text/,
+    /failedStep: <step index or 'args'>, error, url, stepsCompleted,\s+locatorFallbacks, quirkAttempted\?, candidates\? \}`;\s+parse that shape back\s+out of the\s+error\s+text/,
   );
+  // WS3a Task 2: `candidates` is additive, optional, present ONLY on a
+  // locator-miss step failure, and always the last key -- the index has to
+  // say all four or a caller reading only this doc would assume it is
+  // always present, or present on failures it never appears on.
+  assert.match(text, /present ONLY when the failed step is a\s+locator-miss/);
+  assert.match(text, /always the LAST key in the payload/);
+  assert.match(text, /capped at 12 entries/);
+  assert.match(text, /clamped to 80 characters/);
+  assert.match(text, /the payload silently\s+degrades to the pre-Task-2 shape/);
+  // WS3a Task 3: `quirks` (Params) and rung 3's own failure field --
+  // `quirkAttempted` -- must both be documented, plus the consent basis a
+  // reader has to see before trusting the runner clicks anything at all.
+  assert.match(text, /quirks\?: \[\{ name, urlPattern, target: \{ locators \}, action \}\]/);
+  assert.match(text, /disables rung 3\s+above entirely/);
+  assert.match(text, /At most one quirk is\s+attempted per step/);
+  assert.match(text, /its own click is never attempted a second time/);
+  assert.match(text, /human already performed the same\s+click once by hand/);
+  assert.match(text, /consent basis for repeating it automatically here/);
+  assert.match(text, /present ONLY\s+when a quirk was actually clicked/);
+  assert.match(text, /`quirkAttempted`\s+\(when present\) immediately before it/);
   assert.match(text, /~\/\.fast-browser\/macros\/flow-runner\.js/);
   assert.equal((text.match(/Status: built-in/g) || []).length, 4);
 

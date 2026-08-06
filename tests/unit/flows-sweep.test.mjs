@@ -6,7 +6,9 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import { flowId } from '../../lib/flows/artifact.mjs';
+import {
+  flowId, parseFlow, serializeFlow,
+} from '../../lib/flows/artifact.mjs';
 import { resolvePaths } from '../../lib/core/paths.mjs';
 import { sweep } from '../../lib/flows/sweep.mjs';
 import { originDirName } from '../../lib/sites/store.mjs';
@@ -1240,4 +1242,485 @@ test('a second session on an already-mined origin reports the NEW-mined edges/ta
   const cartTarget = inventory.patterns['/cart'].targets.find((t) => t.name === 'View details');
   assert.equal(cartTarget.count, 2); // incremented across the two sessions, not reset
   assert.deepEqual(cartTarget.kinds.slice().sort(), ['role', 'testid']); // unioned across sessions
+});
+
+// --- healing (WS3a flywheel plan, Task 6) ---
+//
+// Payloads are built to clear heal.mjs's acceptance rule trivially (a
+// candidate whose role+name exactly matches the target's role+description
+// scores 1.0: full token overlap plus the role-match bonus) or to miss it
+// trivially (no token overlap, no role match, scoring 0) -- the scoring
+// math itself is heal.mjs's own, already-tested contract; these tests only
+// need ONE clearly-over and ONE clearly-under case, not the boundary.
+
+function failurePayload(failedStep, candidates) {
+  return `FLOW_RUNNER_FAILURE: ${JSON.stringify({ failedStep, candidates })}`;
+}
+
+test('a failed replay with a heal-worthy payload heals the artifact: alternate appended, id recomputed and matching content, lastHealed stamped, tier unchanged; report.healed is pinned', async (t) => {
+  const paths = await tempPaths(t);
+  const healClock = () => new Date('2026-03-01T00:00:00.000Z');
+  await writeSession(paths, 30000, {
+    meta: baseMeta(),
+    records: [
+      record({ seq: 1, tool: 'browser_navigate', params: { url: 'https://shop.example/cart' } }),
+      record({ seq: 2, targets: [traceTarget({ name: 'View details' })], mutating: false }),
+    ],
+  });
+  const first = await sweep({ paths });
+  const [{ name }] = first.compiled;
+  const stored = await readFlow(paths.flowsDir, 'view-details.flow.json');
+  assert.equal(stored.provenance.lastHealed, null);
+
+  await appendRecords(paths, 30000, [
+    record({
+      seq: 3,
+      tool: 'browser_run_code_unsafe',
+      params: { filename: 'flow-runner.js', args: { flow: { id: stored.id, name } } },
+      // Task 9 e2e finding (fix round): the real trace-capture runtime
+      // records `record.error` as `String(error)` -- wrapped with the
+      // thrown Error's own `name` ahead of this macro's message
+      // ("Error: FLOW_RUNNER_FAILURE: {...}"), never the bare form
+      // `failurePayload` alone produces. This, the primary heal
+      // happy-path fixture, wraps it the same way so the unit layer can
+      // never again silently regress to a position-0/unwrapped
+      // assumption; the other heal fixtures below are left on the bare
+      // form deliberately (parseFailurePayload's own unit tests are where
+      // the wrapped-vs-bare distinction itself is exhaustively covered).
+      error: `Error: ${failurePayload(1, [{
+        role: 'button', name: 'View details', testid: 'vd-btn', text: 'View details',
+      }])}`,
+    }),
+  ]);
+
+  const second = await sweep({ paths, now: healClock });
+  assert.equal(second.replaysSeen, 1);
+  assert.deepEqual(second.updated, [{ name, successRuns: 0, failStreak: 1 }]);
+  assert.deepEqual(second.healed, [{ name, stepIndex: 1, kind: 'testid' }]);
+  assert.deepEqual(second.healErrors, []);
+
+  const healedFlow = await readFlow(paths.flowsDir, 'view-details.flow.json');
+  assert.notEqual(healedFlow.id, stored.id); // content changed -- id must too
+  assert.equal(healedFlow.id, flowId(healedFlow)); // id always matches stored bytes
+  assert.equal(healedFlow.provenance.lastHealed, '2026-03-01T00:00:00.000Z'); // the SWEEP's own clock
+  assert.equal(healedFlow.provenance.failStreak, 1);
+  assert.deepEqual(
+    healedFlow.steps[1].target.locators,
+    [
+      ...stored.steps[1].target.locators,
+      { kind: 'testid', selector: 'internal:testid=[data-testid="vd-btn"]' },
+    ],
+  ); // alternate appended LAST, original locator untouched
+  assert.deepEqual(await listFlowFiles(paths.flowsDir), ['view-details.flow.json']); // tier unchanged
+  assert.deepEqual(await listFlowFiles(paths.flowsPendingDir), []); // heal never moves tiers
+});
+
+test('a failed replay whose payload scores below the heal threshold leaves the artifact\'s steps/id untouched; failStreak still increments', async (t) => {
+  const paths = await tempPaths(t);
+  await writeSession(paths, 31000, {
+    meta: baseMeta(),
+    records: [
+      record({ seq: 1, tool: 'browser_navigate', params: { url: 'https://shop.example/cart' } }),
+      record({ seq: 2, targets: [traceTarget({ name: 'View details' })], mutating: false }),
+    ],
+  });
+  const first = await sweep({ paths });
+  const [{ name }] = first.compiled;
+  const stored = await readFlow(paths.flowsDir, 'view-details.flow.json');
+
+  await appendRecords(paths, 31000, [
+    record({
+      seq: 3,
+      tool: 'browser_run_code_unsafe',
+      params: { filename: 'flow-runner.js', args: { flow: { id: stored.id, name } } },
+      // No token overlap with the target's description/name ("View
+      // details"), and a non-matching role -- clears neither
+      // HEAL_MIN_SCORE nor the margin over the (nonexistent) runner-up.
+      error: failurePayload(1, [{ role: 'link', name: 'Unrelated action', text: 'Unrelated action' }]),
+    }),
+  ]);
+
+  const second = await sweep({ paths });
+  assert.deepEqual(second.updated, [{ name, successRuns: 0, failStreak: 1 }]);
+  assert.deepEqual(second.healed, []);
+  assert.deepEqual(second.healErrors, []);
+
+  const onDisk = await readFlow(paths.flowsDir, 'view-details.flow.json');
+  assert.equal(onDisk.id, stored.id); // no content change -- no heal write beyond provenance
+  assert.equal(onDisk.provenance.failStreak, 1);
+  assert.equal(onDisk.provenance.lastHealed, null);
+  assert.deepEqual(onDisk.steps, stored.steps);
+});
+
+test('healing is idempotent across a re-sweep: the cursor already consumed the replay, so nothing re-processes', async (t) => {
+  const paths = await tempPaths(t);
+  await writeSession(paths, 32000, {
+    meta: baseMeta(),
+    records: [
+      record({ seq: 1, tool: 'browser_navigate', params: { url: 'https://shop.example/cart' } }),
+      record({ seq: 2, targets: [traceTarget({ name: 'View details' })], mutating: false }),
+    ],
+  });
+  const first = await sweep({ paths });
+  const [{ name }] = first.compiled;
+  const stored = await readFlow(paths.flowsDir, 'view-details.flow.json');
+
+  await appendRecords(paths, 32000, [
+    record({
+      seq: 3,
+      tool: 'browser_run_code_unsafe',
+      params: { filename: 'flow-runner.js', args: { flow: { id: stored.id, name } } },
+      error: failurePayload(1, [{
+        role: 'button', name: 'View details', testid: 'vd-btn', text: 'View details',
+      }]),
+    }),
+  ]);
+
+  const second = await sweep({ paths });
+  assert.equal(second.healed.length, 1);
+  const healedOnce = await readFlow(paths.flowsDir, 'view-details.flow.json');
+
+  const third = await sweep({ paths });
+  assert.deepEqual(third.healed, []);
+  assert.deepEqual(third.updated, []);
+  assert.deepEqual(third.cursor, second.cursor);
+
+  const stillHealedOnce = await readFlow(paths.flowsDir, 'view-details.flow.json');
+  assert.deepEqual(stillHealedOnce, healedOnce); // byte-identical -- not healed twice
+});
+
+test('a heal write failure is caught and reported in healErrors; the sweep still completes and the on-disk artifact is untouched', async (t) => {
+  const paths = await tempPaths(t);
+  await writeSession(paths, 33000, {
+    meta: baseMeta(),
+    records: [
+      record({ seq: 1, tool: 'browser_navigate', params: { url: 'https://shop.example/cart' } }),
+      record({ seq: 2, targets: [traceTarget({ name: 'View details' })], mutating: false }),
+    ],
+  });
+  const first = await sweep({ paths });
+  const [{ name }] = first.compiled;
+  const stored = await readFlow(paths.flowsDir, 'view-details.flow.json');
+
+  await appendRecords(paths, 33000, [
+    record({
+      seq: 3,
+      tool: 'browser_run_code_unsafe',
+      params: { filename: 'flow-runner.js', args: { flow: { id: stored.id, name } } },
+      error: failurePayload(1, [{
+        role: 'button', name: 'View details', testid: 'vd-btn', text: 'View details',
+      }]),
+    }),
+  ]);
+
+  // Read+execute only: discovery (readdir/readFile) still works, but the
+  // temp-file write a heal needs is blocked. Unlike the sites-store
+  // sabotage pattern (which blocks `mkdir` of a not-yet-existing subdir),
+  // this targets a directory the artifact is already known to live in, so
+  // sabotaging it must survive `ensurePrivateDirectory`-style self-healing
+  // to matter -- see sweep.mjs's `writeAtomicCore` doc comment for why the
+  // replay-write path skips that step.
+  await chmod(paths.flowsDir, 0o500);
+  t.after(() => chmod(paths.flowsDir, 0o700).catch(() => {}));
+
+  let result;
+  try {
+    result = await sweep({ paths });
+  } finally {
+    await chmod(paths.flowsDir, 0o700);
+  }
+
+  assert.deepEqual(result.healed, []);
+  assert.equal(result.healErrors.length, 1);
+  assert.equal(result.healErrors[0].name, name);
+  assert.equal(typeof result.healErrors[0].error, 'string');
+  assert.deepEqual(result.updated, []); // the write never landed -- no update recorded either
+  // The cursor still advances -- as if the heal attempt had not run at all
+  // (mirrors the sites-mining containment posture: "the cursor still
+  // advances, exactly as if mining had not run at all for that origin").
+  assert.deepEqual(result.cursor, { 'trace-33000': { lines: 3, provenanceLines: 3 } });
+
+  const onDisk = await readFlow(paths.flowsDir, 'view-details.flow.json');
+  assert.equal(onDisk.id, stored.id);
+  assert.equal(onDisk.provenance.failStreak, 0);
+});
+
+// --- MAT-137: replay records as segment boundaries ---
+
+test('records A,B / replay / C,D compile into two segments, never one merged A-B-C-D flow', async (t) => {
+  const paths = await tempPaths(t);
+  await writeSession(paths, 34000, {
+    meta: baseMeta(),
+    records: [
+      record({ seq: 1, tool: 'browser_navigate', params: { url: 'https://shop.example/cart' } }), // A
+      record({ seq: 2, targets: [traceTarget({ name: 'View details' })], mutating: false }), // B
+      record({
+        seq: 3,
+        tool: 'browser_run_code_unsafe',
+        params: { filename: 'flow-runner.js', args: { flow: { id: 'a'.repeat(64), name: 'ghost' } } },
+      }), // replay boundary -- unmatched, its only effect here is the split
+      record({ seq: 4, tool: 'browser_navigate', params: { url: 'https://shop.example/cart' } }), // C -- SAME origin
+      record({ seq: 5, targets: [traceTarget({ name: 'Refresh' })], mutating: false }), // D
+    ],
+  });
+
+  const result = await sweep({ paths });
+
+  assert.equal(result.replaysSeen, 1);
+  assert.deepEqual(
+    result.compiled.slice().sort((a, b) => a.name.localeCompare(b.name)),
+    [
+      { name: 'refresh', tier: 'ready' },
+      { name: 'view-details', tier: 'ready' },
+    ],
+  );
+
+  // Each flow has ONLY its own 2 actions -- proof they compiled as two
+  // separate segments, not one 4-step flow. Pre-fix, same origin and no
+  // error record meant the old filter-then-merge behavior would have
+  // stitched A,B,C,D into one segment (named after D's click, "refresh").
+  const viewDetails = await readFlow(paths.flowsDir, 'view-details.flow.json');
+  const refresh = await readFlow(paths.flowsDir, 'refresh.flow.json');
+  assert.equal(viewDetails.steps.length, 2);
+  assert.equal(refresh.steps.length, 2);
+});
+
+// --- BINDING (Task 5 review): both obligations must appear in tests, not
+// just in the implementation ---
+
+test('a replay naming a flow by an id from before an earlier heal in this same sweep resolves to a superseded registry entry: the second heal is skipped, not misapplied, and the first heal survives', async (t) => {
+  const paths = await tempPaths(t);
+  await writeSession(paths, 35000, {
+    meta: baseMeta(),
+    records: [
+      record({ seq: 1, tool: 'browser_navigate', params: { url: 'https://shop.example/cart' } }),
+      record({ seq: 2, targets: [traceTarget({ name: 'View details' })], mutating: false }),
+    ],
+  });
+  const first = await sweep({ paths });
+  const [{ name }] = first.compiled;
+  const stored = await readFlow(paths.flowsDir, 'view-details.flow.json');
+
+  // TWO failed replays in the SAME provenance slice, BOTH naming the flow
+  // by `stored.id` -- the id from BEFORE either heal. The first heals
+  // successfully (changing the on-disk id); `resolveReplayTarget`'s
+  // id-first match (ruling c, unchanged) then resolves the SECOND record
+  // straight back to the now-superseded `stored.id` registry entry --
+  // exactly what happens when a caller replays the same flow twice from
+  // one cached `{id, name}` reference without re-fetching in between.
+  await appendRecords(paths, 35000, [
+    record({
+      seq: 3,
+      tool: 'browser_run_code_unsafe',
+      params: { filename: 'flow-runner.js', args: { flow: { id: stored.id, name } } },
+      error: failurePayload(1, [{
+        role: 'button', name: 'View details', testid: 'vd-btn-1', text: 'View details',
+      }]),
+    }),
+    record({
+      seq: 4,
+      tool: 'browser_run_code_unsafe',
+      params: { filename: 'flow-runner.js', args: { flow: { id: stored.id, name } } },
+      error: failurePayload(1, [{
+        role: 'button', name: 'View details', testid: 'vd-btn-2', text: 'View details',
+      }]),
+    }),
+  ]);
+
+  const result = await sweep({ paths });
+  assert.equal(result.replaysSeen, 2);
+  // Exactly ONE heal applied -- the second was skipped by the flowId gate,
+  // never silently applied on top of stale (pre-heal-1) content.
+  assert.equal(result.healed.length, 1);
+  assert.equal(result.healed[0].name, name);
+  assert.deepEqual(result.healErrors, []);
+  // Both failures still counted -- a skipped heal is not an error, and the
+  // ordinary provenance update still lands for record 2.
+  assert.deepEqual(result.updated, [{ name, successRuns: 0, failStreak: 2 }]);
+
+  const onDisk = await readFlow(paths.flowsDir, 'view-details.flow.json');
+  // The first heal's locator survives -- record 2's write was based on the
+  // FRESHEST known copy (resolved by name), never the stale `stored.id`
+  // snapshot, so nothing regressed.
+  assert.equal(onDisk.steps[1].target.locators.length, 2);
+  assert.equal(onDisk.steps[1].target.locators[1].selector, 'internal:testid=[data-testid="vd-btn-1"]');
+  assert.equal(onDisk.provenance.failStreak, 2);
+  assert.equal(onDisk.id, flowId(onDisk));
+});
+
+test('a drag step\'s replay failure never proposes a heal, even with a heal-worthy-looking payload: no healErrors entry, failStreak still increments normally', async (t) => {
+  const paths = await tempPaths(t);
+  await writeSession(paths, 36000, {
+    meta: baseMeta(),
+    records: [
+      record({ seq: 1, tool: 'browser_navigate', params: { url: 'https://shop.example/board' } }),
+      record({
+        seq: 2,
+        tool: 'browser_drag',
+        targets: [traceTarget({ name: 'Card' }), traceTarget({ name: 'Column' })],
+        mutating: true,
+      }),
+    ],
+  });
+  const first = await sweep({ paths });
+  const [{ name }] = first.compiled;
+  const stored = await readFlow(paths.flowsPendingDir, `${name}.flow.json`);
+  assert.equal(stored.steps[1].op, 'drag');
+
+  await appendRecords(paths, 36000, [
+    record({
+      seq: 3,
+      tool: 'browser_run_code_unsafe',
+      params: { filename: 'flow-runner.js', args: { flow: { id: stored.id, name } } },
+      error: failurePayload(1, [{ role: 'button', name: 'Card', testid: 'card-1', text: 'Card' }]),
+    }),
+  ]);
+
+  const result = await sweep({ paths });
+  assert.deepEqual(result.healed, []);
+  assert.deepEqual(result.healErrors, []);
+  assert.deepEqual(result.updated, [{ name, successRuns: 0, failStreak: 1 }]);
+
+  const onDisk = await readFlow(paths.flowsPendingDir, `${name}.flow.json`);
+  assert.equal(onDisk.id, stored.id); // untouched -- proposeHeal never even returns a decision
+  assert.deepEqual(onDisk.steps, stored.steps);
+  assert.equal(onDisk.provenance.failStreak, 1);
+});
+
+// --- fix review round 1: a name shared by both tiers must never let a
+// replay resolved-by-id to the PENDING artifact adopt the READY artifact's
+// content as "fresher" ---
+
+// Builds a full, schema-valid flow object (not derived from a compile --
+// this test needs two DIFFERENT artifacts sharing one NAME, which the
+// sweep's own dedup-on-compile logic (ruling a) never produces on its own;
+// this simulates the same name existing in both tiers by some other means
+// -- manual placement, external tooling -- exactly the shape
+// `loadArtifactRegistry`'s first-key-wins scan has to tolerate).
+function rawFlow(overrides = {}) {
+  const base = {
+    schemaVersion: 1,
+    name: 'view-details',
+    description: 'On https://shop.example, this flow clicks "Buy now".',
+    origin: 'https://shop.example',
+    urlPattern: '/checkout',
+    sideEffects: 'mutating',
+    args: {},
+    result: { kind: 'completion', keys: [] },
+    steps: [
+      { op: 'goto', url: '/checkout' },
+      {
+        op: 'click',
+        target: {
+          locators: [{ kind: 'role', selector: 'internal:role=button[name="Buy now"i]' }],
+          description: 'Buy now',
+          role: 'button',
+          name: 'Buy now',
+        },
+        mutating: true,
+      },
+    ],
+    provenance: {
+      compiledAt: '2026-01-01T00:00:00.000Z',
+      traceDir: 'trace-manual',
+      seqRange: [0, 0],
+      productVersion: '0.1.0-test',
+      successRuns: 0,
+      failStreak: 0,
+      lastHealed: null,
+    },
+    ...overrides,
+  };
+  return parseFlow({ ...base, id: flowId(base) });
+}
+
+test('a name shared by both tiers: a replay resolved by id to the PENDING artifact heals the PENDING file, never adopts or overwrites the READY artifact sharing its name', async (t) => {
+  const paths = await tempPaths(t);
+
+  // The READY artifact, compiled normally -- lands in flowsDir, name
+  // 'view-details'.
+  await writeSession(paths, 37000, {
+    meta: baseMeta(),
+    records: [
+      record({ seq: 1, tool: 'browser_navigate', params: { url: 'https://shop.example/cart' } }),
+      record({ seq: 2, targets: [traceTarget({ name: 'View details' })], mutating: false }),
+    ],
+  });
+  const first = await sweep({ paths });
+  assert.deepEqual(first.compiled, [{ name: 'view-details', tier: 'ready' }]);
+  const readyBefore = await readFlow(paths.flowsDir, 'view-details.flow.json');
+
+  // A SEPARATE, genuinely different-content PENDING artifact that happens
+  // to share the SAME name -- placed directly, bypassing the sweep's own
+  // dedup entirely (this state can't arise from `sweep()` alone).
+  await mkdir(paths.flowsPendingDir, { recursive: true });
+  const pendingBefore = rawFlow();
+  assert.notEqual(pendingBefore.id, readyBefore.id); // genuinely different content
+  await writeFile(
+    path.join(paths.flowsPendingDir, 'view-details.flow.json'),
+    serializeFlow(pendingBefore),
+  );
+
+  // A failed replay naming the PENDING artifact by ID -- `loadArtifactRegistry`
+  // scans flowsDir first, so `registry.byName.get('view-details')` only
+  // ever remembers the READY one; resolving by id must still land on the
+  // PENDING artifact (ruling c, unchanged), and healing it must never pull
+  // in the READY artifact's content just because the names collide.
+  await writeSession(paths, 38000, {
+    meta: baseMeta(),
+    records: [
+      record({
+        seq: 1,
+        tool: 'browser_run_code_unsafe',
+        params: { filename: 'flow-runner.js', args: { flow: { id: pendingBefore.id, name: 'view-details' } } },
+        error: failurePayload(1, [{
+          role: 'button', name: 'Buy now', testid: 'buy-now-btn', text: 'Buy now',
+        }]),
+      }),
+    ],
+  });
+
+  const result = await sweep({ paths });
+  assert.equal(result.healed.length, 1);
+  assert.equal(result.healed[0].stepIndex, 1);
+  assert.deepEqual(result.healErrors, []);
+
+  // The PENDING file got the healed PENDING content.
+  const pendingAfter = await readFlow(paths.flowsPendingDir, 'view-details.flow.json');
+  assert.notEqual(pendingAfter.id, pendingBefore.id); // content changed -- id recomputed
+  assert.equal(pendingAfter.id, flowId(pendingAfter));
+  assert.equal(pendingAfter.origin, pendingBefore.origin); // PENDING content, not READY's
+  assert.equal(pendingAfter.steps[1].target.locators.length, 2);
+  assert.equal(
+    pendingAfter.steps[1].target.locators[1].selector,
+    'internal:testid=[data-testid="buy-now-btn"]',
+  );
+  assert.equal(pendingAfter.provenance.failStreak, 1);
+
+  // The READY file with the same NAME is completely untouched.
+  const readyAfter = await readFlow(paths.flowsDir, 'view-details.flow.json');
+  assert.deepEqual(readyAfter, readyBefore);
+
+  // byId still resolves the PENDING id to the PENDING path -- a follow-up
+  // successful replay against the (now healed) pending id updates the
+  // PENDING file only, never the ready one.
+  await writeSession(paths, 39000, {
+    meta: baseMeta(),
+    records: [
+      record({
+        seq: 1,
+        tool: 'browser_run_code_unsafe',
+        params: { filename: 'flow-runner.js', args: { flow: { id: pendingAfter.id, name: 'view-details' } } },
+      }),
+    ],
+  });
+  const followUp = await sweep({ paths });
+  // A success resets failStreak to 0 (unrelated to this fix -- ordinary
+  // replay-provenance semantics, unchanged).
+  assert.deepEqual(followUp.updated, [{ name: 'view-details', successRuns: 1, failStreak: 0 }]);
+
+  const pendingFinal = await readFlow(paths.flowsPendingDir, 'view-details.flow.json');
+  assert.equal(pendingFinal.provenance.successRuns, 1);
+  const readyFinal = await readFlow(paths.flowsDir, 'view-details.flow.json');
+  assert.deepEqual(readyFinal, readyBefore); // still fully untouched
 });
