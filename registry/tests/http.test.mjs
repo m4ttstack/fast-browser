@@ -123,6 +123,86 @@ test('POST /v1/push with the wrong bearer token is rejected 401', async () => {
   }
 });
 
+test('near-miss tokens are all rejected 401: one flipped char, a prefix, a token-plus-suffix', async () => {
+  const { close, baseUrl, token } = await startTestServer();
+  try {
+    const flippedLastChar = `${token.slice(0, -1)}${token.at(-1) === 'x' ? 'y' : 'x'}`;
+    const prefix = token.slice(0, -1);
+    const withSuffix = `${token}x`;
+    for (const nearMiss of [flippedLastChar, prefix, withSuffix]) {
+      const response = await fetch(`${baseUrl}/v1/pull`, { headers: { Authorization: `Bearer ${nearMiss}` } });
+      assert.equal(response.status, 401, `expected 401 for near-miss token ${JSON.stringify(nearMiss)}`);
+    }
+  } finally {
+    await close();
+  }
+});
+
+test('an empty bearer token ("Bearer " with nothing after it) is rejected 401', async () => {
+  const { close, baseUrl } = await startTestServer();
+  try {
+    const response = await fetch(`${baseUrl}/v1/pull`, { headers: { Authorization: 'Bearer ' } });
+    assert.equal(response.status, 401);
+  } finally {
+    await close();
+  }
+});
+
+test('a lowercase "bearer" scheme is rejected 401 -- auth fails closed on case, it does not case-fold', async () => {
+  const { close, baseUrl, token } = await startTestServer();
+  try {
+    const response = await fetch(`${baseUrl}/v1/pull`, { headers: { Authorization: `bearer ${token}` } });
+    assert.equal(response.status, 401);
+  } finally {
+    await close();
+  }
+});
+
+test('GET /health ignores Authorization entirely -- a bogus header still gets 200', async () => {
+  const { close, baseUrl } = await startTestServer();
+  try {
+    const response = await fetch(`${baseUrl}/health`, { headers: { Authorization: 'Bearer this-is-nonsense' } });
+    assert.equal(response.status, 200);
+  } finally {
+    await close();
+  }
+});
+
+test('router probes: trailing slash, path case, percent-encoded slash all 404; dot-segment normalizes and still requires auth; OPTIONS is unrecognized', async () => {
+  const { close, baseUrl, token } = await startTestServer();
+  try {
+    // Trailing slash is a different path than the registered '/health' --
+    // no implicit normalization.
+    const trailingSlash = await fetch(`${baseUrl}/health/`);
+    assert.equal(trailingSlash.status, 404);
+
+    // Path matching is case-sensitive.
+    const upperCase = await fetch(`${baseUrl}/V1/PULL`, { headers: { Authorization: `Bearer ${token}` } });
+    assert.equal(upperCase.status, 404);
+
+    // A percent-encoded slash does not decode into a path separator for
+    // routing purposes -- '/v1%2Fpull' must not match '/v1/pull'.
+    const percentEncoded = await fetch(`${baseUrl}/v1%2Fpull`, { headers: { Authorization: `Bearer ${token}` } });
+    assert.equal(percentEncoded.status, 404);
+
+    // '/v1/./pull' IS a dot-segment normalization of a real route (URL's
+    // own parser collapses it to '/v1/pull' before routing ever sees it),
+    // so it must behave exactly like '/v1/pull': 401 unauthenticated, not
+    // 404.
+    const dotSegmentUnauthenticated = await fetch(`${baseUrl}/v1/./pull`);
+    assert.equal(dotSegmentUnauthenticated.status, 401);
+    const dotSegmentAuthenticated = await fetch(`${baseUrl}/v1/./pull`, { headers: { Authorization: `Bearer ${token}` } });
+    assert.equal(dotSegmentAuthenticated.status, 501);
+
+    // No route table entry handles OPTIONS anywhere -- falls through to
+    // the generic 404, not a CORS-style 204/200.
+    const options = await fetch(`${baseUrl}/health`, { method: 'OPTIONS' });
+    assert.equal(options.status, 404);
+  } finally {
+    await close();
+  }
+});
+
 test('GET /v1/pull and GET /v1/search both require auth too', async () => {
   const { close, baseUrl } = await startTestServer();
   try {
@@ -222,6 +302,27 @@ test('a declared Content-Length over the limit is rejected 413 without the serve
   }
 });
 
+test('an UNAUTHENTICATED declared-oversized Content-Length is rejected 413, not 401 -- the size check runs ahead of auth', async () => {
+  const { close, port } = await startTestServer();
+  try {
+    const oversizeDeclared = BODY_LIMIT_BYTES + 1;
+    // No Authorization header at all -- if auth ran first, this would be
+    // a 401 and the server would then sit on the connection waiting on
+    // (or draining) a body that was never coming. Never write the body.
+    const head =
+      `POST /v1/push HTTP/1.1\r\n` +
+      `Host: 127.0.0.1\r\n` +
+      `Content-Length: ${oversizeDeclared}\r\n` +
+      `Connection: close\r\n` +
+      `\r\n`;
+    const response = await rawRequest(port, { head });
+    assert.match(response, /^HTTP\/1\.1 413/);
+    assert.match(response, /"code":"payload_too_large"/);
+  } finally {
+    await close();
+  }
+});
+
 test('a chunked body (no declared Content-Length) that exceeds the limit is rejected 413 mid-stream', async () => {
   const { close, port, token } = await startTestServer();
   try {
@@ -277,6 +378,20 @@ test('boot() rejects when REGISTRY_SIGNING_KEY is not a valid PEM, without echoi
   );
 });
 
+test('boot() rejects a syntactically valid PEM of the wrong key type (RSA instead of Ed25519), naming REGISTRY_SIGNING_KEY and never echoing it', async () => {
+  const { boot } = await import('../server.mjs');
+  const { generateKeyPairSync } = await import('node:crypto');
+  const { privateKey: rsaPrivateKeyPem } = generateKeyPairSync('rsa', {
+    modulusLength: 2048,
+    privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+    publicKeyEncoding: { type: 'spki', format: 'pem' },
+  });
+  await assert.rejects(
+    () => boot({ env: { REGISTRY_TOKEN: 'x', REGISTRY_SIGNING_KEY: rsaPrivateKeyPem } }),
+    (error) => /REGISTRY_SIGNING_KEY/.test(error.message) && !error.message.includes(rsaPrivateKeyPem),
+  );
+});
+
 test('a keygen-generated keypair boots a real (spawned) server whose /health serves the derived public key', async () => {
   const keygen = spawn(process.execPath, [path.join(REGISTRY_ROOT, 'scripts', 'keygen.mjs')]);
   let keygenStdout = '';
@@ -301,6 +416,13 @@ test('a keygen-generated keypair boots a real (spawned) server whose /health ser
   const server = spawn(process.execPath, [path.join(REGISTRY_ROOT, 'server.mjs')], {
     env: {
       ...process.env,
+      // Pinned, not inherited: an ambient DATABASE_URL in the real shell
+      // environment (e.g. once Task 4 exports one) would silently flip
+      // this spawned boot onto the 'pg' driver and fail -- this test only
+      // cares about the memory-store boot path. Same for VOYAGE_API_KEY,
+      // which this test has no opinion on either way.
+      DATABASE_URL: '',
+      VOYAGE_API_KEY: '',
       REGISTRY_TOKEN: 'keygen-boot-test-token',
       REGISTRY_SIGNING_KEY: privateKeyPem,
       PORT: '0',

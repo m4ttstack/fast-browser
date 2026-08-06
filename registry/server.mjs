@@ -43,6 +43,13 @@ function selectStoreDriver(env) {
   return env.DATABASE_URL ? 'pg' : 'memory';
 }
 
+// Ed25519 only -- signing.mjs's sign()/verify() work with any key
+// node:crypto's sign/verify accept, so nothing downstream would fail loudly
+// if REGISTRY_SIGNING_KEY were, say, an RSA or EC key: it would just boot,
+// derive an RSA/EC public key, and serve THAT from /health, silently
+// producing signatures no Ed25519-verifying client could ever check
+// against the key it pinned. Reject any other algorithm here, at the one
+// place the key is first read, rather than downstream.
 function derivePublicKeyPem(signingKeyPem) {
   let privateKey;
   try {
@@ -50,6 +57,11 @@ function derivePublicKeyPem(signingKeyPem) {
   } catch {
     throw new RegistryBootError(
       'REGISTRY_SIGNING_KEY is not a valid PEM private key (expected an Ed25519 PKCS8 PEM -- see registry/scripts/keygen.mjs)',
+    );
+  }
+  if (privateKey.asymmetricKeyType !== 'ed25519') {
+    throw new RegistryBootError(
+      `REGISTRY_SIGNING_KEY is the wrong key type (expected an Ed25519 PKCS8 PEM -- see registry/scripts/keygen.mjs)`,
     );
   }
   return createPublicKey(privateKey).export({ type: 'spki', format: 'pem' });

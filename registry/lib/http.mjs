@@ -57,33 +57,45 @@ function sendError(res, statusCode, code, message) {
   sendJson(res, statusCode, { error: { code, message } });
 }
 
+// True when the request declared a body at the protocol level (a
+// Content-Length or a Transfer-Encoding header) -- independent of whether
+// the matched route (or the lack of one, on a 404) actually wants to read
+// it. Used to choose, on a 404/401 rejection, between draining a body that
+// plainly isn't there (nothing to drain, keep-alive is fine) and NOT
+// draining one that is (see sendErrorClosing below -- draining a body the
+// client is still actively sending, even discard-only, means the server
+// keeps receiving that client's bytes off the network for as long as the
+// connection stays open).
+function hasDeclaredBody(req) {
+  return Boolean(req.headers['content-length']) || Boolean(req.headers['transfer-encoding']);
+}
+
 // Discards (does not buffer) any request body the router has decided not
-// to read -- the 404/401 branches below reject before readBody() ever
-// runs. Draining rather than leaving the body dangling lets a keep-alive
-// connection close/reuse cleanly instead of the next request on the same
-// socket getting corrupted by a previous request's unread trailing bytes.
-// req.resume() is O(1) memory regardless of how much body is left (each
-// chunk is discarded as it arrives, never accumulated), so this is safe
-// even against a request whose (unauthorized, so never route-handled)
-// body happens to be large.
+// to read, for the one case where that's actually safe: no body was ever
+// declared, so there is nothing to drain and nothing to keep receiving.
+// req.resume() is O(1) memory regardless of how much (if anything) arrives
+// (each chunk is discarded as it arrives, never accumulated) -- kept as a
+// defensive no-op rather than removed outright, in case a body arrives
+// with neither header (not valid HTTP, but node's parser is lenient).
 function drainUnreadBody(req) {
   if (!req.readableEnded) req.resume();
 }
 
-// "Abort early": respond 413 and then close the connection instead of
-// draining whatever the client is still sending, whether the oversized
-// body was known up front (a declared Content-Length over the limit) or
-// only discovered mid-stream (chunked transfer, or a lying
-// Content-Length). The response is written and flushed on the still-live
-// socket first -- destroying `req` before that would take the socket down
-// with it and the client would see a reset instead of a 413 -- and only
-// once the write callback confirms the bytes are flushed does this
-// function cut the connection.
-function send413(req, res) {
-  const payload = JSON.stringify({
-    error: { code: 'payload_too_large', message: `request body exceeds ${BODY_LIMIT_BYTES} bytes` },
-  });
-  res.writeHead(413, {
+// Writes a JSON error response and then closes the connection instead of
+// leaving it open -- used whenever the request declared a body (whether
+// or not it turns out to be within the size limit) that the router has
+// decided not to read: rejecting to keep-alive there would leave the
+// socket sitting open for as long as the client keeps sending the bytes
+// it promised, which the server would then keep receiving (even if it
+// discards them) for no reason once the response is already final. The
+// response is written and flushed on the still-live socket FIRST --
+// destroying `req` before that would take the socket down with it and the
+// client would see a connection reset instead of the intended status code
+// -- and only once the write callback confirms the bytes are flushed does
+// this function cut the connection.
+function sendErrorClosing(req, res, statusCode, code, message) {
+  const payload = JSON.stringify({ error: { code, message } });
+  res.writeHead(statusCode, {
     'Content-Type': 'application/json; charset=utf-8',
     'Content-Length': Buffer.byteLength(payload),
     Connection: 'close',
@@ -91,6 +103,21 @@ function send413(req, res) {
   res.end(payload, () => {
     req.destroy();
   });
+}
+
+function send413(req, res) {
+  sendErrorClosing(req, res, 413, 'payload_too_large', `request body exceeds ${BODY_LIMIT_BYTES} bytes`);
+}
+
+// Rejects on a declared-oversized Content-Length -- used both ahead of
+// auth (so an unauthenticated client announcing an oversized upload never
+// even reaches the auth check, let alone gets read) and, redundantly but
+// harmlessly, inside readBody() below (which also catches the
+// no-advance-declaration / lying-Content-Length / chunked case that this
+// early check cannot).
+function declaredContentLengthExceeds(req, limit) {
+  const declared = Number(req.headers['content-length']);
+  return Number.isFinite(declared) && declared > limit;
 }
 
 // Reads the full request body into a Buffer, enforcing `limit` two ways:
@@ -185,14 +212,38 @@ export function createRequestListener({ token, store, publicKeyPem, version, clu
 
     const route = routes.find((candidate) => candidate.method === req.method && candidate.path === url.pathname);
     if (!route) {
-      drainUnreadBody(req);
-      sendError(res, 404, 'not_found', `no route for ${req.method} ${url.pathname}`);
+      if (hasDeclaredBody(req)) {
+        sendErrorClosing(req, res, 404, 'not_found', `no route for ${req.method} ${url.pathname}`);
+      } else {
+        drainUnreadBody(req);
+        sendError(res, 404, 'not_found', `no route for ${req.method} ${url.pathname}`);
+      }
+      return;
+    }
+
+    // Ahead of auth: a client that declares an oversized upload gets
+    // rejected before the auth check even runs, let alone before a single
+    // body byte is read. Without this ordering, an UNAUTHENTICATED request
+    // declaring e.g. Content-Length: 200MB would get its 401 quickly, but
+    // -- since the connection would otherwise stay open, keep-alive, past
+    // that 401 -- the server would keep receiving (whether drained or
+    // simply left flowing) every byte of that 200MB the client goes on to
+    // send, for a request that was never going to be accepted regardless
+    // of its body. Checking size before identity closes that resource
+    // drain: the response here is 413, not 401, since the body itself is
+    // rejected outright.
+    if (route.hasBody && declaredContentLengthExceeds(req, BODY_LIMIT_BYTES)) {
+      send413(req, res);
       return;
     }
 
     if (route.auth && !isAuthorized(req, token)) {
-      drainUnreadBody(req);
-      sendError(res, 401, 'unauthorized', 'missing or invalid bearer token');
+      if (hasDeclaredBody(req)) {
+        sendErrorClosing(req, res, 401, 'unauthorized', 'missing or invalid bearer token');
+      } else {
+        drainUnreadBody(req);
+        sendError(res, 401, 'unauthorized', 'missing or invalid bearer token');
+      }
       return;
     }
 
