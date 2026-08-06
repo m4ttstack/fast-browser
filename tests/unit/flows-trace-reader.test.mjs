@@ -441,6 +441,83 @@ test('readTraceRecordsFrom resumes correctly across a multibyte UTF-8 record bou
   assert.equal(second.endByte, Buffer.byteLength(firstLine + secondLine, 'utf8'));
 });
 
+test('readTraceRecordsFrom given a mid-line byteOffset (not a real endByte -- a corrupted/misused cursor) resyncs at the next newline: the fragment counts toward skipped/lineCount, and the record after it still parses', async (t) => {
+  const dataDir = await tempDataDir();
+  t.after(() => rm(dataDir, { recursive: true, force: true }));
+  const sessionDir = path.join(dataDir, 'trace-1000000000008');
+  await mkdir(sessionDir);
+  const actionsFile = path.join(sessionDir, 'actions.jsonl');
+
+  const line1 = `${JSON.stringify({ v: 1, seq: 1, tool: 'browser_navigate' })}\n`;
+  const line2 = `${JSON.stringify({ v: 1, seq: 2, tool: 'browser_snapshot' })}\n`;
+  const line3 = `${JSON.stringify({ v: 1, seq: 3, tool: 'browser_click' })}\n`;
+  await writeFile(actionsFile, line1 + line2 + line3);
+
+  // Deliberately NOT a value this reader ever returned as an endByte --
+  // it lands 5 bytes into line2's JSON body, well before line2's own
+  // terminating newline, simulating a corrupted/misused caller cursor
+  // rather than a legitimate resume point.
+  const midLineOffset = Buffer.byteLength(line1, 'utf8') + 5;
+
+  const result = await readTraceRecordsFrom(sessionDir, midLineOffset);
+
+  // The line2 fragment (from midLineOffset to line2's own newline) is not
+  // valid JSON on its own and fails JSON.parse -- counted exactly like any
+  // other malformed line: skip = consume.
+  assert.equal(result.skipped, 1);
+  // lineCount: 1 for the fragment, 1 for line3 -- the scan resyncs cleanly
+  // at the next real newline (JSONL records never contain a raw 0x0A byte,
+  // so the fragment can never itself swallow line3's boundary).
+  assert.equal(result.lineCount, 2);
+  assert.equal(result.records.length, 1);
+  assert.equal(result.records[0].seq, 3);
+  assert.equal(result.readable, true);
+  assert.equal(result.endByte, Buffer.byteLength(line1 + line2 + line3, 'utf8'));
+});
+
+test('readTraceRecordsFrom with byteOffset past EOF returns no records and echoes the offset back unchanged', async (t) => {
+  const dataDir = await tempDataDir();
+  t.after(() => rm(dataDir, { recursive: true, force: true }));
+  const sessionDir = path.join(dataDir, 'trace-1000000000009');
+  await mkdir(sessionDir);
+  const actionsFile = path.join(sessionDir, 'actions.jsonl');
+  await writeFile(actionsFile, `${JSON.stringify({ v: 1, seq: 1, tool: 'browser_navigate' })}\n`);
+
+  const fileBytes = await readFile(actionsFile);
+  const farOffset = fileBytes.length + 1000;
+
+  const result = await readTraceRecordsFrom(sessionDir, farOffset);
+  assert.deepEqual(result, {
+    records: [], skipped: 0, readable: true, endByte: farOffset, lineCount: 0,
+  });
+});
+
+test('readTraceRecordsFrom on an empty (zero-byte) actions.jsonl returns no records, readable: true, endByte 0', async (t) => {
+  const dataDir = await tempDataDir();
+  t.after(() => rm(dataDir, { recursive: true, force: true }));
+  const sessionDir = path.join(dataDir, 'trace-1000000000010');
+  await mkdir(sessionDir);
+  await writeFile(path.join(sessionDir, 'actions.jsonl'), '');
+
+  const result = await readTraceRecordsFrom(sessionDir, 0);
+  assert.deepEqual(result, {
+    records: [], skipped: 0, readable: true, endByte: 0, lineCount: 0,
+  });
+});
+
+test('readTraceRecordsFrom on a file that is only a partial line (no newline anywhere) returns no records and endByte 0 -- nothing is consumed', async (t) => {
+  const dataDir = await tempDataDir();
+  t.after(() => rm(dataDir, { recursive: true, force: true }));
+  const sessionDir = path.join(dataDir, 'trace-1000000000011');
+  await mkdir(sessionDir);
+  await writeFile(path.join(sessionDir, 'actions.jsonl'), '{"v":1,"seq":1,"tool":"browser_na');
+
+  const result = await readTraceRecordsFrom(sessionDir, 0);
+  assert.deepEqual(result, {
+    records: [], skipped: 0, readable: true, endByte: 0, lineCount: 0,
+  });
+});
+
 // --- isReplayRecord: shared predicate (WS3b Task 1) ---
 //
 // Previously three byte-identical copies (lib/flows/sweep.mjs,
