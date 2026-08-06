@@ -23,13 +23,17 @@ import {
 //
 // A compiled flow's `goto` step replays against the flow's RECORDED path
 // ('/'), verbatim -- flow-runner.js's precondition/goto navigation has no
-// way to carry a caller-supplied query string, so `?variant=drifted` on the
-// URL is a non-starter (the brief's own note). Drift and the consent
+// way to carry a caller-supplied query string, so `?profile=testid-rename`
+// on the URL is a non-starter (the brief's own note). Drift and the consent
 // overlay are instead driven by tests/fixtures/order-flow/server.mjs's
-// `setVariant`, an in-process toggle: which markup the SAME path ('/')
+// `setProfile`, an in-process toggle: which markup the SAME path ('/')
 // serves on the next request. This is a plain function call, not an admin
 // HTTP endpoint or an env var -- there is no extra network round trip, and
-// the toggle lives entirely in the fixture module (test-side only).
+// the toggle lives entirely in the fixture module (test-side only). WS4a
+// Task 1 renamed the old ad-hoc variant names to named mutation profiles
+// (tests/fixtures/order-flow/profiles.mjs) without changing what any of
+// them serve -- this file's own drift/overlay descriptions below still
+// hold verbatim, only the selector strings this file passes changed.
 //
 // Only ONE element's markup differs between the 'base' and 'drifted'
 // variants: the "Place order" button. Every other interactive element (and
@@ -192,7 +196,7 @@ test('healing: drift heals from failure evidence and quirks dismiss interrupts',
 
   // --- 2. replay against the DRIFTED variant -> FLOW_RUNNER_FAILURE, whose
   // payload carries candidate evidence including the renamed testid. ---
-  fixture.setVariant('drifted');
+  fixture.setProfile('testid-rename');
   const failSession = await tracedSession(t, outputDir);
   let failurePayload;
   await assert.rejects(
@@ -309,7 +313,7 @@ test('healing: drift heals from failure evidence and quirks dismiss interrupts',
     action: 'click',
   }]);
 
-  fixture.setVariant('overlay');
+  fixture.setProfile('banner-hides');
   const overlaySession = await tracedSession(t, outputDir);
   const overlayResult = await overlaySession.callTool(
     quirkCandidate.invocation.tool,
@@ -456,7 +460,7 @@ test('healing: a plain button with no data-testid heals from derived role and te
   // reworded drift, per this file's own drift-mechanism doc comment above
   // -- not the base recording's "Confirm order"), no testid, no explicit
   // name. ---
-  fixture.setVariant('role-drifted');
+  fixture.setProfile('text-rename-near');
   const failSession = await tracedSession(t, outputDir);
   let failurePayload;
   await assert.rejects(
@@ -694,7 +698,7 @@ test('healing: an overlay that intercepts pointer events recovers on the act, no
   // the probe-miss path, is what fired), and the ordinary SUCCESS shape
   // carries no `quirkAttempted` key (that key only ever appears inside the
   // FAILURE payload -- flow-runner.js's own `fail()` call sites). ---
-  fixture.setVariant('intercept');
+  fixture.setProfile('banner-intercepts');
   const interceptSession = await tracedSession(t, outputDir);
   const interceptResult = await interceptSession.callTool(
     quirkCandidate.invocation.tool,
