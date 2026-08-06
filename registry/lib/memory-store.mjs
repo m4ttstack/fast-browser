@@ -112,9 +112,16 @@ export function createMemoryStore() {
 
       if (embedding) {
         const query = toEmbedding(embedding);
+        // Fix round 1, IMPORTANT #2 (controller ruling): a non-positive
+        // cosine (orthogonal or anti-aligned) is no-signal and is excluded
+        // outright -- mirrors lexical mode's own `score > 0` filter below.
+        // Before this fix, e.g. an anti-aligned stored embedding rode all
+        // the way to the wire as `score: -1`, contradicting the plan's
+        // documented "score": 0-1.
         const scored = scoped
           .filter((record) => record.embedding)
-          .map((record) => ({ record: structuredClone(record), score: cosineSimilarity(query, record.embedding) }));
+          .map((record) => ({ record: structuredClone(record), score: cosineSimilarity(query, record.embedding) }))
+          .filter(({ score }) => score > 0);
         scored.sort((a, b) => b.score - a.score || a.record.name.localeCompare(b.record.name));
         return { mode: 'semantic', results: scored.slice(0, TOP_RESULTS) };
       }

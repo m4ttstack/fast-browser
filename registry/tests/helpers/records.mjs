@@ -70,3 +70,21 @@ export function unitEmbedding(index, { dimensions = 1024, sign = 1 } = {}) {
   vector[index] = sign;
   return vector;
 }
+
+// Builds a two-nonzero-component embedding (`primaryWeight` at `index`,
+// `otherWeight` at `otherIndex`, 0 elsewhere) -- WS4b Task 6 fix round 1,
+// IMPORTANT #2: after the score<=0 exclusion filter, a search-ordering
+// test that needs MORE THAN ONE surviving positive-scoring result (to
+// still prove descending order, not just "one record made it through")
+// cannot rely on unitEmbedding alone -- that only ever produces exactly
+// cosine 1, 0, or -1 against a matching unitEmbedding query, and 0/-1 are
+// now excluded outright. Neither component needs to be unit-normalized
+// (cosineSimilarity/pgvector's `<=>` both normalize by each vector's own
+// norm internally), so plain small integers keep the resulting cosine
+// value exact and easy to reason about by hand.
+export function partialEmbedding(index, otherIndex, primaryWeight, otherWeight, { dimensions = 1024 } = {}) {
+  const vector = new Array(dimensions).fill(0);
+  vector[index] = primaryWeight;
+  vector[otherIndex] = otherWeight;
+  return vector;
+}

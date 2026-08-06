@@ -669,6 +669,83 @@ test('GET /v1/pull with a malformed since query param is rejected 422, never ech
   }
 });
 
+// Fix round 1, IMPORTANT #1 (reviewer-reproduced, live): Date.parse()
+// accepts far more than ISO 8601, and the ORIGINAL parseSinceQueryParam
+// passed the client's raw string straight through unnormalized. Against
+// the memory store specifically, that produced a silent, empty result
+// (not a 422, not a 500) for a non-ISO-but-Date.parse-able value like
+// 'Aug 1 2026' -- the dangerous failure direction, since a sync pull
+// reading "nothing new" is indistinguishable from "genuinely nothing
+// new". Both cases below must come back CORRECT (non-empty, matching the
+// pushed record), never silently empty and never a 500.
+test('GET /v1/pull accepts a non-ISO but Date.parse-able since value ("Aug 1 2026") and returns correct results, not a silent empty list', async () => {
+  const { close, baseUrl, token } = await startTestServer();
+  try {
+    const envelope = pushEnvelopeFor({ name: 'pull-since-non-iso' });
+    await fetch(`${baseUrl}/v1/push`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ flows: [envelope] }),
+    });
+
+    // 'Aug 1 2026' parses (via Date.parse) to a moment safely before any
+    // push this test issues (the suite runs in 2026 or later), so the
+    // pushed record must come back -- an unnormalized raw-string compare
+    // against memory-store's full ISO-with-milliseconds updatedAt values
+    // would have returned [] here instead.
+    const response = await fetch(`${baseUrl}/v1/pull?since=${encodeURIComponent('Aug 1 2026')}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    assert.equal(response.status, 200);
+    const payload = await response.json();
+    assert.deepEqual(payload.flows.map((f) => f.artifact.name), ['pull-since-non-iso']);
+  } finally {
+    await close();
+  }
+});
+
+test('GET /v1/pull with a milliseconds-trimmed ISO since value still includes a record at that exact (sub-second) instant -- equal-instant inclusivity survives normalization', async () => {
+  const { close, baseUrl, token, store } = await startTestServer();
+  try {
+    // Pin the record's own updatedAt to a whole-second instant (no
+    // fractional milliseconds) via the raw store, bypassing push's
+    // real-clock timestamp -- this is the one case where the client's
+    // milliseconds-trimmed `since` value and the record's own stored
+    // `updatedAt` name the EXACT same instant, so store.list's documented
+    // inclusive `>=` semantics must include it. Before normalization,
+    // memory-store's lexicographic compare put
+    // '2026-08-06T23:22:39.000Z' (the record) BEFORE
+    // '2026-08-06T23:22:39Z' (the raw, unnormalized since value) --
+    // '.' sorts before 'Z' -- and silently excluded an equal-instant
+    // record.
+    const record = {
+      id: 'f'.repeat(64),
+      name: 'pull-since-millis-trim',
+      origin: 'http://localhost:4823',
+      description: 'x',
+      stepSignature: 'goto,click',
+      opSequence: 'goto,click',
+      content: parseFlow(baseFlow({ name: 'pull-since-millis-trim' })),
+      contentHash: '0'.repeat(64),
+      signature: null,
+      embedding: null,
+      mergedCount: 0,
+      createdAt: '2026-08-06T23:22:39.000Z',
+      updatedAt: '2026-08-06T23:22:39.000Z',
+    };
+    await store.putCanonical(record);
+
+    const response = await fetch(`${baseUrl}/v1/pull?since=${encodeURIComponent('2026-08-06T23:22:39Z')}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    assert.equal(response.status, 200);
+    const payload = await response.json();
+    assert.deepEqual(payload.flows.map((f) => f.artifact.name), ['pull-since-millis-trim']);
+  } finally {
+    await close();
+  }
+});
+
 test('GET /v1/pull on an empty store returns { flows: [] } with 200, not 404', async () => {
   const { close, baseUrl, token } = await startTestServer();
   try {
@@ -705,8 +782,16 @@ test('GET /v1/search: semantic mode follows cosine even when it diverges from le
   // search-time embed call (over the raw intent, no marker) share one
   // embedder, so the vector returned must be selected by what the text
   // actually is, not by which call number this is.
+  //
+  // xVector is deliberately NOT orthogonal to queryVector (fix round 1,
+  // IMPORTANT #2: a score of exactly 0 is now excluded from results
+  // outright) -- [9, 1] against queryVector [0, 1] gives cosine 1/sqrt(82)
+  // (~0.11), small but strictly positive, so `search-fixture-x` still
+  // survives the score<=0 filter and this test can still prove the two
+  // flows rank in OPPOSITE order across modes, not merely that one of
+  // them disappears.
   const queryVector = [0, 1];
-  const xVector = [1, 0]; // orthogonal to queryVector -- cosine 0
+  const xVector = [9, 1]; // cosine with queryVector: 1/sqrt(82) ~= 0.11 (small, positive)
   const yVector = [0, 1]; // identical to queryVector -- cosine 1
   const stubEmbedder = async (text) => {
     if (text.includes('XMARKER')) return Float64Array.from(xVector);
@@ -732,7 +817,58 @@ test('GET /v1/search: semantic mode follows cosine even when it diverges from le
     assert.equal(payload.mode, 'semantic');
     assert.deepEqual(payload.results.map((r) => r.envelope.artifact.name), ['search-fixture-y', 'search-fixture-x']);
     assert.ok(payload.results[0].score > payload.results[1].score);
-    assert.ok(payload.results[0].score >= 0 && payload.results[0].score <= 1);
+    // Fix round 1, IMPORTANT #2 (controller ruling): wire scores stay in
+    // (0, 1] -- strictly positive, never 0 or negative.
+    assert.ok(payload.results.every(({ score }) => score > 0 && score <= 1));
+  } finally {
+    await close();
+  }
+});
+
+test('GET /v1/search: semantic mode excludes an anti-aligned or orthogonal stored embedding -- wire score never <= 0', async () => {
+  const queryVector = [1, 0];
+  const alignedVector = [1, 0]; // cosine 1
+  const orthogonalVector = [0, 1]; // cosine 0
+  const antiAlignedVector = [-1, 0]; // cosine -1
+  // Non-overlapping marker tokens, deliberately: 'ALIGNEDMARKER' is a
+  // substring of 'ANTIALIGNEDMARKER', so keying on that pair (in either
+  // check order) would misroute the anti-aligned flow's own push-time
+  // embed call to the aligned branch. MARKERONE/TWO/THREE share no
+  // substring relationship with each other.
+  const stubEmbedder = async (text) => {
+    if (text.includes('MARKERONE')) return Float64Array.from(alignedVector);
+    if (text.includes('MARKERTWO')) return Float64Array.from(orthogonalVector);
+    if (text.includes('MARKERTHREE')) return Float64Array.from(antiAlignedVector);
+    return Float64Array.from(queryVector);
+  };
+  const { close, baseUrl, token } = await startTestServer({}, { embedder: stubEmbedder });
+  try {
+    const pushResponse = await fetch(`${baseUrl}/v1/push`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: JSON.stringify({
+        flows: [
+          pushEnvelopeFor({ name: 'score-aligned', description: 'aligned flow MARKERONE' }),
+          pushEnvelopeFor({ name: 'score-orthogonal', description: 'orthogonal flow MARKERTWO' }),
+          pushEnvelopeFor({ name: 'score-anti-aligned', description: 'anti aligned flow MARKERTHREE' }),
+        ],
+      }),
+    });
+    assert.deepEqual((await pushResponse.json()).results.map((r) => r.outcome), ['created', 'created', 'created']);
+
+    // The intent text itself carries none of the three markers, so the
+    // search-time embed call falls through to the default branch (the
+    // queryVector), independent of the push-time calls above.
+    const response = await fetch(`${baseUrl}/v1/search?intent=anything`, { headers: { Authorization: `Bearer ${token}` } });
+    assert.equal(response.status, 200);
+    const payload = await response.json();
+    assert.equal(payload.mode, 'semantic');
+    // Reviewer-reproduced regression (fix round 1, IMPORTANT #2): before
+    // this fix, the orthogonal and anti-aligned records rode onto the
+    // wire with score 0 and score -1 respectively. Both are excluded now
+    // -- only the aligned record survives.
+    assert.deepEqual(payload.results.map((r) => r.envelope.artifact.name), ['score-aligned']);
+    assert.ok(payload.results.every(({ score }) => score > 0 && score <= 1));
   } finally {
     await close();
   }

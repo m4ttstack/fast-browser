@@ -200,20 +200,42 @@ function toEnvelope(record) {
   return { artifact: record.content, contentHash: record.contentHash, signature: record.signature };
 }
 
-// Validates the `since` query param for GET /v1/pull (WS4b Task 6 ledger
-// finding): pg-store's `updated_at >= $n` throws on an invalid timestamptz
-// literal (-> an unhandled 500), while memory-store's plain string compare
-// silently accepts garbage (-> a 200 with meaningless results) -- the two
-// stores diverge on a malformed `since` with no fix at the store layer,
-// since neither store owns HTTP-level input validation. Validated once,
-// here, before either store is ever consulted: `since` must parse as a
-// real date (`Number.isFinite(Date.parse(since))`); an absent or empty
+// Validates AND normalizes the `since` query param for GET /v1/pull (WS4b
+// Task 6 ledger finding; fix round 1, IMPORTANT #1). `since` must parse as
+// a real date (`Number.isFinite(Date.parse(since))`); an absent or empty
 // value means "no since filter" (both query params are optional).
+//
+// Normalizing the parsed value back to a canonical `toISOString()` (rather
+// than passing the client's RAW string straight through, which the
+// original version of this function did) is not cosmetic -- it closes two
+// separate divergences the fix round 1 review reproduced live:
+//   - Date.parse() accepts far more than ISO 8601 ('Aug 1 2026', a bare
+//     '2026', RFC 1123 dates, ...). pg-store hands `since` straight to a
+//     `timestamptz` parameter -- Postgres's own timestamptz parser rejects
+//     most of those forms outright (-> an unhandled 500). Passing pg a
+//     value already round-tripped through JS's Date is a literal every
+//     `timestamptz` cast accepts, every time.
+//   - memory-store's `list()` filters via a plain lexicographic string
+//     compare (`record.updatedAt >= since`) against `updatedAt` values
+//     that are ALWAYS full ISO strings with milliseconds
+//     (`new Date().toISOString()`, registry/lib/ingest.mjs). A
+//     milliseconds-trimmed ISO client value (e.g.
+//     '2026-08-06T23:22:39Z', a perfectly valid `Date.parse` input) sorts
+//     LEXICOGRAPHICALLY *after* '2026-08-06T23:22:39.000Z' ('Z' > '.' by
+//     code point) even though the two name the identical instant -- so an
+//     equal-or-later record was silently excluded. A sync pull reading
+//     "nothing new" when there in fact IS something new is the dangerous
+//     failure direction here (the opposite -- an extra stale record --
+//     is merely redundant work), which is exactly why this is fixed by
+//     normalizing the input to the same always-has-milliseconds shape
+//     `updatedAt` values are already in, rather than, say, only checking
+//     for milliseconds specifically.
 function parseSinceQueryParam(url) {
   const raw = url.searchParams.get('since');
   if (raw === null || raw === '') return { ok: true, value: undefined };
-  if (!Number.isFinite(Date.parse(raw))) return { ok: false };
-  return { ok: true, value: raw };
+  const parsedMillis = Date.parse(raw);
+  if (!Number.isFinite(parsedMillis)) return { ok: false };
+  return { ok: true, value: new Date(parsedMillis).toISOString() };
 }
 
 // GET /v1/pull?since=<iso>&origin=<origin> (WS4b plan Task 6): both filters

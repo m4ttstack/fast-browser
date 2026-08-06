@@ -311,10 +311,21 @@ export function createPgStore(options = {}) {
     // memory-store uses (registry/lib/lexical-score.mjs), so both stores'
     // lexical rankings and score values match exactly, not just "close
     // enough".
+    //
+    // Fix round 1, IMPORTANT #2 (controller ruling): `(1 - (embedding <=>
+    // $1::vector)) > 0` in the WHERE clause excludes a non-positive cosine
+    // (orthogonal or anti-aligned) outright -- mirrors both memory-store's
+    // identical filter and this same method's own lexical branch below
+    // (`score > 0`). Before this fix, e.g. an anti-aligned stored
+    // embedding rode all the way to the wire as `score: -1`, contradicting
+    // the plan's documented "score": 0-1. Filtered in SQL (not fetched
+    // then discarded in JS) so LIMIT 5 still returns up to 5 genuinely
+    // positive-scoring rows rather than up to 5 rows some of which get
+    // thrown away afterward.
     async search({ embedding, intentText, origin } = {}) {
       if (embedding) {
         const params = [embeddingLiteral(embedding)];
-        const conditions = ['embedding IS NOT NULL'];
+        const conditions = ['embedding IS NOT NULL', '(1 - (embedding <=> $1::vector)) > 0'];
         if (origin) {
           params.push(origin);
           conditions.push(`origin = $${params.length}`);

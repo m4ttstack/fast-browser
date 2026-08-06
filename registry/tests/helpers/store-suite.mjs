@@ -35,7 +35,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { makeRecord, sha256Hex, unitEmbedding } from './records.mjs';
+import { makeRecord, partialEmbedding, sha256Hex, unitEmbedding } from './records.mjs';
 import { opSequence } from '../../lib/signature-fields.mjs';
 import { parseFlow } from '../../../lib/flows/artifact.mjs';
 import { baseFlow } from './fixtures.mjs';
@@ -209,12 +209,26 @@ export function registerStoreSuite(label, createFreshStore, { skip = false } = {
     assert.deepEqual(await store.health(), { ok: true, count: 1 });
   });
 
-  test(`${label}: search: semantic mode ranks by cosine similarity over stored embeddings, descending`, { skip }, async () => {
+  // Fix round 1, IMPORTANT #2 (controller ruling): a non-positive cosine
+  // is no-signal and is excluded entirely from semantic results, mirroring
+  // lexical mode's existing `score > 0` filter -- before this fix, an
+  // orthogonal (score exactly 0) or anti-aligned (score negative) stored
+  // embedding still rode onto the wire, contradicting the plan's
+  // documented "score": 0-1. `partial` (cosine ~0.11, strictly between 0
+  // and 1) exists specifically so this test still proves DESCENDING order
+  // survives the filter with more than one surviving result -- `far` and
+  // `opposite` are asserted absent, not merely last.
+  test(`${label}: search: semantic mode ranks by cosine similarity descending, excluding non-positive scores (fix round 1, IMPORTANT #2)`, { skip }, async () => {
     const store = await createFreshStore();
     const close = makeRecord({
       idSeed: 'close',
       flowOverrides: { name: 'flow-close' },
       embedding: unitEmbedding(0),
+    });
+    const partial = makeRecord({
+      idSeed: 'partial',
+      flowOverrides: { name: 'flow-partial' },
+      embedding: partialEmbedding(0, 1, 1, 9),
     });
     const far = makeRecord({
       idSeed: 'far',
@@ -228,11 +242,13 @@ export function registerStoreSuite(label, createFreshStore, { skip = false } = {
     });
     await store.putCanonical(far);
     await store.putCanonical(opposite);
+    await store.putCanonical(partial);
     await store.putCanonical(close);
 
     const result = await store.search({ embedding: unitEmbedding(0), intentText: 'place an order' });
     assert.equal(result.mode, 'semantic');
-    assert.deepEqual(result.results.map((r) => r.record.id), [close.id, far.id, opposite.id]);
+    assert.deepEqual(result.results.map((r) => r.record.id), [close.id, partial.id]);
+    assert.ok(result.results.every(({ score }) => score > 0 && score <= 1));
     assert.ok(result.results[0].score > result.results[1].score);
     assert.equal(Math.round(result.results[0].score * 1000) / 1000, 1);
   });
