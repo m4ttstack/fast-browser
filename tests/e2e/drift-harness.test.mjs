@@ -8,7 +8,7 @@ import test from 'node:test';
 
 import { flows } from '../../lib/commands/flows.mjs';
 import { sites } from '../../lib/commands/sites.mjs';
-import { defaultConfig } from '../../lib/core/config.mjs';
+import { defaultConfig, loadConfig } from '../../lib/core/config.mjs';
 import { createEncoder, encoderRanker, VOYAGE_API_KEY_ENV } from '../../lib/flows/encoder.mjs';
 import {
   HEAL_MIN_MARGIN, HEAL_MIN_SCORE, parseFailurePayload, proposeHeal, rankCandidates,
@@ -55,7 +55,13 @@ async function recordTuningLine(line) {
 async function withOneVoyageRetry(fn) {
   try {
     return await fn();
-  } catch {
+  } catch (firstError) {
+    // Review round 1 (folded minor b): the swallowed first attempt is real
+    // signal (exactly the transient-timeout class this helper exists to
+    // absorb, per its own doc comment above) -- logged rather than
+    // silently discarded, so a run that needed the retry still leaves a
+    // trace of why in `npm run test:drift`'s own output.
+    console.warn(`fast-browser drift-harness: voyage call failed once, retrying once -- ${firstError?.message ?? firstError}`);
     return fn();
   }
 }
@@ -1402,11 +1408,20 @@ test(
     // a real browser session and can occasionally miss its own timeout
     // budget, degrading to lexical -- either real outcome is accepted
     // here; this leg's hard proof is the isolated contrast below, not this
-    // branch.
-    assert.ok(
-      firstAttempt.rung === 'heal' || firstAttempt.rung === 'fail',
-      `unexpected rung from the live sweep: ${firstAttempt.rung}`,
-    );
+    // branch. (Review round 1, folded minor a: the branch below's own
+    // `if`/`else` -- `assert.equal(firstAttempt.rung, 'fail')` in the
+    // `else` -- already pins the specific observed rung either way; a
+    // preceding `rung === 'heal' || rung === 'fail'` check added nothing
+    // beyond what that branch already asserts, so it's gone rather than
+    // kept as dead weight.)
+    //
+    // DEFERRED to Task 7 (per review round 1): once sweep's own `warnings`
+    // surface (`encoder-degraded` entries) ships, this branch should
+    // assert the XOR directly -- either a `warnings` entry naming the
+    // degrade-to-lexical reason (the `else` branch below) OR a healed
+    // entry with the OBSERVED selector (the `if` branch below), never
+    // neither and never both -- rather than inferring the live call's
+    // fate from `rung` alone as this leg currently must.
     if (firstAttempt.rung === 'heal') {
       assert.equal(firstAttempt.evidence.healed.length, 1);
       assert.equal(firstAttempt.evidence.healed[0].stepIndex, placeOrderStepIndex);
@@ -1434,12 +1449,43 @@ test(
       // compiles to NO step), so nothing in the REPLAYED artifact ever
       // actually checks that the order completed -- the replay reports
       // success purely because the click resolved and threw nothing.
+      //
+      // Review round 1 (Important 3): pin the INERTNESS itself, not just
+      // `ok: true`, via a completely independent, real HTTP-level signal
+      // -- Task 5's own kill-test instrumentation (`fixture.setKillTest`
+      // + `GET /order/count`), reused here for a different purpose than
+      // the kill leg's own at-most-once proof. Enabling it makes the
+      // fixture's delegated `app`-level click listener attempt a real `POST
+      // /order` whenever the CLICKED element's `id` is exactly
+      // "place-order" -- honest caveat: under `text-rename-far` NEITHER
+      // candidate carries that id at all ("Confirm order" has
+      // `id="confirm-order"`; the drifted "Checkout" button has no id --
+      // that is literally what this profile drifts, per profiles.mjs's own
+      // doc comment), so this counter cannot distinguish "clicked the
+      // wrong button" from "clicked the right one" for this specific
+      // profile -- it structurally cannot fire for EITHER. What it still
+      // proves, independent of the DOM-level observation above: a
+      // completely separate, out-of-band, server-side signal confirms this
+      // "successful" replay triggered NO real mutating action at all, not
+      // merely that flow-runner's own click resolved without throwing.
+      const KILL_TEST_TOKEN = 'encoder-leg-wrong-target-probe';
+      fixture.setKillTest({ token: KILL_TEST_TOKEN, stall: false });
+
       const secondAttempt = await replayOneProfile({
         t, flow: orderFlow, fixture, paths, recorded, profileName: 'text-rename-far', restore: false,
       });
       t.diagnostic(`encoder leg: second attempt (OBSERVED "success" is NOT functional -- see doc comment) rung=${secondAttempt.rung} evidence=${JSON.stringify(secondAttempt.evidence)}`);
       assert.equal(secondAttempt.evidence.ok, true);
       assert.deepEqual(secondAttempt.evidence.healed, [], 'expected no NEW heal on the second replay (idempotence: the locator is already present)');
+
+      const countResponse = await fetch(`${fixture.origin}/order/count?token=${encodeURIComponent(KILL_TEST_TOKEN)}`);
+      const { count: orderCount } = await countResponse.json();
+      t.diagnostic(`encoder leg: /order/count after the wrong-target replay = ${orderCount}`);
+      assert.equal(
+        orderCount,
+        0,
+        'expected the wrong-target click to have submitted NOTHING, confirmed via the fixture\'s own independent HTTP-level mutation counter',
+      );
     } else {
       t.diagnostic('encoder leg: OBSERVED -- the live sweep\'s own encoder call did not clear the gate this run (see the task report\'s reliability finding); the isolated contrast below is this leg\'s hard proof and does not depend on this branch');
     }
@@ -1461,7 +1507,19 @@ test(
     // pass with a fresh ranker instance) so its raw `[{index, score}]`
     // result can feed BOTH this contrast's decision AND the tuning-report
     // line below without a second network call for the same evidence.
-    const encoder = createEncoder({ config: { encoder: 'voyage' }, env: process.env });
+    //
+    // Review round 1 (Important 2): the encoder is resolved through the
+    // REAL config chain -- `loadConfig(paths)` reads the harness dataDir's
+    // own `config.json` this test wrote at the top (not a hand-built
+    // `{ encoder: 'voyage' }` literal) -- so this leg's own config write
+    // is genuinely load-bearing for the contrast too, not just for the
+    // live sweep above: a no-op config write (or a bug that silently
+    // wrote 'lexical') would fail the `encoder.kind` assertion immediately
+    // below rather than passing unnoticed.
+    const loadedConfig = await loadConfig(paths);
+    const encoder = createEncoder({ config: loadedConfig, env: process.env });
+    assert.equal(encoder.active, true, 'expected the harness dataDir config write to resolve to an ACTIVE encoder');
+    assert.equal(encoder.kind, 'voyage', 'expected the harness dataDir config write to resolve to the voyage encoder specifically');
     const ranker = encoderRanker(encoder);
     const contrastTarget = targetForFailedStep(golden, firstPayload);
     const contrastRanked = await withOneVoyageRetry(

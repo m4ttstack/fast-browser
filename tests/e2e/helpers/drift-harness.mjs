@@ -408,6 +408,18 @@ export function tuningLineFor({
   openRanker.minScore = FORCE_OPEN_THRESHOLD;
   openRanker.minMargin = FORCE_OPEN_THRESHOLD;
   const wouldHealDecision = proposeHeal({ flow, payload, ranker: openRanker });
+  // Review round 1 (folded minor c): `correct: false` is produced by TWO
+  // distinct situations this single boolean does not distinguish --
+  // "the top-ranked candidate synthesizes to the WRONG selector" (a real
+  // mis-bind, e.g. WS4a Task 6's own "Confirm order" vs "Checkout" finding)
+  // and "the top-ranked candidate has no synthesizable locator at all"
+  // (`wouldHealDecision` itself is null -- `synthesizeLocator`'s own null
+  // cases: no testid, no role, or a role with neither a usable name nor
+  // usable text). Not split into two fields here (the Shared shapes'
+  // `correct` is a single boolean Task 7 already consumes) -- a caller
+  // that needs to tell these apart can re-derive it from `ranked[0]` and
+  // `payload.candidates` directly; this field alone conflates them by
+  // design, not by oversight.
   const correct = Boolean(wouldHealDecision && wouldHealDecision.locator.selector === expectedSelector);
 
   return {
@@ -419,6 +431,18 @@ export function tuningLineFor({
 // `margin` per group -- Task 7's own consumption target ("the harness
 // prints the aggregate"). A group with a single line reports that line's
 // own values for both min and median (both are well-defined for n=1).
+//
+// Review round 1 (Important 1): `healed`/`correct` counts are carried into
+// the aggregate too, not just top/margin. Before this fix, the printed
+// table (and the scratch JSONL it summarizes, which the aggregate test
+// itself deletes at the end of the run -- see drift-harness.test.mjs's own
+// doc comment) was the ONLY surviving artifact of a run, and it showed
+// nothing but a healthy-looking score/margin number for a ranker that
+// WS4a Task 6's own encoder leg actually observed binding to the WRONG
+// candidate -- a reader of the aggregate alone had no way to know that.
+// `"<healedCount>/<n>"`/`"<correctCount>/<n>"` (not a bare rate) keeps `n`
+// visible right on the same fields, so a 1/1 correct is not confused with
+// a 5/5 at a glance.
 function median(values) {
   const sorted = [...values].sort((a, b) => a - b);
   const mid = Math.floor(sorted.length / 2);
@@ -431,12 +455,14 @@ export function aggregateTuning(lines) {
     const key = `${line.ranker}::${line.profile}`;
     if (!groups.has(key)) {
       groups.set(key, {
-        ranker: line.ranker, profile: line.profile, tops: [], margins: [],
+        ranker: line.ranker, profile: line.profile, tops: [], margins: [], healedCount: 0, correctCount: 0,
       });
     }
     const group = groups.get(key);
     group.tops.push(line.top);
     group.margins.push(line.margin);
+    if (line.healed) group.healedCount += 1;
+    if (line.correct) group.correctCount += 1;
   }
   return [...groups.values()].map((group) => ({
     ranker: group.ranker,
@@ -446,6 +472,8 @@ export function aggregateTuning(lines) {
     medianTop: median(group.tops),
     minMargin: Math.min(...group.margins),
     medianMargin: median(group.margins),
+    healed: `${group.healedCount}/${group.tops.length}`,
+    correct: `${group.correctCount}/${group.tops.length}`,
   }));
 }
 
