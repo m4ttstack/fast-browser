@@ -157,38 +157,63 @@ const CHECKOUT_TAG = '<button type="button">Checkout</button>';
 const CHECKOUT_LISTENER_CALL = 'app.lastElementChild.addEventListener(\'click\', showComplete);';
 
 // delayed-render: the SAME insert-then-listen pair the base branch runs
-// synchronously, deferred behind a 2000ms `setTimeout`. No id/text/testid
-// changes at all -- the only drift is timing -- so no heal is ever in play
-// here: the SAME locator that always resolved this element still resolves
-// it, just late.
+// synchronously, deferred behind a `setTimeout`. No id/text/testid changes
+// at all -- the only drift is timing -- so no heal is ever in play here:
+// the SAME locator that always resolved this element still resolves it,
+// just late.
 //
-// CORRECTED (WS4a Task 4, constraint 3 -- observed, not inferred):
-// the plan's own draft reasoning for this profile assumed rung 1's probe
-// budget is 1500ms total FOR THE STEP, so a 2000ms delay would certainly
-// miss it and only be recovered by rung 2's escalated pass. Observed
-// reality: flow-runner.js's `probeCandidates` walks a step's deduped
-// candidate list SEQUENTIALLY, each candidate getting its OWN 1500ms
-// `waitFor` inside rung 1's single (non-escalated) pass -- `resolveTarget`
-// only falls through to `resolveEscalated` once EVERY candidate has
-// individually missed. This button records two candidates (index 0 role,
-// index 1 css `#place-order`, per every other plain-button profile in this
-// file) -- rung 1's role probe (index 0) reliably times out at 1500ms
-// (the element does not exist yet), and the very next candidate (css,
-// index 1) starts waiting immediately after and only needs the element to
-// exist by the 3000ms mark of elapsed step time to hit -- comfortably
-// covering the 2000ms render (a stable ~1000ms margin, not a knife's
-// edge). So this profile's replay actually resolves entirely within rung
-// 1's own multi-candidate walk, via the non-primary (css) candidate,
-// and NEVER reaches rung 2's escalated pass at all -- the truthful
-// observed rung is 'fallback' (a non-escalated `locatorFallbacks` entry,
-// `usedKind: 'css', usedIndex: 1`), not 'escalated'. This is a correction
-// to this file's own prior assumption about the runner's timing budget,
-// not a runtime regression -- `probeCandidates`'s per-candidate,
-// sequential-waitFor behavior is exactly what flow-runner.js's own doc
-// comment above `resolveTarget` already documents; nothing there
-// contradicts this observation.
-const DELAYED_INSERT_CALL = `setTimeout(() => { ${PLACE_ORDER_INSERT_CALL} }, 2000);`;
-const DELAYED_LISTENER_CALL = `setTimeout(() => { ${PLACE_ORDER_LISTENER_CALL} }, 2000);`;
+// RETIMED (WS4a Task 4 review round 2, Critical): a first cut of this
+// profile used a 2000ms delay, which this file's own comment (at the time)
+// worked out resolves within rung 1's own multi-candidate walk -- true,
+// but it left NO profile anywhere in this repo exercising `resolveTarget`'s
+// own natural "rung 1 fully exhausted on every candidate, fall through to
+// `resolveEscalated`" path: `banner-hides`/`banner-intercepts` recover via
+// the quirk mechanism (a different code path), and
+// tests/e2e/healing.test.mjs's own escalated `locatorFallbacks` entry is
+// produced by the POST-QUIRK forced-escalated pass (`forcedEscalatedOnly`),
+// not this one. The plan assigned exactly that natural-exhaustion coverage
+// to THIS profile, so the DELAY is what gets retimed here, not the
+// expectation that gets weakened to match a delay that was simply too
+// short.
+//
+// The arithmetic has to be aware of an unmeasured, host-dependent
+// quantity, call it `g`: the `setTimeout` is armed the moment `showReview()`
+// runs (right when "Review order" is clicked), but the Place-order step's
+// OWN rung-1 probe does not start until AFTER the intervening "Confirm
+// order" step has already resolved and acted -- `g` is that real (never
+// negative, never exactly zero) wall-clock gap. This file's OWN prior
+// version of this comment did not account for `g` at all (implicitly
+// assumed it away as ~0), which is exactly why its "stable ~1000ms margin"
+// claim for the old 2000ms delay was wrong: the true binding edge was
+// `500ms - g`, and the one real run that produced a `usedIndex: 1` (css)
+// recovery only proves `g` stayed under ~500ms on THAT run, not that it
+// always will (a sufficiently loaded host pushing `g` past ~2000ms would
+// have flipped that same leg all the way to 'clean' instead -- the button
+// already existing before the probe even starts).
+//
+// 4500ms is chosen so the outcome no longer depends on `g`'s exact value,
+// only on `g` staying under a wide, realistic band (one click's own
+// resolve-and-act round trip, empirically well under 500ms per the old
+// leg's own observed recovery above):
+//   - rung 1's own two-candidate walk, measured from the Place-order
+//     step's own probe start, spans a 3000ms window (1500ms each,
+//     sequential -- flow-runner.js's `probeCandidates`). The insert
+//     deadline, in that SAME probe-start-relative frame, is `4500 - g`.
+//     Even at `g` up to ~1000ms (double the observed bound), `4500 - g`
+//     stays comfortably above 3000: rung 1 exhausts BOTH candidates and
+//     genuinely misses, regardless of host speed.
+//   - `resolveEscalated` then gets its own fresh, PER-CANDIDATE 3000ms
+//     budget, candidate 0 (role) first -- its window, same relative frame,
+//     is `[3000, 6000]`. `4500 - g` lands inside that window for any `g`
+//     from 0ms up to ~1500ms (again, well past the realistic bound), with
+//     at least ~1200ms of margin from whichever edge is closer even at
+//     that generous boundary. So this profile now resolves ONLY via rung
+//     2's escalated pass, hitting candidate 0 (role): `usedKind: 'role',
+//     usedIndex: 0, escalated: true` -- the natural-exhaustion coverage
+//     the plan assigned it, pinned exactly (not just `>= 1`) in
+//     tests/e2e/drift-harness.test.mjs.
+const DELAYED_INSERT_CALL = `setTimeout(() => { ${PLACE_ORDER_INSERT_CALL} }, 4500);`;
+const DELAYED_LISTENER_CALL = `setTimeout(() => { ${PLACE_ORDER_LISTENER_CALL} }, 4500);`;
 
 export const PROFILES = {
   'testid-rename': {
@@ -233,10 +258,10 @@ export const PROFILES = {
     expected: { rung: 'fail' },
   },
   'delayed-render': {
-    description: 'The "Place order" button renders and wires up 2000ms after showReview() would normally run it synchronously. No markup changes at all; the drift is purely timing. Recovers within rung 1\'s own sequential per-candidate walk (the non-primary css candidate\'s own 1500ms wait starts only after the primary role candidate\'s own 1500ms wait has already elapsed, comfortably covering the 2000ms render) -- see this file\'s own doc comment above (WS4a Task 4 correction) for why this never reaches rung 2\'s escalated pass at all.',
+    description: 'The "Place order" button renders and wires up 4500ms after showReview() would normally run it synchronously. No markup changes at all; the drift is purely timing. Retimed (WS4a Task 4 review round 2) so rung 1\'s own two-candidate walk (3000ms total from the step\'s own probe start) is exhausted regardless of host speed, landing the recovery in rung 2\'s escalated pass via candidate 0 (role) -- see this file\'s own doc comment above for the full g-aware margin arithmetic.',
     transform: (html) => html
       .replace(PLACE_ORDER_INSERT_CALL, DELAYED_INSERT_CALL)
       .replace(PLACE_ORDER_LISTENER_CALL, DELAYED_LISTENER_CALL),
-    expected: { rung: 'fallback' },
+    expected: { rung: 'escalated' },
   },
 };

@@ -342,6 +342,14 @@ test(
 // the metadata's own shape/values; this file pins what the RUNTIME
 // actually does.
 //
+// Leg order below is LOAD-BEARING: `text-rename-far` must stay LAST. Its
+// own quarantine drive (below) issues two extra `replayOneProfile` calls
+// with `restore: false`, deliberately NOT restoring the golden artifact in
+// between so `failStreak` accumulates instead of resetting -- any other
+// leg running after the first `text-rename-far` attempt would restore the
+// artifact via its own default `restore: true` and silently erase that
+// accumulation before the drive ever got to observe the threshold trip.
+//
 // Unlike the skeleton test above (Task 3, `recordOrderFlow` -- no
 // "Confirm order" click at all), every leg here needs BOTH interactive
 // buttons the fixture's `showReview()` renders exercised by the recording:
@@ -486,12 +494,16 @@ test(
 
     const recorded = await recordAndApprove(t, matrixFlow, fixture, paths);
     const golden = JSON.parse(recorded.snapshot.toString('utf8'));
+    const startOrderStepIndex = golden.steps.findIndex(
+      (step) => step.op === 'click' && step.target?.name === 'Start order',
+    );
     const confirmOrderStepIndex = golden.steps.findIndex(
       (step) => step.op === 'click' && step.target?.name === 'Confirm order',
     );
     const placeOrderStepIndex = golden.steps.findIndex(
       (step) => step.op === 'click' && step.target?.name === 'Place order',
     );
+    assert.notEqual(startOrderStepIndex, -1, 'expected a click step targeting "Start order"');
     assert.notEqual(confirmOrderStepIndex, -1, 'expected a click step targeting "Confirm order"');
     assert.notEqual(placeOrderStepIndex, -1, 'expected a click step targeting "Place order"');
 
@@ -557,24 +569,28 @@ test(
       expectedLocator: { kind: 'other', selector: 'internal:role=button[name="Confirm your order"i]' },
     });
 
-    // --- delayed-render: CORRECTED expectation (Task 3's review ledger,
-    // constraint 3 -- reality governs over the plan's draft table).
-    // profiles.mjs's own doc comment (WS4a Task 4 correction) has the full
-    // write-up: rung 1's probe walks a step's candidates SEQUENTIALLY,
-    // each with its OWN 1500ms `waitFor`, so a two-candidate step (role
-    // index 0, css index 1 -- every plain button here) gets up to ~3000ms
-    // of effective rung-1 budget before falling through to rung 2's
-    // escalated pass at all. The 2000ms render lands inside that window,
-    // via the non-primary css candidate -- 'fallback', a NON-escalated
-    // recovery, never reaching rung 2.
+    // --- delayed-render: RETIMED (WS4a Task 4 review round 2, Critical).
+    // profiles.mjs's own doc comment above `DELAYED_INSERT_CALL` has the
+    // full g-aware margin write-up: at 4500ms, rung 1's own two-candidate
+    // walk (3000ms total from the step's own probe start) is exhausted
+    // regardless of host speed, and the render lands inside rung 2's
+    // escalated pass's own candidate-0 (role) window with a wide margin on
+    // both edges. This is the one profile in the whole matrix that proves
+    // `resolveTarget`'s NATURAL rung-1-exhausted escalation path (as
+    // opposed to `banner-hides`/`banner-intercepts`'s quirk-driven
+    // recovery, or healing.test.mjs's own POST-QUIRK forced-escalated
+    // pass) -- pinned to the exact fallback entry, not a loose `>= 1`,
+    // mirroring healing.test.mjs's own overlay-leg style.
     const delayedRender = await replayLeg('delayed-render');
-    assert.equal(delayedRender.rung, 'fallback');
+    assert.equal(delayedRender.rung, 'escalated');
     assert.deepEqual(delayedRender.evidence.healed, []);
     assert.equal(delayedRender.evidence.dismissCount, 0);
-    assert.deepEqual(delayedRender.evidence.escalatedFallbacks, [], 'expected the recovery to stay within rung 1, never reaching the escalated pass');
-    assert.equal(delayedRender.evidence.fallbacks.length, 1);
-    assert.equal(delayedRender.evidence.fallbacks[0].usedKind, 'css');
-    assert.equal(delayedRender.evidence.fallbacks[0].usedIndex, 1);
+    assert.deepEqual(delayedRender.evidence.fallbacks, [
+      {
+        step: placeOrderStepIndex, usedKind: 'role', usedIndex: 0, escalated: true,
+      },
+    ]);
+    assert.deepEqual(delayedRender.evidence.escalatedFallbacks, delayedRender.evidence.fallbacks);
     assert.equal(delayedRender.evidence.ok, true);
 
     // --- banner-hides: constraint 1's own fixture -- the fixture-side
@@ -584,15 +600,20 @@ test(
     // would otherwise classify as (see index.html's and drift-harness.mjs's
     // own doc comments). The recovery still also leaves an escalated
     // fallback entry on the "Start order" step (the probe-miss path, per
-    // healing.test.mjs's own overlay leg) -- both are true at once;
-    // classifyReplay's own precedence (quirk beats escalated) is what
-    // resolves that to a single rung.
+    // healing.test.mjs's own overlay leg, pinned exactly here too, not just
+    // `>= 1`) -- both are true at once; classifyReplay's own precedence
+    // (quirk beats escalated) is what resolves that to a single rung.
     const bannerHides = await replayLeg('banner-hides');
     assert.equal(bannerHides.rung, 'quirk');
     assert.equal(bannerHides.evidence.dismissCount, 1);
     assert.deepEqual(bannerHides.evidence.healed, []);
     assert.equal(bannerHides.evidence.ok, true);
-    assert.ok(bannerHides.evidence.escalatedFallbacks.length >= 1, 'expected the probe-miss recovery to also leave an escalated fallback entry');
+    assert.deepEqual(bannerHides.evidence.fallbacks, [
+      {
+        step: startOrderStepIndex, usedKind: 'role', usedIndex: 0, escalated: true,
+      },
+    ]);
+    assert.deepEqual(bannerHides.evidence.escalatedFallbacks, bannerHides.evidence.fallbacks);
 
     // --- banner-intercepts: the existing `__interceptDismissClicks__`
     // counter (unchanged by this task) already makes this a 'quirk'. The

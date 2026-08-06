@@ -165,19 +165,19 @@ test('text-rename-far: accessible text changes to zero-overlap "Checkout"; id an
   assert.equal(testidCount(output), testidCount(base));
 });
 
-test('delayed-render: the place-order insert and its listener both defer behind a 2000ms setTimeout', () => {
+test('delayed-render: the place-order insert and its listener both defer behind a 4500ms setTimeout', () => {
   const base = renderBase();
   const output = PROFILES['delayed-render'].transform(base);
 
   assert.ok(!base.includes('setTimeout'), 'sanity: base must not already use setTimeout anywhere');
   assert.ok(output.includes('setTimeout'), 'expected the delay mechanism present');
   assert.ok(
-    output.includes("setTimeout(() => { app.insertAdjacentHTML('beforeend', '<button type=\"button\" id=\"place-order\">Place order</button>'); }, 2000);"),
-    'expected the exact insert call deferred by 2000ms',
+    output.includes("setTimeout(() => { app.insertAdjacentHTML('beforeend', '<button type=\"button\" id=\"place-order\">Place order</button>'); }, 4500);"),
+    'expected the exact insert call deferred by 4500ms',
   );
   assert.ok(
-    output.includes("setTimeout(() => { document.querySelector('#place-order').addEventListener('click', showComplete); }, 2000);"),
-    'expected the exact listener call deferred by 2000ms',
+    output.includes("setTimeout(() => { document.querySelector('#place-order').addEventListener('click', showComplete); }, 4500);"),
+    'expected the exact listener call deferred by 4500ms',
   );
   // No markup change at all -- the button itself, once it renders, is
   // byte-identical to base's.
