@@ -64,21 +64,141 @@ function withOverlay(html, overlayBody) {
   return html.replace('<main id="app">', `${overlayBody}\n    <main id="app">`);
 }
 
+// --- WS4a Task 2: the four new v1 profiles ---
+//
+// Every carried profile above (Task 1) drives its drift through
+// `withVariantGlobal` -- a NEW named branch inside index.html's own
+// `<script>` that the client re-evaluates at runtime. That mechanism is the
+// only viable one for an element the recording script never sees as static
+// markup at all: `showReview()`'s "Confirm order"/"Place order" buttons
+// (and everything before them) are built by `app.insertAdjacentHTML`/
+// `app.innerHTML` INSIDE that same script, not present in the page's
+// initial bytes.
+//
+// The four transforms below take the OTHER option carry-forward 1 (Task 1's
+// review) names: pure-markup, no NEW client-script cooperation -- no new
+// `VARIANT` branch, no new global. Since `transform` receives the FULL
+// rendered page (the `<script>` block included, as ordinary text), a
+// literal, exact-substring `String#replace` against that already-existing
+// `else` branch's own source text achieves the same drift with zero
+// index.html edits: the mutated text becomes the code that actually runs
+// (VARIANT stays "base", so the untouched `if` conditions above stay false
+// and these `else` branches are exactly what executes), while every OTHER
+// branch's literal text (the 'drifted'/'role-drifted' branches, this
+// file's own doc comments) is left completely alone, inert exactly as it
+// already was. Each of the four exact substrings below is grep-verified
+// unique in index.html, so every `.replace()` call targets precisely the
+// one occurrence it names -- no ambiguity, no risk of touching a sibling
+// branch's markup.
+const PLACE_ORDER_TAG = '<button type="button" id="place-order">Place order</button>';
+const PLACE_ORDER_INSERT_CALL = `app.insertAdjacentHTML('beforeend', '${PLACE_ORDER_TAG}');`;
+const PLACE_ORDER_LISTENER_CALL = "document.querySelector('#place-order').addEventListener('click', showComplete);";
+const CONFIRM_ORDER_TAG = '<button type="button" id="confirm-order">Confirm order</button>';
+
+// class-rename: the ONE css hook this element carries (its id) becomes a
+// class instead; the element stays a native <button> (role button, implicit
+// via tag -- untouched) and its visible text ("Place order") is byte-
+// identical. Only the recorded CSS-kind locator (`#place-order`) can
+// possibly miss; a role or testid-kind candidate (if the recording captured
+// one) is completely unaffected, so this profile is declared 'clean': the
+// harness's own record-once step is expected to have already ranked a
+// structure-independent candidate ahead of the css one (WS3a/WS3b e2e
+// evidence: a plain button's FIRST recorded locator is role-kind -- see
+// tests/e2e/healing.test.mjs's intercept leg, which pins
+// `locators[0].kind === 'role'` for an equivalent plain button). Task 4
+// pins the actually-observed rung; if the recording ever ranks css first
+// instead, the truthful observed rung is 'fallback' (still WITHOUT heal),
+// which is the plan's own explicitly "acceptable, not required" outcome.
+const CLASS_RENAME_TAG = '<button type="button" class="place-order-btn">Place order</button>';
+const CLASS_RENAME_LISTENER_CALL = "document.querySelector('.place-order-btn').addEventListener('click', showComplete);";
+
+// dom-reshuffle: "Confirm order" and "Place order" are reparented from
+// direct children of #app into a wrapping `<section class="actions">` --
+// a genuine structural move "around the targets" -- while every attribute
+// (id, text, absence of testid) on both buttons stays byte-identical.
+// `page.getByRole()`/a css id selector are both structure-independent (they
+// query the whole document, not a fixed ancestor path), so this is expected
+// to resolve on the very first probe exactly like the unreshuffled base --
+// declared 'clean'.
+const RESHUFFLE_CONFIRM_OPEN = `<section class="actions">${CONFIRM_ORDER_TAG}`;
+const RESHUFFLE_PLACE_CLOSE = `${PLACE_ORDER_TAG}</section>`;
+
+// text-rename-far: the accessible text becomes "Checkout" -- zero tokens
+// shared with the recorded name "Place order" (heal.mjs's lexical jaccard
+// scores this exactly 0, which can never clear HEAL_MIN_SCORE) -- and the
+// id is dropped so the recorded css candidate also misses. No data-testid
+// is ever added to this element (this profile's whole point is that
+// NOTHING keyless can heal it; a stray testid would trivially defeat that).
+// The listener attaches via `app.lastElementChild` (the button just
+// inserted) rather than a selector, since the element now carries no
+// stable hook of its own. Declared 'fail': the keyless expectation this
+// profile exists to pin (Task 6 adds the WITH-encoder-key leg separately;
+// that outcome is not representable in this single-value `expected.rung`).
+const CHECKOUT_TAG = '<button type="button">Checkout</button>';
+const CHECKOUT_LISTENER_CALL = 'app.lastElementChild.addEventListener(\'click\', showComplete);';
+
+// delayed-render: the SAME insert-then-listen pair the base branch runs
+// synchronously, deferred behind a 2000ms `setTimeout`. Pinned at 2000ms
+// specifically: safely past rung 1's own 1500ms probe budget (a >=500ms
+// margin -- rung 1 is certain to miss, the element genuinely does not
+// exist yet), and safely inside rung 2's escalated pass, which gets its
+// OWN fresh 3000ms budget starting only after rung 1 already spent its
+// 1500ms (flow-runner.js's `resolveTarget` -> `resolveEscalated`) -- so the
+// element has up to ~4500ms of wall clock from step start to appear, and
+// 2000ms lands roughly 500ms into that second pass's own budget, nowhere
+// near either edge. No id/text/testid changes at all -- the only drift is
+// timing -- so the expected rung is 'escalated', not 'heal': the SAME
+// locator that always resolved this element still resolves it, just late.
+const DELAYED_INSERT_CALL = `setTimeout(() => { ${PLACE_ORDER_INSERT_CALL} }, 2000);`;
+const DELAYED_LISTENER_CALL = `setTimeout(() => { ${PLACE_ORDER_LISTENER_CALL} }, 2000);`;
+
 export const PROFILES = {
   'testid-rename': {
     description: 'The "Place order" button becomes an <a data-testid> with no id and no native button role; visible text unchanged. Breaks the recorded css and role locators, survives via testid.',
     transform: (html) => withVariantGlobal(html, 'drifted'),
+    expected: { rung: 'heal', healSelector: 'internal:testid=[data-testid="submit-v2"]' },
   },
   'text-rename-near': {
     description: 'The "Confirm order" button loses its id and its text becomes "Confirm your order" (lexically near, both tokens survive). Breaks the recorded css and role+name locators, healable via role+text.',
     transform: (html) => withVariantGlobal(html, 'role-drifted'),
+    expected: { rung: 'heal', healSelector: 'internal:role=button[name="Confirm your order"i]' },
   },
   'banner-hides': {
     description: 'A consent banner covers the page and #app is held visibility:hidden until #consent-accept is clicked. Fails the locator PROBE (bounding-box/CSS visibility), not just the click.',
     transform: (html) => withOverlay(withVariantGlobal(html, 'overlay'), CONSENT_OVERLAY_BODY),
+    expected: { rung: 'quirk' },
   },
   'banner-intercepts': {
     description: 'A transparent, top-stacked overlay leaves #app CSS-visible but blocks pointer events until #intercept-dismiss is clicked. Fails only the act-phase hit-target check, not the probe.',
     transform: (html) => withOverlay(withVariantGlobal(html, 'intercept'), INTERCEPT_OVERLAY_BODY),
+    expected: { rung: 'quirk' },
+  },
+  'class-rename': {
+    description: 'The "Place order" button\'s css hook moves from id="place-order" to class="place-order-btn"; role, visible text, and (absent) testid are all untouched. Expected to survive without a heal.',
+    transform: (html) => html
+      .replace(PLACE_ORDER_TAG, CLASS_RENAME_TAG)
+      .replace(PLACE_ORDER_LISTENER_CALL, CLASS_RENAME_LISTENER_CALL),
+    expected: { rung: 'clean' },
+  },
+  'dom-reshuffle': {
+    description: 'The "Confirm order"/"Place order" buttons are reparented into a wrapping <section class="actions"> instead of being direct children of #app; every attribute on both is untouched. Expected to survive without a heal (locators are not structural).',
+    transform: (html) => html
+      .replace(CONFIRM_ORDER_TAG, RESHUFFLE_CONFIRM_OPEN)
+      .replace(PLACE_ORDER_TAG, RESHUFFLE_PLACE_CLOSE),
+    expected: { rung: 'clean' },
+  },
+  'text-rename-far': {
+    description: 'The "Place order" button loses its id and its text becomes "Checkout" -- zero token overlap with the recorded name, no testid anywhere on the element. Keyless: lexical ranking cannot clear HEAL_MIN_SCORE, so no heal fires and failStreak climbs toward quarantine.',
+    transform: (html) => html
+      .replace(PLACE_ORDER_TAG, CHECKOUT_TAG)
+      .replace(PLACE_ORDER_LISTENER_CALL, CHECKOUT_LISTENER_CALL),
+    expected: { rung: 'fail' },
+  },
+  'delayed-render': {
+    description: 'The "Place order" button renders and wires up 2000ms after showReview() would normally run it synchronously -- past rung 1\'s 1500ms probe, comfortably inside rung 2\'s own escalated 3000ms pass. No markup changes at all; the drift is purely timing.',
+    transform: (html) => html
+      .replace(PLACE_ORDER_INSERT_CALL, DELAYED_INSERT_CALL)
+      .replace(PLACE_ORDER_LISTENER_CALL, DELAYED_LISTENER_CALL),
+    expected: { rung: 'escalated' },
   },
 };

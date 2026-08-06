@@ -22,13 +22,17 @@ const pageTemplate = await readFile(new URL('./index.html', import.meta.url), 'u
 // for the full scenario write-up. In short: a compiled flow's own `goto`
 // step replays against the flow's RECORDED path ('/'), verbatim -- there is
 // no way for a caller to vary that navigation with a query string after the
-// fact, so `?profile=testid-rename` on the URL itself is a non-starter.
-// Profile selection is instead a server-side toggle: which markup this SAME
-// path ('/') serves on the NEXT request is an in-process variable the test
-// flips directly via `setProfile` below (no extra network round trip, no
-// env var, no query string) -- entirely test-side, confined to this
-// fixture module.
-function renderBase() {
+// fact, so `?profile=testid-rename` on the URL itself is a non-starter for
+// a FLOW REPLAY. Profile selection is instead a server-side toggle: which
+// markup this SAME path ('/') serves on the NEXT request is an in-process
+// variable the test flips directly via `setProfile` below (no extra
+// network round trip, no env var, no query string) -- entirely test-side,
+// confined to this fixture module. WS4a Task 2 adds a SEPARATE, additive
+// entry point (the `?profile=` query param read below) purely so a unit
+// test can hit the unknown-profile 400 path directly over real HTTP without
+// a browser; no flow replay ever sends a query string, so this changes
+// nothing about the toggle-driven behavior above.
+export function renderBase() {
   return pageTemplate
     .replace('<!--FIXTURE_VARIANT-->', '<script>window.__FIXTURE_VARIANT__ = "base";</script>')
     .replace('<!--FIXTURE_OVERLAY-->', '');
@@ -38,7 +42,7 @@ function renderBase() {
 // name (the caller turns that into an HTTP 400 -- see the request handler
 // below). 'base' is the identity transform; every other name must resolve
 // through PROFILES.
-function renderProfile(profileName) {
+export function renderProfile(profileName) {
   if (profileName === 'base') return renderBase();
   const profile = PROFILES[profileName];
   if (!profile) return null;
@@ -48,15 +52,22 @@ function renderProfile(profileName) {
 export async function startOrderFixture({ port = 0 } = {}) {
   let currentProfile = 'base';
   const server = http.createServer((request, response) => {
-    if (request.url !== '/') {
+    const url = new URL(request.url, 'http://127.0.0.1');
+    if (url.pathname !== '/') {
       response.writeHead(404);
       response.end();
       return;
     }
-    const body = renderProfile(currentProfile);
+    // `?profile=` (present) wins over the toggle; absent falls back to
+    // `currentProfile` exactly as before this query-param entry point
+    // existed -- see the doc comment above `renderBase`.
+    const requestedProfile = url.searchParams.has('profile')
+      ? url.searchParams.get('profile')
+      : currentProfile;
+    const body = renderProfile(requestedProfile);
     if (body === null) {
       response.writeHead(400, { 'content-type': 'text/plain; charset=utf-8' });
-      response.end(`unknown fixture profile: ${currentProfile}`);
+      response.end(`unknown fixture profile: ${requestedProfile}`);
       return;
     }
     response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
