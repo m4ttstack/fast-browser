@@ -16,12 +16,29 @@
 
 const TOP_RESULTS = 5;
 
+// Thrown by cosineSimilarity on a dimension mismatch rather than silently
+// truncating to the shorter vector -- a silent truncation is exactly the
+// mis-bind failure class the WS4a drift harness measured (a shorter/longer
+// embedding scoring a false 1.0 against an unrelated vector because only
+// their common prefix ever got compared). Two embeddings only belong in the
+// same comparison at all if they came from the same model; a length
+// mismatch means they didn't, and that must fail loudly, not silently
+// degrade the search.
+export class EmbeddingDimensionMismatchError extends Error {
+  constructor(aLength, bLength) {
+    super(`embedding dimension mismatch: ${aLength} vs ${bLength}`);
+    this.name = 'EmbeddingDimensionMismatchError';
+  }
+}
+
 function cosineSimilarity(a, b) {
+  if (a.length !== b.length) {
+    throw new EmbeddingDimensionMismatchError(a.length, b.length);
+  }
   let dot = 0;
   let normA = 0;
   let normB = 0;
-  const length = Math.min(a.length, b.length);
-  for (let i = 0; i < length; i += 1) {
+  for (let i = 0; i < a.length; i += 1) {
     dot += a[i] * b[i];
     normA += a[i] * a[i];
     normB += b[i] * b[i];
@@ -53,13 +70,25 @@ export function createMemoryStore() {
   const byContentHash = new Map();
 
   return {
-    async init() {
-      byId.clear();
-      byContentHash.clear();
-    },
+    // Idempotent by construction: the Maps above are created once, when
+    // createMemoryStore() is called, and live for the store's whole
+    // lifetime. init() itself does no destructive reset -- there is
+    // nothing to migrate for an in-memory store, and a caller that calls
+    // init() more than once (matching pg-store's migration-on-boot
+    // contract) must never lose records already written.
+    async init() {},
 
     async putCanonical(record) {
       const stored = structuredClone({ ...record, embedding: toEmbedding(record.embedding) });
+      const previous = byId.get(stored.id);
+      // Upserting an existing id with a NEW contentHash (exactly what
+      // cluster-merge does on every collapse: re-put the same canonical id
+      // with a refreshed content/hash) must retire the old hash entry --
+      // otherwise findByContentHash keeps resolving the old hash to a
+      // stale snapshot of a record that has since moved on.
+      if (previous && previous.contentHash !== stored.contentHash) {
+        byContentHash.delete(previous.contentHash);
+      }
       byId.set(stored.id, stored);
       byContentHash.set(stored.contentHash, stored);
       return structuredClone(stored);

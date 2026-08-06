@@ -18,9 +18,12 @@
 //
 //   init()
 //     -> Promise<void>
-//     Prepares the store for use (e.g. runs migrations for pg-store; a
-//     no-op reset for memory-store). Idempotent: safe to call more than
-//     once against the same backing store.
+//     Prepares the store for use (e.g. runs migrations for pg-store;
+//     create-if-absent, no-op-if-already-there for memory-store). MUST be
+//     idempotent: safe to call more than once against the same backing
+//     store WITHOUT dropping existing records -- pg-store's init() runs
+//     migrations, never a destructive reset, and every store implementation
+//     must honor that same contract.
 //
 //   putCanonical(record)
 //     -> Promise<Record>

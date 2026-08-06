@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import test from 'node:test';
 
 import { parseFlow, serializeFlow } from '../../lib/flows/artifact.mjs';
-import { createMemoryStore } from '../lib/memory-store.mjs';
+import { createMemoryStore, EmbeddingDimensionMismatchError } from '../lib/memory-store.mjs';
 import { opSequence, stepSignature } from '../lib/signature-fields.mjs';
 import { baseFlow } from './helpers/fixtures.mjs';
 
@@ -301,4 +301,73 @@ test('search: an empty store returns empty results in either mode', async () => 
   await store.init();
   assert.deepEqual(await store.search({ intentText: 'anything' }), { mode: 'lexical', results: [] });
   assert.deepEqual(await store.search({ embedding: [1, 0], intentText: 'anything' }), { mode: 'semantic', results: [] });
+});
+
+// Fix round 1, finding 2 (CRITICAL): a dimension-mismatched query vs a
+// stored embedding used to silently truncate to the shorter length via
+// Math.min, so a 4-dim [1,0,0,0] stored embedding could score a false 1.0
+// against a 2-dim [1,0] query -- exactly the mis-bind failure class the
+// WS4a drift harness measured. Must throw loudly instead, naming both
+// lengths, rather than ever returning a comparison between vectors that
+// were never the same shape to begin with.
+test('search: semantic mode throws loudly on a dimension-mismatched embedding instead of truncating', async () => {
+  const store = createMemoryStore();
+  await store.init();
+  await store.putCanonical(makeRecord({
+    idSeed: 'dim-mismatch-stored',
+    flowOverrides: { name: 'flow-dim-mismatch' },
+    embedding: [1, 0, 0, 0],
+  }));
+
+  await assert.rejects(
+    () => store.search({ embedding: [1, 0], intentText: 'x' }),
+    (error) => {
+      assert.ok(error instanceof EmbeddingDimensionMismatchError);
+      assert.match(error.message, /4/);
+      assert.match(error.message, /2/);
+      return true;
+    },
+  );
+});
+
+// Fix round 1, finding 3 (IMPORTANT): cluster-merge re-puts the same
+// canonical id with a refreshed contentHash on every merge. Before this
+// fix, putCanonical never evicted the OLD contentHash -> record mapping,
+// so findByContentHash(oldHash) kept resolving to a stale snapshot of a
+// record that had since moved on (a phantom exact-dedup hit on a hash that
+// no live record actually carries anymore).
+test('putCanonical evicts the previous contentHash index entry when upserting an id with a new contentHash', async () => {
+  const store = createMemoryStore();
+  await store.init();
+  const original = makeRecord({ idSeed: 'evict-id', flowOverrides: { name: 'flow-evict' } });
+  await store.putCanonical(original);
+  assert.ok(await store.findByContentHash(original.contentHash));
+
+  const merged = { ...original, contentHash: sha256Hex('evict-id-new-content'), mergedCount: 1 };
+  await store.putCanonical(merged);
+
+  assert.equal(await store.findByContentHash(original.contentHash), null);
+  const foundByNewHash = await store.findByContentHash(merged.contentHash);
+  assert.equal(foundByNewHash.id, original.id);
+  assert.equal(foundByNewHash.mergedCount, 1);
+});
+
+// Fix round 1, finding 4 (IMPORTANT): the store interface promises init()
+// is idempotent and safe to call repeatedly (pg-store's init() runs
+// migrations, never a destructive reset). memory-store's init() used to
+// clear both Maps on every call, which broke that contract for any caller
+// that (reasonably, matching pg-store's boot-time usage) calls init() more
+// than once against a store already holding data.
+test('init() is idempotent: calling it again does not wipe existing records', async () => {
+  const store = createMemoryStore();
+  await store.init();
+  const record = makeRecord({ idSeed: 'survives-reinit' });
+  await store.putCanonical(record);
+
+  await store.init();
+
+  const fetched = await store.get(record.id);
+  assert.ok(fetched);
+  assert.equal(fetched.id, record.id);
+  assert.deepEqual(await store.health(), { ok: true, count: 1 });
 });
