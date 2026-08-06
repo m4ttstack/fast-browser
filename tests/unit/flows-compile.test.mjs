@@ -619,6 +619,112 @@ test('a goto URL with no matching lifted literal is left untouched in both the s
   assert.equal(flow.steps[0].url, '/checkout/gold');
 });
 
+// --- MAT-137 (WS3b task 4): goto tokenization restricted to url-sourced
+// AND named-input literals. `argsByLiteral` entries now carry a
+// compile-internal lift-source tag -- 'url' (a query key/path segment/
+// fragment part), 'input-named' (a fill/select value with a real target
+// label), or 'input-positional' (an unnamed fill/select's 'value'/
+// 'value2'/... fallback, or an upload path, which never has a target at
+// all) -- and path/query/fragment tokenization of a goto url consults
+// 'url' and 'input-named' entries, but NOT 'input-positional' ones.
+// Controller ruling (fix round 1): the pre-existing WS2a "same-literal
+// collapse" tests below (a NAMED fill's literal reused in a matching goto,
+// e.g. the search-query parameterization pattern) pin INTENDED behavior,
+// not the coincidence MAT-137 targets -- only the nameless/positional
+// shape (the ticket's own `gold` example) is excluded. A positional
+// fill/select/upload literal still lifts into `args` exactly as before --
+// it simply no longer drives goto templating, since a nameless literal
+// says nothing about URL structure. ---
+
+test('MAT-137: an unnamed fill of "gold" no longer turns an unrelated /plans/gold goto into /plans/{value} -- the path segment stays literal', () => {
+  const records = [
+    record({ seq: 1, tool: 'browser_navigate', params: { url: 'https://example.com/plans/gold' } }),
+    record({ seq: 2, tool: 'browser_type', params: { text: 'gold' }, targets: [] }),
+  ];
+  const result = compileSession({ records, meta });
+  const flow = result.flows[0];
+  assert.equal(flow.urlPattern, '/plans/gold');
+  assert.equal(flow.steps[0].url, '/plans/gold');
+  // the fill itself still lifts (input-sourced) -- MAT-137 narrows what
+  // tokenizes a goto, it does not stop lifting fill literals at all.
+  assert.equal(flow.steps.find((s) => s.op === 'fill').value, '{value}');
+  assert.deepEqual(flow.args, { value: { type: 'string', required: true } });
+});
+
+test('MAT-137 control: a "gold" value lifted from a sensitive query key still tokenizes a LATER goto\'s matching path segment -- url-sourced literals keep driving path tokenization', () => {
+  const records = [
+    record({ seq: 1, tool: 'browser_navigate', params: { url: 'https://example.com/promo?token=gold' } }),
+    record({ seq: 2, tool: 'browser_navigate', params: { url: 'https://example.com/plans/gold' } }),
+  ];
+  const result = compileSession({ records, meta });
+  const flow = result.flows[0];
+  assert.deepEqual(flow.args, { token: { type: 'string', required: true } });
+  assert.equal(flow.steps[0].url, '/promo?token={token}');
+  assert.equal(flow.steps[1].url, '/plans/{token}');
+});
+
+test('MAT-137: a query-lifted (sensitive-key) value still tokenizes a later goto\'s matching query value', () => {
+  const records = [
+    record({ seq: 1, tool: 'browser_navigate', params: { url: 'https://example.com/a?token=goldtoken1' } }),
+    record({ seq: 2, tool: 'browser_navigate', params: { url: 'https://example.com/b?token=goldtoken1' } }),
+  ];
+  const result = compileSession({ records, meta });
+  const flow = result.flows[0];
+  assert.deepEqual(flow.args, { token: { type: 'string', required: true } });
+  assert.equal(flow.steps[0].url, '/a?token={token}');
+  assert.equal(flow.steps[1].url, '/b?token={token}');
+});
+
+test('MAT-137: a fragment-lifted (sensitive-key) value behaves like query -- reused across gotos', () => {
+  const records = [
+    record({ seq: 1, tool: 'browser_navigate', params: { url: 'https://example.com/a#token=goldfrag123' } }),
+    record({ seq: 2, tool: 'browser_navigate', params: { url: 'https://example.com/b#token=goldfrag123' } }),
+  ];
+  const result = compileSession({ records, meta });
+  const flow = result.flows[0];
+  assert.deepEqual(flow.args, { token: { type: 'string', required: true } });
+  assert.equal(flow.steps[0].url, '/a#token={token}');
+  assert.equal(flow.steps[1].url, '/b#token={token}');
+});
+
+test('MAT-137: an UNNAMED fill value that coincides with a QUERY value (not just path) also does not tokenize it', () => {
+  const records = [
+    record({ seq: 1, tool: 'browser_navigate', params: { url: 'https://example.com/search?q=gold' } }),
+    record({ seq: 2, tool: 'browser_type', params: { text: 'gold' }, targets: [] }),
+  ];
+  const result = compileSession({ records, meta });
+  const flow = result.flows[0];
+  assert.equal(flow.steps[0].url, '/search?q=gold');
+  assert.equal(flow.steps.find((s) => s.op === 'fill').value, '{value}');
+  assert.deepEqual(flow.args, { value: { type: 'string', required: true } });
+});
+
+test('MAT-137 controller ruling (fix round 1): a NAMED fill value still tokenizes a matching goto query -- the search-query parameterization pattern is intended, not the excluded coincidence', () => {
+  const records = [
+    record({ seq: 1, tool: 'browser_navigate', params: { url: 'https://example.com/search?q=widgets' } }),
+    record({
+      seq: 2, tool: 'browser_type', params: { text: 'widgets' }, targets: [traceTarget({ name: 'Search query' })],
+    }),
+  ];
+  const result = compileSession({ records, meta });
+  const flow = result.flows[0];
+  assert.equal(flow.steps[0].url, '/search?q={searchQuery}');
+  assert.equal(flow.steps.find((s) => s.op === 'fill').value, '{searchQuery}');
+  assert.deepEqual(flow.args, { searchQuery: { type: 'string', required: true } });
+});
+
+test('MAT-137: an upload path is positional (no target of its own) and does not tokenize a goto path segment that coincidentally matches it', () => {
+  const records = [
+    record({ seq: 1, tool: 'browser_navigate', params: { url: 'https://example.com/plans/gold' } }),
+    record({ seq: 2, tool: 'browser_file_upload', params: { paths: ['gold'] } }),
+  ];
+  const result = compileSession({ records, meta });
+  const flow = result.flows[0];
+  assert.equal(flow.steps[0].url, '/plans/gold');
+  assert.deepEqual(flow.steps.find((s) => s.op === 'upload').files, ['{file}']);
+  assert.deepEqual(flow.args, { file: { type: 'string', required: true } });
+});
+
 test('a goto URL query value matching an already-lifted fill literal is tokenized in the step url; urlPattern stays path-only (fix-round-2 N1)', () => {
   const records = [
     record({
