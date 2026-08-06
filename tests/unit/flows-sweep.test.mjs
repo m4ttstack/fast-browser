@@ -1968,6 +1968,76 @@ test('a corrupted byte cursor (bytes greater than the file\'s actual size) falls
   });
 });
 
+// Reviewer-reproduced regression (review round 1, Critical): an old-format
+// entry (no bytes/provenanceBytes at all) that then hits a sweep with no
+// trustworthy byte value to report -- here, `actions.jsonl` vanishing --
+// used to get `bytes: 0`/`provenanceBytes: 0` written back alongside its
+// real, nonzero `lines`/`provenanceLines`. That poisoned pair still passed
+// `byteCursorsSane` (which only checks `bytes <= provenanceBytes`, never
+// bytes-against-lines), so the NEXT sweep -- the file restored, byte-
+// identical to before -- resumed from byte 0 while still treating the
+// result as a from-`previousLines` delta: every already-counted record got
+// read and counted again (`lines` inflating past its true total, a
+// replay's `successRuns` incrementing a second time). The fix
+// (`resolveNextByteCursor`) omits the byte key entirely when there is
+// nothing trustworthy to write, which correctly fails `byteCursorsSane`
+// next time and forces a full read that backfills cleanly once the session
+// actually has new content to report.
+test('an old-format entry whose actions.jsonl vanishes then is restored byte-identically does not inflate lines or double-count a replay (review round 1 regression)', async (t) => {
+  const paths = await tempPaths(t);
+  const sessionRecords = [
+    record({ seq: 1, tool: 'browser_navigate', params: { url: 'https://shop.example/cart' } }),
+    record({ seq: 2, targets: [traceTarget({ name: 'View details' })], mutating: false }),
+    record({
+      seq: 3,
+      tool: 'browser_run_code_unsafe',
+      params: { filename: 'flow-runner.js', args: { flow: { name: 'view-details' } } },
+    }),
+  ];
+  await writeSession(paths, 55000, { meta: baseMeta(), records: sessionRecords });
+
+  const setup = await sweep({ paths }); // compiles the flow + applies the one replay
+  assert.deepEqual(setup.updated, [{ name: 'view-details', successRuns: 1, failStreak: 0 }]);
+
+  // Downgrade the just-written new-format entry to the OLD (pre-Task-2)
+  // shape -- no bytes/provenanceBytes at all -- simulating state carried
+  // forward from before this optimization existed.
+  const state = await readState(paths);
+  state.processed['trace-55000'] = { lines: 3, provenanceLines: 3 };
+  await writeFile(paths.flowsStateFile, JSON.stringify(state));
+
+  // The file vanishes (dir stays put) -- the sweep that observes this has
+  // no new content and no prior byte value to carry forward.
+  await unlink(path.join(paths.dataDir, 'trace-55000', 'actions.jsonl'));
+  const vanished = await sweep({ paths });
+  assert.deepEqual(vanished.updated, []); // nothing new -- not yet the bug's trigger point
+  assert.deepEqual(vanished.cursor['trace-55000'], { lines: 3, provenanceLines: 3 }); // still old-shaped: no poisoned bytes
+
+  // Restored with EXACTLY its prior content (byte-identical) -- the bug's
+  // trigger: a buggy `bytes: 0` cursor would resume from byte zero here and
+  // treat all 3 already-counted records as new.
+  await writeFile(
+    path.join(paths.dataDir, 'trace-55000', 'actions.jsonl'),
+    jsonl(sessionRecords),
+  );
+  const restored = await sweep({ paths });
+  assert.deepEqual(restored.compiled, []); // no fresh compile duplicate
+  assert.deepEqual(restored.updated, []); // NOT re-applied -- the successful replay is not re-counted
+  // NOT inflated to 6 -- the byte-identical restore reads as a genuine
+  // full-file re-parse whose 3 records were already fully accounted for
+  // (the safe fallback path was taken throughout; no byte cursor was ever
+  // trusted for this session). `bytes`/`provenanceBytes` are correctly
+  // backfilled this time, since this read's own total (3) finally matches
+  // both line cursors.
+  const bytes55000 = await sessionByteLength(paths, 55000);
+  assert.deepEqual(restored.cursor['trace-55000'], {
+    lines: 3, provenanceLines: 3, bytes: bytes55000, provenanceBytes: bytes55000,
+  });
+
+  const onDisk = await readFlow(paths.flowsDir, 'view-details.flow.json');
+  assert.equal(onDisk.provenance.successRuns, 1); // still just the one real application
+});
+
 // --- WS3b Task 2: single-pass site mining ---
 
 test('mining runs ONCE per session over the concatenated completed-segment records: a target on both sides of a mid-session replay boundary is counted once, matching WS2b single-pass semantics (WS3a per-chunk mining double-counted it)', async (t) => {
@@ -2082,6 +2152,15 @@ test('two heal-worthy failures for the same flow in one sweep, for DIFFERENT ste
   assert.equal(healedFlow.id, flowId(healedFlow));
 });
 
+// Note: this test passes against BOTH the pre-fix (WS3a "skip on gate
+// failure") and post-fix (re-propose once) implementations -- the two only
+// diverge in OBSERVABLE outcome when the re-proposal legitimately finds
+// new heal-worthy content (see the two tests above); here it doesn't
+// (`proposeHeal`'s own idempotence check returns null either way), so
+// "skip" and "re-propose then get null" produce the identical result. Kept
+// per the brief's "pin both branches" instruction -- it still verifies the
+// required behavior, just isn't independent RED/GREEN evidence for the
+// fold-in the way the other two re-propose tests are.
 test('two heal-worthy failures for the same flow, same step, same winning candidate: the first heals, the second re-proposes against the healed flow and skips idempotently (no error, no double heal)', async (t) => {
   const paths = await tempPaths(t);
   await writeSession(paths, 54000, {

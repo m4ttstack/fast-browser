@@ -257,6 +257,46 @@ test('readTraceRecordsFrom at offset 0 matches readTraceRecords exactly on the s
   assert.equal(fromZero.lineCount, 6);
   const fileBytes = await readFile(path.join(basicDir, 'actions.jsonl'));
   assert.equal(fromZero.endByte, fileBytes.length);
+  assert.equal(fromZero.startedAtLineBoundary, true);
+});
+
+// --- startedAtLineBoundary (WS3b Task 2 fold-in): a genuine caller cursor-
+// desync detector, not the tautological "records.length > lineCount" check
+// it replaces in lib/flows/sweep.mjs (that comparison can never fire --
+// `lineCount` always counts at least as many raw lines as `records` holds
+// valid ones). This directly exercises what it CAN and CANNOT catch. ---
+
+test('startedAtLineBoundary is true resuming from a genuine prior endByte, and false when a same-length rewrite leaves a stale cursor pointing mid-line', async (t) => {
+  const dataDir = await tempDataDir();
+  t.after(() => rm(dataDir, { recursive: true, force: true }));
+  const sessionDir = path.join(dataDir, 'trace-1000000000012');
+  await mkdir(sessionDir);
+  const actionsFile = path.join(sessionDir, 'actions.jsonl');
+
+  const line1 = `${JSON.stringify({ v: 1, seq: 1, tool: 'browser_navigate' })}\n`;
+  const line2 = `${JSON.stringify({ v: 1, seq: 2, tool: 'browser_snapshot' })}\n`;
+  await writeFile(actionsFile, line1 + line2);
+
+  // A genuine resume point -- this reader's own previously returned
+  // endByte -- always lands right after a '\n'.
+  const first = await readTraceRecordsFrom(sessionDir, 0);
+  assert.equal(first.startedAtLineBoundary, true);
+  const cursor = first.endByte;
+
+  // The file gets truncated and rewritten -- same total byte length as
+  // line1 + a THIRD line, but that third line is SHORTER than line2, so
+  // the old cursor (computed against line2's length) now lands partway
+  // through whatever comes after it, not on a line start. This is exactly
+  // the "truncated then rewritten with different content" scenario the
+  // reader's own doc comment (and sweep.mjs's byte-cursor sanity check)
+  // call out as the one a file-size check alone cannot catch.
+  const shortLine3 = `${JSON.stringify({ v: 1, seq: 3, tool: 'x' })}\n`; // shorter than line2
+  const padding = ' '.repeat(Math.max(0, Buffer.byteLength(line2, 'utf8') - Buffer.byteLength(shortLine3, 'utf8')));
+  await writeFile(actionsFile, line1 + shortLine3 + padding);
+
+  const resumed = await readTraceRecordsFrom(sessionDir, cursor);
+  assert.equal(resumed.readable, true); // still recovers, per the mid-line resync test above
+  assert.equal(resumed.startedAtLineBoundary, false); // but the cursor no longer lands on a boundary
 });
 
 test('readTraceRecordsFrom resuming from a prior endByte yields exactly the appended records', async (t) => {
@@ -375,15 +415,17 @@ test('readTraceRecordsFrom never throws when actions.jsonl is missing: readable:
 
   const atZero = await readTraceRecordsFrom(sessionDir, 0);
   assert.deepEqual(atZero, {
-    records: [], skipped: 0, readable: true, endByte: 0, lineCount: 0,
+    records: [], skipped: 0, readable: true, endByte: 0, lineCount: 0, startedAtLineBoundary: true,
   });
 
   // A non-zero resume offset against a still-missing file must not be
   // treated as new information to rewind from: endByte echoes the
-  // requested offset back unchanged.
+  // requested offset back unchanged. No buffer exists to verify a nonzero
+  // offset against, so `startedAtLineBoundary` degrades to `false` --
+  // never claims a boundary it can't check.
   const atNonZero = await readTraceRecordsFrom(sessionDir, 42);
   assert.deepEqual(atNonZero, {
-    records: [], skipped: 0, readable: true, endByte: 42, lineCount: 0,
+    records: [], skipped: 0, readable: true, endByte: 42, lineCount: 0, startedAtLineBoundary: false,
   });
 });
 
@@ -401,7 +443,7 @@ test('readTraceRecordsFrom never throws when actions.jsonl exists but is unreada
 
   const result = await readTraceRecordsFrom(sessionDir, 7);
   assert.deepEqual(result, {
-    records: [], skipped: 0, readable: false, endByte: 7, lineCount: 0,
+    records: [], skipped: 0, readable: false, endByte: 7, lineCount: 0, startedAtLineBoundary: false,
   });
 });
 
@@ -473,6 +515,10 @@ test('readTraceRecordsFrom given a mid-line byteOffset (not a real endByte -- a 
   assert.equal(result.records[0].seq, 3);
   assert.equal(result.readable, true);
   assert.equal(result.endByte, Buffer.byteLength(line1 + line2 + line3, 'utf8'));
+  // The exact case `startedAtLineBoundary` exists to catch: `midLineOffset`
+  // does not sit just past a `\n` in this file, so it reports `false` even
+  // though the call still recovers cleanly (the paragraph above).
+  assert.equal(result.startedAtLineBoundary, false);
 });
 
 test('readTraceRecordsFrom with byteOffset past EOF returns no records and echoes the offset back unchanged', async (t) => {
@@ -488,7 +534,7 @@ test('readTraceRecordsFrom with byteOffset past EOF returns no records and echoe
 
   const result = await readTraceRecordsFrom(sessionDir, farOffset);
   assert.deepEqual(result, {
-    records: [], skipped: 0, readable: true, endByte: farOffset, lineCount: 0,
+    records: [], skipped: 0, readable: true, endByte: farOffset, lineCount: 0, startedAtLineBoundary: false,
   });
 });
 
@@ -501,7 +547,7 @@ test('readTraceRecordsFrom on an empty (zero-byte) actions.jsonl returns no reco
 
   const result = await readTraceRecordsFrom(sessionDir, 0);
   assert.deepEqual(result, {
-    records: [], skipped: 0, readable: true, endByte: 0, lineCount: 0,
+    records: [], skipped: 0, readable: true, endByte: 0, lineCount: 0, startedAtLineBoundary: true,
   });
 });
 
@@ -514,7 +560,7 @@ test('readTraceRecordsFrom on a file that is only a partial line (no newline any
 
   const result = await readTraceRecordsFrom(sessionDir, 0);
   assert.deepEqual(result, {
-    records: [], skipped: 0, readable: true, endByte: 0, lineCount: 0,
+    records: [], skipped: 0, readable: true, endByte: 0, lineCount: 0, startedAtLineBoundary: true,
   });
 });
 
