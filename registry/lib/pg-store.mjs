@@ -48,6 +48,23 @@ const DEFAULT_MIGRATIONS_DIR = join(HERE, '..', 'migrations');
 // and loudly, not stall.
 const CONNECTION_TIMEOUT_MILLIS = 5000;
 
+// Arbitrary but PINNED advisory-lock key serializing init()'s migration
+// apply loop (fix round 1, finding 3, verified live): two boots racing to
+// CREATE EXTENSION/CREATE TABLE against a not-yet-migrated database can
+// hit "duplicate key value violates unique constraint
+// pg_extension_name_index" -- Postgres's own catalog has no
+// IF-NOT-EXISTS-safe way to create the same extension/type twice
+// concurrently, so a first deploy or an overlapping rolling deploy (two
+// instances booting at once against the same fresh database) can fail
+// one boot outright. Reproduced directly against a real Postgres
+// container before this lock existed (4 concurrent CREATE EXTENSION IF
+// NOT EXISTS calls -> 3 of 4 failed with that exact error), and confirmed
+// the lock below serializes them cleanly (all 4 succeed). The exact
+// numeric value is not meaningful -- it only needs to never change across
+// deploys, since advisory lock keys are just an application-chosen
+// namespace with no meaning to Postgres itself.
+const MIGRATION_LOCK_KEY = 847233001;
+
 function toIsoString(value) {
   return value instanceof Date ? value.toISOString() : value;
 }
@@ -69,6 +86,23 @@ function toEmbedding(value) {
 function embeddingLiteral(embedding) {
   if (embedding === null || embedding === undefined) return null;
   return `[${Array.from(embedding).join(',')}]`;
+}
+
+// Escapes LIKE/ILIKE metacharacters in a query term before it is wrapped
+// in a `%...%` pattern (fix round 1, finding 2, verified live). Backslash
+// is LIKE's own escape character, so an unescaped term containing one
+// silently changes what the pattern means rather than erroring: a
+// literal `\` in the query is consumed as an escape and the character
+// after it is taken literally, so `%c:\temp%` actually searches for
+// "c:temp" (no backslash) -- a term containing '\' can therefore MISS a
+// row memory-store would score a full match on (haystack.includes(term)
+// treats '\' as an ordinary character, correctly), silently breaking the
+// "same rankings, same scores" parity lexical-score.mjs's own comment
+// claims. `%` and `_` are escaped too, for the same reason (an unescaped
+// one widens the pattern rather than narrowing it, matching rows the
+// term never actually appears in).
+function likeEscape(term) {
+  return term.replace(/[\\%_]/g, '\\$&');
 }
 
 function rowToRecord(row) {
@@ -93,43 +127,82 @@ export function createPgStore(options = {}) {
   const { connectionString, migrationsDir = DEFAULT_MIGRATIONS_DIR } = options;
   const pool = new Pool({ connectionString, connectionTimeoutMillis: CONNECTION_TIMEOUT_MILLIS });
 
-  return {
+  // Fix round 1, finding 1 (verified live): node-postgres surfaces a
+  // lost/killed idle pooled client (a Railway restart or failover killing
+  // a connection this process was not actively using) as an 'error' event
+  // on the Pool. An EventEmitter's default behavior for an unhandled
+  // 'error' event is to throw -- with no listener here, that was an
+  // uncaught exception that killed the whole process, reproduced directly
+  // (parked an idle client from the pool, pg_terminate_backend'd its
+  // backend pid from a second connection, and the process died before
+  // this listener existed). Log only error.message, consistent with this
+  // file's/server.mjs's sanitization posture, and otherwise do nothing:
+  // node-postgres already discards the dead client and opens a
+  // replacement on the pool's next query, so there is no recovery action
+  // to take here beyond not crashing.
+  pool.on('error', (error) => {
+    console.error(`registry pg-store: pool error: ${error.message}`);
+  });
+
+  const store = {
     // Idempotent per the store interface contract: schema_migrations
     // tracks which migration filenames have already been applied, so a
     // second (or Nth) call in the same process, or a fresh boot against
     // an already-migrated database, applies nothing and never touches
     // existing rows in canonical_flows.
+    //
+    // Fix round 1, finding 3 (verified live): wrapped in
+    // pg_advisory_lock/pg_advisory_unlock (MIGRATION_LOCK_KEY above) on a
+    // single held client, for the SAME reason the migration loop itself
+    // must be sequential -- two boots against a not-yet-migrated database
+    // must not both attempt CREATE EXTENSION/CREATE TABLE at once.
+    // Reproduced the crash directly (4 concurrent unlocked
+    // CREATE EXTENSION IF NOT EXISTS calls against a fresh database -> 3
+    // of 4 failed with a duplicate key on Postgres's own pg_type/
+    // pg_extension catalog) and confirmed this lock serializes them
+    // cleanly (all 4 succeed) before relying on it here. The lock is
+    // session-scoped, which is why this holds one client for the whole
+    // migration check-and-apply sequence rather than using pool.query()
+    // (each pool.query() call may run on a different pooled connection,
+    // which would not actually serialize anything).
     async init() {
-      await pool.query(`
-        CREATE TABLE IF NOT EXISTS schema_migrations (
-          filename text PRIMARY KEY,
-          applied_at timestamptz NOT NULL DEFAULT now()
-        )
-      `);
-      const { rows: appliedRows } = await pool.query('SELECT filename FROM schema_migrations');
-      const applied = new Set(appliedRows.map((row) => row.filename));
-
-      const filenames = (await readdir(migrationsDir))
-        .filter((name) => name.endsWith('.sql'))
-        .sort();
-
-      // Deliberately sequential (not Promise.all): migrations must apply
-      // strictly in filename order, one at a time, never concurrently.
-      for (const filename of filenames) {
-        if (applied.has(filename)) continue;
-        const sql = await readFile(join(migrationsDir, filename), 'utf8');
-        const client = await pool.connect();
+      const client = await pool.connect();
+      try {
+        await client.query('SELECT pg_advisory_lock($1)', [MIGRATION_LOCK_KEY]);
         try {
-          await client.query('BEGIN');
-          await client.query(sql);
-          await client.query('INSERT INTO schema_migrations (filename) VALUES ($1)', [filename]);
-          await client.query('COMMIT');
-        } catch (error) {
-          await client.query('ROLLBACK');
-          throw error;
+          await client.query(`
+            CREATE TABLE IF NOT EXISTS schema_migrations (
+              filename text PRIMARY KEY,
+              applied_at timestamptz NOT NULL DEFAULT now()
+            )
+          `);
+          const { rows: appliedRows } = await client.query('SELECT filename FROM schema_migrations');
+          const applied = new Set(appliedRows.map((row) => row.filename));
+
+          const filenames = (await readdir(migrationsDir))
+            .filter((name) => name.endsWith('.sql'))
+            .sort();
+
+          // Deliberately sequential (not Promise.all): migrations must
+          // apply strictly in filename order, one at a time.
+          for (const filename of filenames) {
+            if (applied.has(filename)) continue;
+            const sql = await readFile(join(migrationsDir, filename), 'utf8');
+            try {
+              await client.query('BEGIN');
+              await client.query(sql);
+              await client.query('INSERT INTO schema_migrations (filename) VALUES ($1)', [filename]);
+              await client.query('COMMIT');
+            } catch (error) {
+              await client.query('ROLLBACK');
+              throw error;
+            }
+          }
         } finally {
-          client.release();
+          await client.query('SELECT pg_advisory_unlock($1)', [MIGRATION_LOCK_KEY]);
         }
+      } finally {
+        client.release();
       }
     },
 
@@ -264,7 +337,7 @@ export function createPgStore(options = {}) {
         conditions.push(`origin = $${params.length}`);
       }
       const termConditions = queryTerms.map((term) => {
-        params.push(`%${term}%`);
+        params.push(`%${likeEscape(term)}%`);
         return `(name || ' ' || description) ILIKE $${params.length}`;
       });
       conditions.push(`(${termConditions.join(' OR ')})`);
@@ -294,4 +367,16 @@ export function createPgStore(options = {}) {
       await pool.end();
     },
   };
+
+  // Test-only escape hatch (registry/tests/pg-store.test.mjs): not part of
+  // STORE_METHODS (registry/lib/store.mjs), not for production callers,
+  // and non-enumerable so it stays invisible to Object.keys/JSON.stringify
+  // (this store is otherwise a plain data-shaped object -- a Pool doesn't
+  // belong in either). Lets a test reach the underlying Pool directly to
+  // park an idle client and kill its backend, proving the 'error' listener
+  // above actually prevents an uncaught-exception crash rather than merely
+  // asserting a listener is attached.
+  Object.defineProperty(store, '__pool', { value: pool, enumerable: false });
+
+  return store;
 }

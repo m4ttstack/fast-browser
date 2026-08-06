@@ -285,6 +285,33 @@ export function registerStoreSuite(label, createFreshStore, { skip = false } = {
     }
   });
 
+  // Fix round 1, finding 2 (IMPORTANT, Task 4 review, verified live): a
+  // query term containing a literal backslash exercises pg-store's ILIKE
+  // escaping (registry/lib/pg-store.mjs's likeEscape). Before that fix,
+  // an unescaped '\' in the pattern was consumed as LIKE's own escape
+  // character, so `%c:\temp%` actually searched for "c:temp" (no
+  // backslash) -- silently missing a row containing "c:\temp" that
+  // memory-store's plain haystack.includes(term) correctly scores a full
+  // match on. Confirmed directly against a real Postgres container (both
+  // via psql and via this exact parameterized-query shape) before and
+  // after the fix: 0 rows unescaped, 1 row escaped.
+  test(`${label}: search: lexical mode matches a query term containing a literal backslash character`, { skip }, async () => {
+    const store = await createFreshStore();
+    const record = makeRecord({
+      idSeed: 'lex-backslash',
+      flowOverrides: {
+        name: 'configure-path',
+        description: 'Configure the path C:\\Temp for exports',
+      },
+    });
+    await store.putCanonical(record);
+
+    const result = await store.search({ intentText: 'C:\\Temp' });
+    assert.equal(result.mode, 'lexical');
+    assert.deepEqual(result.results.map((r) => r.record.id), [record.id]);
+    assert.equal(result.results[0].score, 1);
+  });
+
   test(`${label}: search: an empty store returns empty results in either mode`, { skip }, async () => {
     const store = await createFreshStore();
     assert.deepEqual(await store.search({ intentText: 'anything' }), { mode: 'lexical', results: [] });

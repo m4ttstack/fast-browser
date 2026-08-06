@@ -128,3 +128,97 @@ test('pg-store: search rejects a query embedding that is not exactly 1024 dimens
     },
   );
 });
+
+// Fix round 1, finding 1 (IMPORTANT, Task 4 review, verified live): the
+// reviewer parked an idle pooled client and pg_terminate_backend'd it --
+// exactly what a Railway restart or failover does to a connection this
+// process is not actively using -- and the process died on an unhandled
+// Pool 'error' event. Reproduced directly, twice: once without
+// pool.on('error', ...) attached (uncaught exception, process exit code
+// 1), and once with it (logged, process survives, pool recovers on its
+// next query) -- this test is that second run, wired into the suite.
+// Uses the test-only `store.__pool` escape hatch (registry/lib/
+// pg-store.mjs) rather than merely asserting a listener count, per the
+// review note that a live kill is the more convincing proof when a
+// throwaway container is this cheap to spin up.
+test('pg-store: an idle pooled client killed out from under it (e.g. a Railway restart/failover) does not crash the process', { skip }, async () => {
+  const store = await createFreshPgStore();
+
+  const idleClient = await store.__pool.connect();
+  const { rows: [{ pid }] } = await idleClient.query('SELECT pg_backend_pid() AS pid');
+  idleClient.release(); // back to the pool, now idle -- not associated with any in-flight query.
+
+  // A second, independent connection plays the role of Postgres itself
+  // (or an operator) terminating the first connection's backend -- the
+  // same effect a managed Postgres's own restart/failover has on a
+  // connection nothing in this process is currently using.
+  const killer = new pg.Pool({ connectionString: DATABASE_URL });
+  try {
+    // Races the Pool's 'error' event against the kill query's own
+    // response: pg_terminate_backend's result can come back on the
+    // killer connection before or after the victim connection's 'error'
+    // event fires on `store.__pool`, so wait for the event explicitly
+    // (with a generous timeout) rather than a fixed sleep -- if the
+    // listener in pg-store.mjs were missing, node would throw
+    // synchronously within this same event-loop turn and this whole test
+    // process would exit nonzero, not just fail this assertion.
+    const poolErrorSeen = new Promise((resolve) => store.__pool.once('error', resolve));
+    await killer.query('SELECT pg_terminate_backend($1)', [pid]);
+    await Promise.race([
+      poolErrorSeen,
+      new Promise((resolve) => setTimeout(resolve, 2000)),
+    ]);
+  } finally {
+    await killer.end();
+  }
+
+  // The store must still be usable afterward: node-postgres discards the
+  // dead client and opens a fresh one on the next query.
+  assert.deepEqual(await store.health(), { ok: true, count: 0 });
+});
+
+// Fix round 1, finding 3 (IMPORTANT, Task 4 review, verified live):
+// reproduced directly against a real Postgres container before this fix
+// existed -- 4 concurrent, unlocked `CREATE EXTENSION IF NOT EXISTS
+// vector` calls against a fresh database, 3 of the 4 failed with
+// "duplicate key value violates unique constraint
+// pg_extension_name_index" (Postgres's own catalog has no
+// IF-NOT-EXISTS-safe way to create the same extension/type twice at
+// once) -- and confirmed the pg_advisory_lock in pg-store.mjs's init()
+// serializes them cleanly (all 4 succeed) before relying on it. This is
+// that same race, through the real store's real init(), not the raw SQL
+// probe: resets to a truly not-yet-migrated database (drops everything
+// 001-init.sql creates, including the schema_migrations tracking table
+// itself -- an already-migrated database would give two concurrent
+// init() calls nothing left to race over), then runs two independent
+// pg-store instances' init() concurrently.
+test('pg-store: concurrent init() against a not-yet-migrated database both succeed (one applies, one waits and no-ops)', { skip }, async () => {
+  const resetPool = new pg.Pool({ connectionString: DATABASE_URL });
+  try {
+    await resetPool.query('DROP TABLE IF EXISTS canonical_flows');
+    await resetPool.query('DROP TABLE IF EXISTS schema_migrations');
+    await resetPool.query('DROP EXTENSION IF EXISTS vector');
+  } finally {
+    await resetPool.end();
+  }
+
+  const first = await createStore('pg', { connectionString: DATABASE_URL });
+  const second = await createStore('pg', { connectionString: DATABASE_URL });
+  try {
+    await Promise.all([first.init(), second.init()]);
+  } finally {
+    await first.close();
+    await second.close();
+  }
+
+  const checkPool = new pg.Pool({ connectionString: DATABASE_URL });
+  try {
+    const { rows } = await checkPool.query('SELECT filename FROM schema_migrations');
+    assert.deepEqual(rows.map((row) => row.filename), ['001-init.sql'], 'the migration must be recorded exactly once, not twice, not zero times');
+
+    const { rows: [{ count }] } = await checkPool.query('SELECT count(*)::int AS count FROM canonical_flows');
+    assert.equal(count, 0, 'the recreated table must be empty and queryable, proving the schema is fully usable afterward');
+  } finally {
+    await checkPool.end();
+  }
+});
