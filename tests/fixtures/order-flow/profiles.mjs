@@ -205,12 +205,14 @@ const CHECKOUT_LISTENER_CALL = 'app.lastElementChild.addEventListener(\'click\',
 //   - `resolveEscalated` then gets its own fresh, PER-CANDIDATE 3000ms
 //     budget, candidate 0 (role) first -- its window, same relative frame,
 //     is `[3000, 6000]`. `4500 - g` lands inside that window for any `g`
-//     from 0ms up to ~1500ms (again, well past the realistic bound), with
-//     at least ~1200ms of margin from whichever edge is closer even at
-//     that generous boundary. So this profile now resolves ONLY via rung
-//     2's escalated pass, hitting candidate 0 (role): `usedKind: 'role',
-//     usedIndex: 0, escalated: true` -- the natural-exhaustion coverage
-//     the plan assigned it, pinned exactly (not just `>= 1`) in
+//     from 0ms up to ~1500ms (again, well past the realistic bound). The
+//     margin from the lower edge is `1500 - g`; at the empirically
+//     observed `g < 500ms` that margin exceeds 1000ms, and the upper
+//     edge is never the binding constraint. So this profile now
+//     resolves ONLY via rung 2's escalated pass, hitting candidate 0
+//     (role): `usedKind: 'role', usedIndex: 0, escalated: true` -- the
+//     natural-exhaustion coverage the plan assigned it, pinned exactly
+//     (not just `>= 1`) in
 //     tests/e2e/drift-harness.test.mjs.
 const DELAYED_INSERT_CALL = `setTimeout(() => { ${PLACE_ORDER_INSERT_CALL} }, 4500);`;
 const DELAYED_LISTENER_CALL = `setTimeout(() => { ${PLACE_ORDER_LISTENER_CALL} }, 4500);`;

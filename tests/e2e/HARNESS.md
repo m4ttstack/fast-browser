@@ -148,7 +148,7 @@ execution are tracked separately as MAT-153.
 
 **`fallback`, `escalated`, and `quirk-recovered` are structurally zero in
 the runs ledger, today.** `fast-browser stats`'s `outcomes` object always
-carries all six rung keys, but sweep.mjs (the only writer of
+carries all six outcome keys, but sweep.mjs (the only writer of
 `runs.jsonl`) can only ever emit `clean`, `healed`, or `failed`: the
 runtime's trace record for a successful `browser_run_code_unsafe` call
 carries no field for the macro's own return value (`locatorFallbacks`,
