@@ -721,51 +721,64 @@ test('approve refuses when pending content changes but the stored id field is le
   assert.deepEqual(moved, []);
 });
 
-test('approve strips control characters from arg names before printing them', async () => {
+// MAT-149: `parseFlow`'s `parseArgs` now rejects any arg key outside
+// `/^[A-Za-z_][A-Za-z0-9_]*$/` -- a raw ESC byte among them -- with a loud
+// parse error, before this module ever sees the flow. The scenario this
+// test used to prove safe by STRIPPING the escape byte before printing it
+// is now impossible by construction: `readPendingFlow` (which calls
+// `parseFlow`) refuses the whole file first, and `approve` never reaches
+// its own print calls at all. `stripControlChars` on `argNames` (flows.mjs)
+// stays in place as defense-in-depth -- see `commands.test.mjs` for its
+// direct unit coverage -- but this specific injection vector is now closed
+// one layer earlier, which is what this test pins.
+test('approve refuses a flow whose arg name is not a valid identifier (a raw ESC byte among them) before ever printing anything', async () => {
   const pendingFlow = validFlow({
     name: 'log-in',
     args: { 'user\x1b[31mname': { type: 'string', required: true } },
   });
   const prints = [];
 
-  await flows(
-    { sub: 'approve', name: 'log-in', json: false },
-    {
-      paths: { flowsPendingDir: '/h/pending', flowsDir: '/h/flows', dataDir: '/h' },
-      interactive: true,
-      readFlowFile: async (filePath) => {
-        if (filePath === '/h/flows/log-in.flow.json') {
-          const error = new Error('nope');
-          error.code = 'ENOENT';
-          throw error;
-        }
-        return JSON.stringify(pendingFlow);
+  await assert.rejects(
+    () => flows(
+      { sub: 'approve', name: 'log-in', json: false },
+      {
+        paths: { flowsPendingDir: '/h/pending', flowsDir: '/h/flows', dataDir: '/h' },
+        interactive: true,
+        readFlowFile: async (filePath) => {
+          if (filePath === '/h/flows/log-in.flow.json') {
+            const error = new Error('nope');
+            error.code = 'ENOENT';
+            throw error;
+          }
+          return JSON.stringify(pendingFlow);
+        },
+        pathExists: async () => false,
+        print: (line) => prints.push(line),
+        confirmApprove: async () => true,
+        moveFlow: async () => {},
       },
-      pathExists: async () => false,
-      print: (line) => prints.push(line),
-      confirmApprove: async () => true,
-      moveFlow: async () => {},
-    },
+    ),
+    (error) => error.name === 'LifecycleError' && /invalid and cannot be approved/.test(error.message),
   );
-
-  // Only the raw ESC byte (0x1b) is stripped -- the printable characters
-  // that followed it in the crafted key ("[31m") are left as inert literal
-  // text, no longer capable of being interpreted as a terminal escape once
-  // the ESC byte that introduces it is gone.
-  const joined = prints.join('\n');
-  assert.doesNotMatch(joined, /\x1b/);
-  assert.match(joined, /Args: user\[31mname/);
+  assert.deepEqual(prints, []);
 });
 
 // Fix round 2, item 4: the denylist grew past raw C0 controls to cover
 // line-breaking (NEL/LS/PS), invisible (ZWSP), and bidi
 // embedding/override/isolate controls (RLO can visually REVERSE text) --
-// while still leaving ordinary Unicode (NBSP, emoji, CJK) untouched. Every
-// non-ASCII character below is a \uXXXX/\u{XXXX} escape, deliberately,
-// never a literal: several ARE the exact invisible/reordering bytes under
-// test, so writing them literally would make this file unreviewable in a
-// diff (and at the mercy of any tool that "helpfully" normalizes them).
-test('approve strips the extended control/bidi character set from arg names, preserving emoji/CJK/NBSP', async () => {
+// while still leaving ordinary Unicode (NBSP, emoji, CJK) untouched.
+//
+// MAT-149 supersedes this scenario the same way as the ESC-byte test just
+// above: `parseArgs` now requires every arg key to match
+// `/^[A-Za-z_][A-Za-z0-9_]*$/`, so NBSP/ZWSP/RLO/emoji/CJK -- none of them
+// ASCII letters, digits, or underscore -- can never survive into an arg
+// key `readPendingFlow` accepts. The file is refused at parse, loudly,
+// before any printing happens; the "preserve the harmless characters,
+// strip only the dangerous ones" behavior this test used to pin no longer
+// has a reachable arg-name code path to exercise (it still applies to
+// every OTHER printed field `stripControlChars` guards, per
+// `commands.test.mjs` and the other call sites in lib/cli/main.mjs).
+test('approve refuses a flow whose arg name carries invisible/bidi characters (NBSP/ZWSP/RLO/emoji/CJK) before ever printing anything', async () => {
   const trickyName = 'user\u00a0\u200b\u202ename\u00a0\u{1F600}\u6f22';
   const pendingFlow = validFlow({
     name: 'log-in',
@@ -773,36 +786,29 @@ test('approve strips the extended control/bidi character set from arg names, pre
   });
   const prints = [];
 
-  await flows(
-    { sub: 'approve', name: 'log-in', json: false },
-    {
-      paths: { flowsPendingDir: '/h/pending', flowsDir: '/h/flows', dataDir: '/h' },
-      interactive: true,
-      readFlowFile: async (filePath) => {
-        if (filePath === '/h/flows/log-in.flow.json') {
-          const error = new Error('nope');
-          error.code = 'ENOENT';
-          throw error;
-        }
-        return JSON.stringify(pendingFlow);
+  await assert.rejects(
+    () => flows(
+      { sub: 'approve', name: 'log-in', json: false },
+      {
+        paths: { flowsPendingDir: '/h/pending', flowsDir: '/h/flows', dataDir: '/h' },
+        interactive: true,
+        readFlowFile: async (filePath) => {
+          if (filePath === '/h/flows/log-in.flow.json') {
+            const error = new Error('nope');
+            error.code = 'ENOENT';
+            throw error;
+          }
+          return JSON.stringify(pendingFlow);
+        },
+        pathExists: async () => false,
+        print: (line) => prints.push(line),
+        confirmApprove: async () => true,
+        moveFlow: async () => {},
       },
-      pathExists: async () => false,
-      print: (line) => prints.push(line),
-      confirmApprove: async () => true,
-      moveFlow: async () => {},
-    },
+    ),
+    (error) => error.name === 'LifecycleError' && /invalid and cannot be approved/.test(error.message),
   );
-
-  const joined = prints.join('\n');
-  const extendedControlPattern = new RegExp(
-    '[\\x00-\\x08\\x0b-\\x1f\\x7f\\u0085\\u2028\\u2029\\u200b\\u202a-\\u202e\\u2066-\\u2069]',
-  );
-  assert.doesNotMatch(joined, extendedControlPattern);
-  assert.match(joined, /Args: user/);
-  assert.match(joined, /name/);
-  assert.match(joined, /\u00a0/);
-  assert.match(joined, /\u{1F600}/u);
-  assert.match(joined, /\u6f22/);
+  assert.deepEqual(prints, []);
 });
 
 // Fix round 2, item 2: a reviewer reproduced a scenario where the ORIGINAL

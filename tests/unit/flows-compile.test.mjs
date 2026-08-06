@@ -1356,3 +1356,97 @@ test('browser_hover compiles a hover step with no value, and does not force muta
   assert.equal(Object.hasOwn(hover, 'value'), false);
   assert.equal(flow.sideEffects, 'read-only');
 });
+
+// --- MAT-149: digit-leading arg names sanitized at mint ---
+//
+// flow-runner.js's `template()` substitution regex is
+// `/\{([A-Za-z_][A-Za-z0-9_]*)\}/g` -- a letter or underscore must come
+// first. Nothing upstream of that regex enforced the same shape: a
+// key-derived name like `2fa_token` camelizes (via `camelize`, same as
+// every other lift) to `2faToken`, which the regex can never match. A step
+// url baked as `/r?2fa_token={2faToken}` then replays with the LITERAL
+// `{2faToken}` still in the URL, since the token never substitutes. Every
+// name source (query keys, path segments, fragment parts, fill labels,
+// positional fallbacks) funnels through the same `claimArgName` mint point
+// (see compile.mjs), so sanitizing there closes all of them at once.
+test('MAT-149: a digit-leading query key ("2fa_token") mints a sanitized arg name and the step url templates against it', () => {
+  const value = 'aB3fG7kL9mN2pQ5rS8tU1vW4'; // 24 chars, high-entropy per isHighEntropyValue
+  const records = [
+    record({
+      seq: 1,
+      tool: 'browser_navigate',
+      params: { url: `https://example.com/verify?2fa_token=${value}` },
+    }),
+    record({ seq: 2, tool: 'browser_press_key', params: { key: 'Enter' } }),
+  ];
+  const result = compileSession({ records, meta });
+  const flow = result.flows[0];
+  assert.deepEqual(flow.args, { arg2faToken: { type: 'string', required: true } });
+  assert.equal(flow.steps[0].url, '/verify?2fa_token={arg2faToken}');
+  assert.equal(JSON.stringify(flow).includes(value), false);
+});
+
+test('MAT-149: a digit-leading fragment key ("3ds_session") mints a sanitized arg name and the step url templates against it', () => {
+  const value = 'zZ9xQ2wE5rT8yU1iO4pA7sD0'; // 24 chars, high-entropy per isHighEntropyValue
+  const records = [
+    record({
+      seq: 1,
+      tool: 'browser_navigate',
+      params: { url: `https://example.com/checkout#3ds_session=${value}` },
+    }),
+    record({ seq: 2, tool: 'browser_press_key', params: { key: 'Enter' } }),
+  ];
+  const result = compileSession({ records, meta });
+  const flow = result.flows[0];
+  assert.deepEqual(flow.args, { arg3dsSession: { type: 'string', required: true } });
+  assert.equal(flow.steps[0].url, '/checkout#3ds_session={arg3dsSession}');
+  assert.equal(JSON.stringify(flow).includes(value), false);
+});
+
+test('MAT-149: a fill labeled "2FA code" mints a sanitized arg name', () => {
+  const records = [
+    record({
+      seq: 1,
+      tool: 'browser_type',
+      params: { text: '123456' },
+      targets: [traceTarget({ name: '2FA code' })],
+    }),
+    record({ seq: 2, tool: 'browser_press_key', params: { key: 'Enter' } }),
+  ];
+  const result = compileSession({ records, meta });
+  const flow = result.flows[0];
+  assert.deepEqual(flow.args, { arg2faCode: { type: 'string', required: true } });
+  assert.equal(flow.steps[0].value, '{arg2faCode}');
+});
+
+test('MAT-149: a sanitized digit-leading name colliding with an already-claimed arg resolves through the existing numeric-suffix dedupe', () => {
+  const collidingValue = 'zZ9xQ2wE5rT8yU1iO4pA7sD0'; // 24 chars, high-entropy, distinct literal
+  const records = [
+    // "Arg 2fa Token" slugifies/camelizes to "arg2faToken" directly (no
+    // leading digit, so no sanitization needed) -- this claims that exact
+    // name first, under a DIFFERENT literal than the query lift below.
+    record({
+      seq: 1,
+      tool: 'browser_type',
+      params: { text: 'static-label-value' },
+      targets: [traceTarget({ name: 'Arg 2fa Token' })],
+    }),
+    // "2fa_token" camelizes to "2faToken", sanitizes to "arg2faToken" --
+    // the same name the fill above already claimed, for a different
+    // literal, so this must fall through to the "arg2faToken2" suffix
+    // rather than silently overwriting the fill's arg.
+    record({
+      seq: 2,
+      tool: 'browser_navigate',
+      params: { url: `https://example.com/verify?2fa_token=${collidingValue}` },
+    }),
+  ];
+  const result = compileSession({ records, meta });
+  const flow = result.flows[0];
+  assert.deepEqual(flow.args, {
+    arg2faToken: { type: 'string', required: true },
+    arg2faToken2: { type: 'string', required: true },
+  });
+  const goto = flow.steps.find((s) => s.op === 'goto');
+  assert.equal(goto.url, '/verify?2fa_token={arg2faToken2}');
+});

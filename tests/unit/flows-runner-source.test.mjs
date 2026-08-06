@@ -1200,3 +1200,45 @@ test('flow-runner.js degrades a quirk with a malformed locator element to no dis
     },
   );
 });
+
+// --- MAT-149: digit-leading arg names sanitized at mint ---
+//
+// This runner's own `{arg}` substitution regex (`TOKEN`, above) is
+// deliberately untouched by MAT-149's fix -- the fix is on the compile
+// side (lib/flows/compile.mjs mints only names the regex can match) and
+// the parse side (lib/flows/artifact.mjs rejects any that slip through).
+// This proves the two ends actually connect: a flow whose arg is already
+// sanitized (`arg2faToken`, never `2faToken`) round-trips through this
+// runner's real substitution path end to end, with the supplied arg value
+// landing in the `goto` step's url exactly where the template placeholder
+// was -- the replayability the compile-side fix exists to preserve.
+test('flow-runner.js substitutes a sanitized digit-leading arg name ("arg2faToken") into a goto step url end-to-end (MAT-149)', async () => {
+  const source = await readSource();
+  const sandbox = {};
+  vm.createContext(sandbox);
+  const script = new vm.Script(`(${source})`);
+  const macro = script.runInContext(sandbox);
+
+  const gotoCalls = [];
+  const stubPage = {
+    url: () => 'https://example.com/',
+    on: () => {},
+    off: () => {},
+    goto: async (url) => { gotoCalls.push(url); },
+    waitForLoadState: async () => {},
+  };
+
+  const flow = {
+    schemaVersion: 1,
+    name: 'verify-2fa',
+    origin: 'https://example.com',
+    args: { arg2faToken: { type: 'string', required: true } },
+    steps: [
+      { op: 'goto', url: '/verify?2fa_token={arg2faToken}' },
+    ],
+  };
+
+  const result = await macro(stubPage, { flow, args: { arg2faToken: 'live-otp-value' } });
+  assert.equal(result.ok, true);
+  assert.deepEqual(gotoCalls, ['https://example.com/verify?2fa_token=live-otp-value']);
+});
