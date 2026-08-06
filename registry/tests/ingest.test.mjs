@@ -8,7 +8,7 @@ import { embedTextFor, ingest } from '../lib/ingest.mjs';
 import { sign, verify } from '../lib/signing.mjs';
 import { opSequence, stepSignature } from '../lib/signature-fields.mjs';
 import { REGISTRY_CLUSTER_THRESHOLD } from '../lib/constants.mjs';
-import { baseFlow } from './helpers/fixtures.mjs';
+import { baseFlow, target } from './helpers/fixtures.mjs';
 
 // registry/lib/ingest.mjs (WS4b plan, Task 5): validate, verify, lint,
 // dedup, cluster-merge, sign, index. See that module's own top comment for
@@ -397,4 +397,373 @@ test('ingest() never clusters across a different origin, regardless of cosine or
 test('embedTextFor builds "description | stepSignature", the Shared shapes text contract', () => {
   const flow = parseFlow(baseFlow({ description: 'Fill the order form and place an order' }));
   assert.equal(embedTextFor(flow), `Fill the order form and place an order | ${stepSignature(flow)}`);
+});
+
+// --- fix round 1: Critical #1 (surrogate ids, refuse-overwrite guard) ---
+
+test('ingest() never lets two different flows collide on the store id, even when they share the same self-declared artifact id', async () => {
+  const store = createMemoryStore();
+  await store.init();
+  const { signer } = testSigner();
+
+  const aFlow = parseFlow(baseFlow({ name: 'ingest-idcollision-a' }));
+  const bFlow = parseFlow(baseFlow({ name: 'ingest-idcollision-b' }));
+  // baseFlow()'s own default `id` is a fixed constant unless overridden --
+  // both fixtures above share it, on purpose, proving the store's row
+  // identity does not depend on it at all (fix round 1, Critical #1(a):
+  // crypto.randomUUID(), never contentHash, never the artifact's own id).
+  assert.equal(aFlow.id, bFlow.id, 'the fixture must actually exercise a shared self-declared artifact id');
+
+  const a = await ingest({ envelope: envelopeFor({ name: 'ingest-idcollision-a' }), store, signer, embedder: null });
+  const b = await ingest({ envelope: envelopeFor({ name: 'ingest-idcollision-b' }), store, signer, embedder: null });
+
+  assert.equal(a.outcome, 'created');
+  assert.equal(b.outcome, 'created');
+  assert.notEqual(a.canonicalId, b.canonicalId);
+  assert.notEqual(a.canonicalId, contentHashOf(aFlow), 'the store id must never equal contentHash either');
+
+  const storedA = await store.get(a.canonicalId);
+  const storedB = await store.get(b.canonicalId);
+  assert.equal(storedA.name, 'ingest-idcollision-a');
+  assert.equal(storedB.name, 'ingest-idcollision-b');
+  assert.deepEqual(await store.health(), { ok: true, count: 2 });
+});
+
+// --- fix round 1: Critical #1 (the reviewer's exact overwrite scenario)
+// ---
+
+test('ingest() re-pushing a canonical\'s ORIGINAL pre-merge bytes with a null embedder must NOT destroy an already-merged canonical', async () => {
+  const store = createMemoryStore();
+  await store.init();
+  const { signer, publicKey } = testSigner();
+
+  const canonicalFlowInput = baseFlow({ name: 'ingest-overwrite-canonical' });
+  const incomingLocator = { kind: 'testid', selector: 'place-order-button' };
+  const incomingFlowInput = baseFlow({
+    name: 'ingest-overwrite-incoming',
+    steps: canonicalFlowInput.steps.map((step, index) => {
+      if (index !== 2) return step; // the click step
+      return { ...step, target: { ...step.target, locators: [...step.target.locators, incomingLocator] } };
+    }),
+  });
+  const canonicalEnvelope = envelopeFor(canonicalFlowInput);
+
+  // Step 1: create A, using a real embedder so it can later cluster.
+  const embedder = queueEmbedder([REFERENCE_VECTOR, unitVectorAtCosine(0.99)]);
+  const created = await ingest({ envelope: canonicalEnvelope, store, signer, embedder });
+  assert.equal(created.outcome, 'created');
+
+  // Step 2: push a near-duplicate B -- clusters into A's canonical.
+  const clustered = await ingest({ envelope: envelopeFor(incomingFlowInput), store, signer, embedder });
+  assert.equal(clustered.outcome, 'clustered');
+  assert.equal(clustered.canonicalId, created.canonicalId);
+
+  const mergedBefore = await store.get(created.canonicalId);
+  assert.equal(mergedBefore.mergedCount, 1);
+  const mergedLocatorsBefore = mergedBefore.content.steps[2].target.locators;
+  assert.deepEqual(mergedLocatorsBefore, [...canonicalFlowInput.steps[2].target.locators, incomingLocator]);
+
+  // Step 3: the reviewer's exact scenario -- re-push A's ORIGINAL bytes
+  // (the exact same envelope from step 1), but this time with a NULL
+  // embedder (a keyless restart, or every Voyage call degrading). A's own
+  // contentHash is no longer indexed (it moved when B merged in), so
+  // exact-dedup does not catch this, and clustering cannot even be
+  // attempted without an embedder -- before the fix, this fell through to
+  // createCanonical, which recomputed the SAME id (contentHash-derived)
+  // and overwrote the merged canonical wholesale.
+  const rePush = await ingest({ envelope: canonicalEnvelope, store, signer, embedder: null });
+
+  // Acceptable outcome per the ruling: 'created' as a NEW, separate
+  // record -- a keyless pipeline cannot prove cluster identity, so it
+  // must never silently resurrect or merge into the existing canonical
+  // either; it must simply never DESTROY it.
+  assert.equal(rePush.outcome, 'created');
+  assert.notEqual(rePush.canonicalId, created.canonicalId);
+
+  // The merged canonical (A+B) must be completely untouched: same
+  // mergedCount, same alternates, same signature.
+  const mergedAfter = await store.get(created.canonicalId);
+  assert.equal(mergedAfter.mergedCount, 1, 'the merged canonical\'s mergedCount must survive the re-push');
+  assert.deepEqual(
+    mergedAfter.content.steps[2].target.locators,
+    mergedLocatorsBefore,
+    'the merged canonical\'s alternates must survive the re-push',
+  );
+  assert.deepEqual(mergedAfter, mergedBefore, 'the merged canonical must be byte-for-byte untouched by the re-push');
+  const mergedCanonicalFlow = parseFlow(mergedAfter.content);
+  assert.equal(verify(serializeFlow(mergedCanonicalFlow), mergedAfter.signature, publicKey), true);
+
+  // Both records exist, independently.
+  assert.deepEqual(await store.health(), { ok: true, count: 2 });
+  const rePushed = await store.get(rePush.canonicalId);
+  assert.equal(rePushed.name, 'ingest-overwrite-canonical');
+});
+
+// --- fix round 1: Important #3 (no-op re-merge must not bump mergedCount
+// or updatedAt) ---
+
+test('ingest() re-pushing the SAME near-duplicate repeatedly after a merge is a true no-op: mergedCount and updatedAt stay stable', async () => {
+  const store = createMemoryStore();
+  await store.init();
+  const { signer } = testSigner();
+
+  const canonicalFlowInput = baseFlow({ name: 'ingest-noop-remerge-canonical' });
+  const incomingLocator = { kind: 'testid', selector: 'place-order-button' };
+  const incomingFlowInput = baseFlow({
+    name: 'ingest-noop-remerge-incoming',
+    steps: canonicalFlowInput.steps.map((step, index) => {
+      if (index !== 2) return step;
+      return { ...step, target: { ...step.target, locators: [...step.target.locators, incomingLocator] } };
+    }),
+  });
+  const incomingEnvelope = envelopeFor(incomingFlowInput);
+
+  // Every call returns the same vector -- cosine 1.0 throughout, so every
+  // push in this test clears the cluster threshold if a candidate exists.
+  const embedder = async () => REFERENCE_VECTOR;
+
+  const created = await ingest({ envelope: envelopeFor(canonicalFlowInput), store, signer, embedder });
+  assert.equal(created.outcome, 'created');
+
+  const firstMerge = await ingest({ envelope: incomingEnvelope, store, signer, embedder });
+  assert.equal(firstMerge.outcome, 'clustered');
+  const afterFirstMerge = await store.get(created.canonicalId);
+  assert.equal(afterFirstMerge.mergedCount, 1);
+  const updatedAtAfterFirstMerge = afterFirstMerge.updatedAt;
+
+  // Re-push the SAME B bytes three more times -- every incoming locator is
+  // already present in the canonical, so the union adds nothing new.
+  for (let i = 0; i < 3; i += 1) {
+    const rePush = await ingest({ envelope: incomingEnvelope, store, signer, embedder });
+    assert.equal(rePush.outcome, 'clustered');
+    assert.equal(rePush.canonicalId, created.canonicalId);
+  }
+
+  const afterRepeats = await store.get(created.canonicalId);
+  assert.equal(afterRepeats.mergedCount, 1, 'a no-op re-merge must never increment mergedCount');
+  assert.equal(afterRepeats.updatedAt, updatedAtAfterFirstMerge, 'a no-op re-merge must never bump updatedAt');
+  assert.deepEqual(afterRepeats, afterFirstMerge, 'a no-op re-merge must leave the stored record byte-for-byte unchanged');
+});
+
+// --- fix round 1: Critical #2 (per-step identity anchor) ---
+//
+// stepSignature equality alone does not establish that two steps target
+// the SAME element -- these three regression pins are the reviewer's own
+// reproduced cases; the two positive cases after them prove the anchor
+// check is not simply refusing to cluster ANYTHING.
+
+test('ingest() does NOT cluster an expect step whose text-target content differs ("Order placed" vs "Order FAILED"), even at cosine 1.0', async () => {
+  const store = createMemoryStore();
+  await store.init();
+  const { signer } = testSigner();
+
+  // baseFlow()'s own expect step already has neither role nor name (see
+  // registry/tests/helpers/fixtures.mjs) -- exactly the shape stepSignature
+  // is structurally blind to. Only the expect step's locator/description
+  // differs between the two fixtures below; every other step is identical.
+  const canonicalFlowInput = baseFlow({ name: 'ingest-anchor-expect-canonical' });
+  const incomingFlowInput = baseFlow({
+    name: 'ingest-anchor-expect-incoming',
+    steps: canonicalFlowInput.steps.map((step, index) => {
+      if (index !== 3) return step; // the expect step
+      return {
+        ...step,
+        target: target({
+          locators: [{ kind: 'text', selector: 'internal:text="Order FAILED"' }],
+          description: 'Order FAILED',
+          role: undefined,
+          name: undefined,
+        }),
+      };
+    }),
+  });
+  assert.equal(
+    stepSignature(parseFlow(incomingFlowInput)),
+    stepSignature(parseFlow(canonicalFlowInput)),
+    'the fixture must actually exercise an IDENTICAL stepSignature -- proving the anchor check, not the signature gate, is what blocks this',
+  );
+
+  const embedder = async () => REFERENCE_VECTOR; // cosine 1.0, the most generous possible score
+
+  const created = await ingest({ envelope: envelopeFor(canonicalFlowInput), store, signer, embedder });
+  assert.equal(created.outcome, 'created');
+
+  const result = await ingest({ envelope: envelopeFor(incomingFlowInput), store, signer, embedder });
+  assert.equal(result.outcome, 'created', '"Order placed" and "Order FAILED" must never be treated as the same canonical');
+  assert.notEqual(result.canonicalId, created.canonicalId);
+
+  const stored = await store.get(created.canonicalId);
+  assert.equal(stored.mergedCount, 0);
+});
+
+test('ingest() does NOT cluster a drag step whose "to" (drop destination) differs, even at cosine 1.0', async () => {
+  const store = createMemoryStore();
+  await store.init();
+  const { signer } = testSigner();
+
+  function dragFlow(name, toSelector) {
+    return baseFlow({
+      name,
+      steps: [
+        { op: 'goto', url: '/checkout/{plan}' },
+        {
+          op: 'drag',
+          target: target({
+            locators: [{ kind: 'css', selector: '#item-1' }],
+            description: undefined,
+            role: undefined,
+            name: undefined,
+          }),
+          to: target({
+            locators: [{ kind: 'css', selector: toSelector }],
+            description: undefined,
+            role: undefined,
+            name: undefined,
+          }),
+        },
+      ],
+    });
+  }
+
+  const canonicalFlowInput = dragFlow('ingest-anchor-drag-canonical', '#bin-a');
+  const incomingFlowInput = dragFlow('ingest-anchor-drag-incoming', '#bin-b');
+  assert.equal(
+    stepSignature(parseFlow(incomingFlowInput)),
+    stepSignature(parseFlow(canonicalFlowInput)),
+    'drag\'s `to` is not part of stepSignature at all -- the fixture must share stepSignature despite a different destination',
+  );
+
+  const embedder = async () => REFERENCE_VECTOR;
+
+  const created = await ingest({ envelope: envelopeFor(canonicalFlowInput), store, signer, embedder });
+  assert.equal(created.outcome, 'created');
+
+  const result = await ingest({ envelope: envelopeFor(incomingFlowInput), store, signer, embedder });
+  assert.equal(result.outcome, 'created', 'a drag to a different destination must never be treated as the same canonical');
+  assert.notEqual(result.canonicalId, created.canonicalId);
+});
+
+test('ingest() does NOT cluster two clicks on different CSS-selector targets (#confirm vs #delete-account) with no role/name, even at cosine 1.0', async () => {
+  const store = createMemoryStore();
+  await store.init();
+  const { signer } = testSigner();
+
+  function clickFlow(name, selector) {
+    return baseFlow({
+      name,
+      steps: [
+        { op: 'goto', url: '/checkout/{plan}' },
+        {
+          op: 'click',
+          target: target({
+            locators: [{ kind: 'css', selector }],
+            description: undefined,
+            role: undefined,
+            name: undefined,
+          }),
+        },
+      ],
+    });
+  }
+
+  const canonicalFlowInput = clickFlow('ingest-anchor-click-canonical', '#confirm');
+  const incomingFlowInput = clickFlow('ingest-anchor-click-incoming', '#delete-account');
+  assert.equal(
+    stepSignature(parseFlow(incomingFlowInput)),
+    stepSignature(parseFlow(canonicalFlowInput)),
+    'both targets have neither role nor name -- the fixture must share the collapsed (op, "", "", "") stepSignature tuple',
+  );
+
+  const embedder = async () => REFERENCE_VECTOR;
+
+  const created = await ingest({ envelope: envelopeFor(canonicalFlowInput), store, signer, embedder });
+  assert.equal(created.outcome, 'created');
+
+  const result = await ingest({ envelope: envelopeFor(incomingFlowInput), store, signer, embedder });
+  assert.equal(result.outcome, 'created', '#confirm and #delete-account must never be treated as the same canonical');
+  assert.notEqual(result.canonicalId, created.canonicalId);
+
+  const stored = await store.get(created.canonicalId);
+  assert.equal(stored.mergedCount, 0, 'the canonical\'s fallback chain must never gain #delete-account');
+});
+
+test('ingest() still clusters when role+name are identical and only the alternates differ (the anchor check does not over-block)', async () => {
+  const store = createMemoryStore();
+  await store.init();
+  const { signer } = testSigner();
+
+  const canonicalFlowInput = baseFlow({ name: 'ingest-anchor-positive-rolename-canonical' });
+  const incomingLocator = { kind: 'testid', selector: 'place-order-button' };
+  const incomingFlowInput = baseFlow({
+    name: 'ingest-anchor-positive-rolename-incoming',
+    steps: canonicalFlowInput.steps.map((step, index) => {
+      if (index !== 2) return step; // the click step -- role 'button', name 'Place order', both non-empty
+      return { ...step, target: { ...step.target, locators: [...step.target.locators, incomingLocator] } };
+    }),
+  });
+
+  const embedder = queueEmbedder([REFERENCE_VECTOR, unitVectorAtCosine(0.99)]);
+
+  const created = await ingest({ envelope: envelopeFor(canonicalFlowInput), store, signer, embedder });
+  assert.equal(created.outcome, 'created');
+
+  const result = await ingest({ envelope: envelopeFor(incomingFlowInput), store, signer, embedder });
+  assert.equal(result.outcome, 'clustered');
+  assert.equal(result.canonicalId, created.canonicalId);
+
+  const stored = await store.get(created.canonicalId);
+  assert.equal(stored.mergedCount, 1);
+  assert.deepEqual(
+    stored.content.steps[2].target.locators,
+    [...canonicalFlowInput.steps[2].target.locators, incomingLocator],
+  );
+});
+
+test('ingest() still clusters when role+name are both empty but the primary locator is identical (the anchor check does not over-block)', async () => {
+  const store = createMemoryStore();
+  await store.init();
+  const { signer } = testSigner();
+
+  function clickFlow(name, extraLocators = []) {
+    return baseFlow({
+      name,
+      steps: [
+        { op: 'goto', url: '/checkout/{plan}' },
+        {
+          op: 'click',
+          target: target({
+            locators: [{ kind: 'css', selector: '#confirm' }, ...extraLocators],
+            description: undefined,
+            role: undefined,
+            name: undefined,
+          }),
+        },
+      ],
+    });
+  }
+
+  const extraLocator = { kind: 'testid', selector: 'confirm-button' };
+  const canonicalFlowInput = clickFlow('ingest-anchor-positive-primary-canonical');
+  const incomingFlowInput = clickFlow('ingest-anchor-positive-primary-incoming', [extraLocator]);
+  assert.equal(
+    stepSignature(parseFlow(incomingFlowInput)),
+    stepSignature(parseFlow(canonicalFlowInput)),
+    'both share the SAME primary (#confirm) locator, so both collapse to the same stepSignature tuple',
+  );
+
+  const embedder = queueEmbedder([REFERENCE_VECTOR, unitVectorAtCosine(0.99)]);
+
+  const created = await ingest({ envelope: envelopeFor(canonicalFlowInput), store, signer, embedder });
+  assert.equal(created.outcome, 'created');
+
+  const result = await ingest({ envelope: envelopeFor(incomingFlowInput), store, signer, embedder });
+  assert.equal(result.outcome, 'clustered', 'an identical PRIMARY locator with empty role/name must still be allowed to cluster');
+  assert.equal(result.canonicalId, created.canonicalId);
+
+  const stored = await store.get(created.canonicalId);
+  assert.equal(stored.mergedCount, 1);
+  assert.deepEqual(
+    stored.content.steps[1].target.locators,
+    [{ kind: 'css', selector: '#confirm' }, extraLocator],
+  );
 });

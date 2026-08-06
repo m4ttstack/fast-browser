@@ -27,7 +27,7 @@
 // stub globalThis.fetch; this module never makes a real network request
 // under `npm test`.
 
-import { EMBED_MODEL } from './constants.mjs';
+import { EMBED_DIM, EMBED_MODEL } from './constants.mjs';
 
 export const VOYAGE_ENDPOINT = 'https://api.voyageai.com/v1/embeddings';
 export const VOYAGE_TIMEOUT_MS = 5000;
@@ -69,6 +69,18 @@ async function voyageEmbed(text, key) {
   const vector = body?.data?.[0]?.embedding;
   if (!Array.isArray(vector) || vector.length === 0) {
     throw new Error('voyage embeddings response was malformed: missing embedding');
+  }
+  // Fix round 1, Important #4: a SUCCESSFUL (200 OK), well-shaped-enough
+  // (an array, non-empty) response can still be malformed in a way the
+  // checks above never catch -- a model change returning a different
+  // width than pg-store's fixed vector(1024) column expects, or a
+  // response whose elements are not actually numbers (a string element
+  // makes Float64Array.from produce NaN, which is not "missing" by the
+  // check above but is unusable and would previously have escaped all the
+  // way to a mid-push pg insert failure). Width and per-element
+  // finiteness are both checked before this is ever trusted.
+  if (vector.length !== EMBED_DIM || !vector.every((value) => Number.isFinite(value))) {
+    throw new Error(`voyage embeddings response was malformed: expected ${EMBED_DIM} finite-number dimensions, got ${vector.length}`);
   }
   return Float64Array.from(vector);
 }

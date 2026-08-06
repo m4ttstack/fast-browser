@@ -30,12 +30,17 @@
 // share the same origin AND an identical opSequence (registry/lib/
 // store.mjs's findClusterCandidates prefilter) before cosine is even
 // consulted, and the ingest pipeline additionally requires the full
-// stepSignature to match (registry/lib/ingest.mjs) before actually
-// merging -- so cosine's only real job is deciding whether two candidates
-// that already agree on origin, op sequence, and step signature are close
-// enough in MEANING (description + step shape) to treat as duplicates of
-// each other, never whether two structurally different flows are "close
-// enough" to merge.
+// stepSignature to match PLUS a per-step identity anchor at every step
+// (registry/lib/ingest.mjs's findClusterMatch/stepsAreAnchored -- fix
+// round 1, Critical #2: stepSignature alone collapses two DIFFERENT
+// targets that both happen to carry no role/name, e.g. a raw CSS-selector
+// click on #confirm vs #delete-account, into the identical tuple, and
+// never covers `drag`'s `to` destination at all) before actually merging
+// -- so cosine's only real job is deciding whether two candidates that
+// already agree on origin, op sequence, step signature, AND every step's
+// own target identity are close enough in MEANING (description) to treat
+// as duplicates of each other, never whether two structurally different
+// flows are "close enough" to merge.
 export const REGISTRY_CLUSTER_THRESHOLD = 0.95;
 
 // Mirrors lib/flows/encoder.mjs's VOYAGE_MODEL constant byte-for-byte.
@@ -50,3 +55,18 @@ export const REGISTRY_CLUSTER_THRESHOLD = 0.95;
 // VOYAGE_MODEL changes, update this by hand -- encoder.mjs is NOT required
 // to reference this file in either direction.
 export const EMBED_MODEL = 'voyage-3.5-lite';
+
+// voyage-3.5-lite's real output width, AND what registry/migrations/
+// 001-init.sql's `canonical_flows.embedding` column is fixed to
+// (`vector(1024)`). pg-store's schema already enforces this width
+// STRUCTURALLY at INSERT/UPDATE time -- a wrong-width value is rejected by
+// Postgres itself. This constant is what lets registry/lib/embedder.mjs
+// catch a wrong-width (or otherwise malformed: non-finite elements) Voyage
+// response BEFORE it ever reaches the store (fix round 1, Important #4:
+// an odd-but-200-OK response -- a model change returning a different
+// width, or non-numeric elements producing NaN -- previously escaped
+// ingest entirely and would 500 the whole push once pg-store's own column
+// constraint rejected the insert). Any mismatch degrades that one embed to
+// null, same as every other embedder failure mode, rather than surfacing
+// as a mid-push crash.
+export const EMBED_DIM = 1024;

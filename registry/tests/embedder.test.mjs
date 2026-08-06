@@ -2,11 +2,18 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { createEmbedder, VOYAGE_ENDPOINT, VOYAGE_TIMEOUT_MS } from '../lib/embedder.mjs';
-import { EMBED_MODEL } from '../lib/constants.mjs';
+import { EMBED_DIM, EMBED_MODEL } from '../lib/constants.mjs';
 
 // registry/lib/embedder.mjs (WS4b plan, Task 5). This module's ONE
 // privilege is the global `fetch` -- every test here stubs it, real
 // network is never touched.
+
+// A well-formed embedding: exactly EMBED_DIM finite numbers. Every
+// "successful path" test uses this rather than a short hand-rolled
+// vector -- fix round 1, Important #4 rejects anything else.
+function validEmbedding() {
+  return Array.from({ length: EMBED_DIM }, (_, i) => (i === 0 ? 1 : 0));
+}
 
 function stubFetch(t, implementation) {
   const original = globalThis.fetch;
@@ -41,10 +48,11 @@ test('createEmbedder returns an embed function when VOYAGE_API_KEY is present', 
 test('the embed function issues the exact pinned request shape', async (t) => {
   let capturedUrl = null;
   let capturedInit = null;
+  const embedding = validEmbedding();
   stubFetch(t, async (url, init) => {
     capturedUrl = url;
     capturedInit = init;
-    return jsonResponse({ data: [{ embedding: [1, 0, 0] }] });
+    return jsonResponse({ data: [{ embedding }] });
   });
 
   const embedder = createEmbedder({ env: { VOYAGE_API_KEY: 'sk-live-123' } });
@@ -59,7 +67,7 @@ test('the embed function issues the exact pinned request shape', async (t) => {
   assert.equal(body.model, EMBED_MODEL);
   assert.ok(capturedInit.signal instanceof AbortSignal, 'a real AbortSignal must be attached');
   assert.ok(vector instanceof Float64Array);
-  assert.deepEqual(Array.from(vector), [1, 0, 0]);
+  assert.deepEqual(Array.from(vector), embedding);
 });
 
 test('the embed function wires AbortSignal.timeout with the pinned 5000ms bound', async (t) => {
@@ -68,7 +76,7 @@ test('the embed function wires AbortSignal.timeout with the pinned 5000ms bound'
     capturedMs = ms;
     return new AbortController().signal;
   });
-  stubFetch(t, async () => jsonResponse({ data: [{ embedding: [1, 0] }] }));
+  stubFetch(t, async () => jsonResponse({ data: [{ embedding: validEmbedding() }] }));
 
   const embedder = createEmbedder({ env: { VOYAGE_API_KEY: 'sk-live-123' } });
   await embedder('some text');
@@ -97,6 +105,26 @@ test('a non-JSON response body degrades to null, not a throw', async (t) => {
 
 test('a malformed response body (missing embedding) degrades to null, not a throw', async (t) => {
   stubFetch(t, async () => jsonResponse({ data: [] }));
+  const embedder = createEmbedder({ env: { VOYAGE_API_KEY: 'sk-live-123' } });
+  assert.equal(await embedder('some text'), null);
+});
+
+// Fix round 1, Important #4: a SUCCESSFUL, well-SHAPED (array, non-empty)
+// response can still be wrong in a way the pre-fix checks never caught --
+// pinned here as their own regression tests.
+
+test('a wrong-width embedding (a model change returning something other than EMBED_DIM) degrades to null, not a throw', async (t) => {
+  assert.equal(EMBED_DIM, 1024, 'this test pins behavior against the documented width');
+  const wrongWidth = Array.from({ length: 512 }, () => 0.1); // every element finite, just the wrong length
+  stubFetch(t, async () => jsonResponse({ data: [{ embedding: wrongWidth }] }));
+  const embedder = createEmbedder({ env: { VOYAGE_API_KEY: 'sk-live-123' } });
+  assert.equal(await embedder('some text'), null);
+});
+
+test('an embedding with a non-numeric element degrades to null, not a NaN-poisoned vector', async (t) => {
+  const withStringElement = validEmbedding();
+  withStringElement[5] = 'not-a-number';
+  stubFetch(t, async () => jsonResponse({ data: [{ embedding: withStringElement }] }));
   const embedder = createEmbedder({ env: { VOYAGE_API_KEY: 'sk-live-123' } });
   assert.equal(await embedder('some text'), null);
 });
