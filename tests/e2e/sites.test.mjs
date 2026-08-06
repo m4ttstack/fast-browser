@@ -9,7 +9,7 @@ import test from 'node:test';
 import { flows } from '../../lib/commands/flows.mjs';
 import { sites } from '../../lib/commands/sites.mjs';
 import { startOrderFixture } from '../fixtures/order-flow/server.mjs';
-import { startMcpClient } from './helpers/mcp-client.mjs';
+import { pathsForOutputDir, tracedSession } from './helpers/flow-fixtures.mjs';
 
 // The site-memory e2e (WS2b plan, Task 11): the workstream's acceptance
 // test. Drives the exact same order-flow recording flows.test.mjs's
@@ -54,42 +54,14 @@ import { startMcpClient } from './helpers/mcp-client.mjs';
 // ttlHours/domHash. A future fixture with a second routed page closes
 // most of these in one go.
 
-// Same hand-built paths shape as flows.test.mjs's `pathsForOutputDir`
-// (rooted at outputDir itself, matching mcp-client.mjs's --output-dir
-// wiring), extended with `sitesDir` -- the one path lib/sites/store.mjs
-// needs that flows.mjs's own paths shape doesn't carry. No `macrosDir`
-// install is needed here (unlike flows.test.mjs): this test never calls
-// `flows find`, the only place that embeds flow-runner.js's path, so the
-// file itself never has to exist on disk for `flows compile` to run.
-function pathsForOutputDir(outputDir) {
-  return {
-    dataDir: outputDir,
-    flowsDir: path.join(outputDir, 'flows'),
-    flowsPendingDir: path.join(outputDir, 'flows-pending'),
-    flowsStateFile: path.join(outputDir, 'flows-state.json'),
-    macrosDir: path.join(outputDir, 'macros'),
-    rejectedFlowsFile: path.join(outputDir, 'rejected-flows.md'),
-    sitesDir: path.join(outputDir, 'sites'),
-  };
-}
-
-// Wraps startMcpClient with an idempotent close registered via t.after as a
-// safety net -- identical contract to flows.test.mjs's own helper: this
-// test closes its one session explicitly and early (sweep defers
-// compilation until `meta.endedAt` exists), but a thrown assertion between
-// session creation and that explicit close must still not leak the spawned
-// runtime process.
-async function tracedSession(t, outputDir) {
-  const session = await startMcpClient({ outputDir, extraArgs: ['--save-trace'] });
-  let closed = false;
-  const close = async () => {
-    if (closed) return;
-    closed = true;
-    await session.close();
-  };
-  t.after(close);
-  return { callTool: session.callTool, metrics: session.metrics, close };
-}
+// `pathsForOutputDir`/`tracedSession` are two-thirds of the shared e2e
+// flow-fixture trio (Task 10, WS3b) -- see
+// tests/e2e/helpers/flow-fixtures.mjs's own doc comment for the shape/
+// rationale; this file, flows.test.mjs, and healing.test.mjs all import
+// the same implementation now, no per-file copies. `installFlowRunner`
+// (the trio's third member) is unused here: this test never calls `flows
+// find`, the only place that embeds flow-runner.js's path, so the file
+// itself never has to exist on disk for `flows compile` to run.
 
 function fakeStdin(text) {
   return async () => text;

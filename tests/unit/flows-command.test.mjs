@@ -7,6 +7,7 @@ import path from 'node:path';
 import test from 'node:test';
 
 import { flows } from '../../lib/commands/flows.mjs';
+import { MAX_EMBED_TEXT_CHARS, MAX_EMBED_TEXTS } from '../../lib/flows/encoder.mjs';
 import { matchFlows } from '../../lib/flows/match.mjs';
 import { resolvePaths } from '../../lib/core/paths.mjs';
 
@@ -396,6 +397,288 @@ test('find caps embedded quirks at 10, dropping the rest with a warning naming t
   }]);
 });
 
+// --- find: WS3b Task 7 rerank stage ---
+
+test('find never reranks by default (no config, no env key): the lexical match order is unchanged', async () => {
+  const paths = { flowsDir: '/h/flows', flowsPendingDir: '/h/pending', macrosDir: '/h/macros' };
+  const flowA = validFlow({ name: 'flow-a' });
+  const flowB = validFlow({ name: 'flow-b' });
+  const matches = [
+    { flow: flowA, score: 100, runnable: true, reasons: [], urlPatternHit: false, nameTokenHit: false },
+    { flow: flowB, score: 90, runnable: true, reasons: [], urlPatternHit: false, nameTokenHit: false },
+  ];
+
+  const report = await flows(
+    {
+      sub: 'find', intent: 'find something', origin: null, url: null, json: true,
+    },
+    {
+      paths,
+      sweep: async () => ({}),
+      listFlowFiles: async (dir) => (dir === paths.flowsDir ? ['flow-a.flow.json', 'flow-b.flow.json'] : []),
+      readFlowFile: async (filePath) => (
+        filePath.endsWith('flow-a.flow.json') ? JSON.stringify(flowA) : JSON.stringify(flowB)
+      ),
+      matchFlows: () => matches,
+      readSite: noQuirks,
+      // Deliberately no createEncoder/env/loadConfig override -- the real
+      // defaults resolve to an inactive lexical encoder (no configFile on
+      // this fake `paths`, no config.encoder override), which is exactly
+      // the case this test pins.
+    },
+  );
+
+  assert.deepEqual(report.candidates.map((candidate) => candidate.name), ['flow-a', 'flow-b']);
+  assert.deepEqual(report.warnings, []);
+});
+
+test(
+  'find rerank stage reorders candidates WITHIN a band only, never crossing an exact-first band boundary',
+  async () => {
+    const paths = { flowsDir: '/h/flows', flowsPendingDir: '/h/pending', macrosDir: '/h/macros' };
+    const flowA = validFlow({ name: 'flow-a' });
+    const flowB = validFlow({ name: 'flow-b' });
+    const flowC = validFlow({ name: 'flow-c' });
+    const flowD = validFlow({ name: 'flow-d' });
+
+    // Band X (exact-first: both flags true) contains A then B by lexical
+    // score; band Y (neither flag) contains C then D. The stubbed encoder
+    // below scores B > A and D > C -- the OPPOSITE of lexical order within
+    // each band -- so a passing assertion on [B, A, D, C] proves the
+    // reorder happened WITHIN each band while band X stayed wholly ahead
+    // of band Y (never interleaved).
+    const matches = [
+      {
+        flow: flowA, score: 300, runnable: true, reasons: [], urlPatternHit: true, nameTokenHit: true,
+      },
+      {
+        flow: flowB, score: 290, runnable: true, reasons: [], urlPatternHit: true, nameTokenHit: true,
+      },
+      {
+        flow: flowC, score: 50, runnable: true, reasons: [], urlPatternHit: false, nameTokenHit: false,
+      },
+      {
+        flow: flowD, score: 40, runnable: true, reasons: [], urlPatternHit: false, nameTokenHit: false,
+      },
+    ];
+
+    let capturedTexts = null;
+    const encoder = {
+      active: true,
+      kind: 'voyage',
+      embed: async (texts) => {
+        capturedTexts = texts;
+        // [intent, A, B, C, D] -- 1-dimensional vectors are enough since
+        // cosineSimilarity is a plain dot product; the encoder itself is
+        // fully stubbed here (encoder.mjs's own request-shape/normalization
+        // contract is covered separately in flows-encoder.test.mjs).
+        return [[1], [0.1], [0.9], [0.05], [0.8]];
+      },
+    };
+
+    const flowFiles = [flowA, flowB, flowC, flowD];
+    const report = await flows(
+      {
+        sub: 'find', intent: 'find something', origin: null, url: null, json: true,
+      },
+      {
+        paths,
+        sweep: async () => ({}),
+        listFlowFiles: async (dir) => (
+          dir === paths.flowsDir ? flowFiles.map((flow) => `${flow.name}.flow.json`) : []
+        ),
+        readFlowFile: async (filePath) => {
+          const found = flowFiles.find((flow) => filePath.endsWith(`${flow.name}.flow.json`));
+          return JSON.stringify(found);
+        },
+        matchFlows: () => matches,
+        readSite: noQuirks,
+        createEncoder: () => encoder,
+        env: { FAST_BROWSER_VOYAGE_API_KEY: 'sk-test' },
+        loadConfig: async () => ({ encoder: 'voyage' }),
+      },
+    );
+
+    assert.deepEqual(
+      report.candidates.map((candidate) => candidate.name),
+      ['flow-b', 'flow-a', 'flow-d', 'flow-c'],
+    );
+    assert.deepEqual(report.warnings, []);
+    assert.equal(capturedTexts.length, 5);
+    assert.equal(capturedTexts[0], 'find something');
+  },
+);
+
+test('find rerank never calls embed with fewer than 2 candidates', async () => {
+  const paths = { flowsDir: '/h/flows', flowsPendingDir: '/h/pending', macrosDir: '/h/macros' };
+  const flow = validFlow({ name: 'log-in' });
+  let embedCalled = false;
+  const encoder = {
+    active: true,
+    kind: 'voyage',
+    embed: async () => { embedCalled = true; return []; },
+  };
+
+  await flows(
+    {
+      sub: 'find', intent: 'log in', origin: null, url: null, json: true,
+    },
+    {
+      paths,
+      sweep: async () => ({}),
+      listFlowFiles: async (dir) => (dir === paths.flowsDir ? ['log-in.flow.json'] : []),
+      readFlowFile: async () => JSON.stringify(flow),
+      matchFlows: () => [{
+        flow, score: 100, runnable: true, reasons: [], urlPatternHit: false, nameTokenHit: true,
+      }],
+      readSite: noQuirks,
+      createEncoder: () => encoder,
+      env: { FAST_BROWSER_VOYAGE_API_KEY: 'sk-test' },
+      loadConfig: async () => ({ encoder: 'voyage' }),
+    },
+  );
+
+  assert.equal(embedCalled, false, 'a single candidate must never trigger an embed call');
+});
+
+test('find rerank never calls embed with an empty intent, even with 2+ candidates', async () => {
+  const paths = { flowsDir: '/h/flows', flowsPendingDir: '/h/pending', macrosDir: '/h/macros' };
+  const flowA = validFlow({ name: 'flow-a' });
+  const flowB = validFlow({ name: 'flow-b' });
+  let embedCalled = false;
+  const encoder = {
+    active: true,
+    kind: 'voyage',
+    embed: async () => { embedCalled = true; return []; },
+  };
+
+  await flows(
+    {
+      sub: 'find', intent: '', origin: null, url: null, json: true,
+    },
+    {
+      paths,
+      sweep: async () => ({}),
+      listFlowFiles: async (dir) => (dir === paths.flowsDir ? ['flow-a.flow.json', 'flow-b.flow.json'] : []),
+      readFlowFile: async (filePath) => (
+        filePath.endsWith('flow-a.flow.json') ? JSON.stringify(flowA) : JSON.stringify(flowB)
+      ),
+      matchFlows: () => [
+        {
+          flow: flowA, score: 100, runnable: true, reasons: [], urlPatternHit: false, nameTokenHit: false,
+        },
+        {
+          flow: flowB, score: 90, runnable: true, reasons: [], urlPatternHit: false, nameTokenHit: false,
+        },
+      ],
+      readSite: noQuirks,
+      createEncoder: () => encoder,
+      env: { FAST_BROWSER_VOYAGE_API_KEY: 'sk-test' },
+      loadConfig: async () => ({ encoder: 'voyage' }),
+    },
+  );
+
+  assert.equal(embedCalled, false, 'an empty intent must never trigger an embed call');
+});
+
+test(
+  'find rerank degrades to lexical order and reports exactly one encoder-degraded warning when embed fails',
+  async () => {
+    const paths = { flowsDir: '/h/flows', flowsPendingDir: '/h/pending', macrosDir: '/h/macros' };
+    const flowA = validFlow({ name: 'flow-a' });
+    const flowB = validFlow({ name: 'flow-b' });
+    const matches = [
+      {
+        flow: flowA, score: 100, runnable: true, reasons: [], urlPatternHit: false, nameTokenHit: false,
+      },
+      {
+        flow: flowB, score: 90, runnable: true, reasons: [], urlPatternHit: false, nameTokenHit: false,
+      },
+    ];
+    const encoder = {
+      active: true,
+      kind: 'voyage',
+      embed: async () => { throw new Error('voyage embeddings request failed: HTTP 500'); },
+    };
+
+    const report = await flows(
+      {
+        sub: 'find', intent: 'find something', origin: null, url: null, json: true,
+      },
+      {
+        paths,
+        sweep: async () => ({}),
+        listFlowFiles: async (dir) => (dir === paths.flowsDir ? ['flow-a.flow.json', 'flow-b.flow.json'] : []),
+        readFlowFile: async (filePath) => (
+          filePath.endsWith('flow-a.flow.json') ? JSON.stringify(flowA) : JSON.stringify(flowB)
+        ),
+        matchFlows: () => matches,
+        readSite: noQuirks,
+        createEncoder: () => encoder,
+        env: { FAST_BROWSER_VOYAGE_API_KEY: 'sk-test' },
+        loadConfig: async () => ({ encoder: 'voyage' }),
+      },
+    );
+
+    // Lexical order preserved -- the rerank's own failure never reorders,
+    // never drops, never touches runnable/reasons.
+    assert.deepEqual(report.candidates.map((candidate) => candidate.name), ['flow-a', 'flow-b']);
+    assert.deepEqual(report.warnings, [
+      { kind: 'encoder-degraded', reason: 'voyage embeddings request failed: HTTP 500' },
+    ]);
+  },
+);
+
+test(
+  'find rerank clamps the embed batch at this call site: MAX_EMBED_TEXTS texts, each <= MAX_EMBED_TEXT_CHARS',
+  async () => {
+    const paths = { flowsDir: '/h/flows', flowsPendingDir: '/h/pending', macrosDir: '/h/macros' };
+    const manyFlows = Array.from(
+      { length: 40 },
+      (_, index) => validFlow({ name: `flow-${index}`, description: 'd'.repeat(3000) }),
+    );
+    const matches = manyFlows.map((flow, index) => ({
+      flow, score: 1000 - index, runnable: true, reasons: [], urlPatternHit: false, nameTokenHit: false,
+    }));
+    let capturedTexts = null;
+    const encoder = {
+      active: true,
+      kind: 'voyage',
+      embed: async (texts) => {
+        capturedTexts = texts;
+        return texts.map(() => [1]);
+      },
+    };
+
+    await flows(
+      {
+        sub: 'find', intent: 'x'.repeat(5000), origin: null, url: null, json: true,
+      },
+      {
+        paths,
+        sweep: async () => ({}),
+        listFlowFiles: async (dir) => (
+          dir === paths.flowsDir ? manyFlows.map((flow) => `${flow.name}.flow.json`) : []
+        ),
+        readFlowFile: async (filePath) => {
+          const found = manyFlows.find((flow) => filePath.endsWith(`${flow.name}.flow.json`));
+          return JSON.stringify(found);
+        },
+        matchFlows: () => matches,
+        readSite: noQuirks,
+        createEncoder: () => encoder,
+        env: { FAST_BROWSER_VOYAGE_API_KEY: 'sk-test' },
+        loadConfig: async () => ({ encoder: 'voyage' }),
+      },
+    );
+
+    assert.equal(capturedTexts.length, MAX_EMBED_TEXTS);
+    for (const text of capturedTexts) {
+      assert.ok(text.length <= MAX_EMBED_TEXT_CHARS, `text length ${text.length} exceeds the clamp`);
+    }
+  },
+);
+
 // --- list ---
 
 // WS3a Task 7: `lastHealed` is `flow.provenance.lastHealed` (artifact.mjs's
@@ -721,51 +1004,64 @@ test('approve refuses when pending content changes but the stored id field is le
   assert.deepEqual(moved, []);
 });
 
-test('approve strips control characters from arg names before printing them', async () => {
+// MAT-149: `parseFlow`'s `parseArgs` now rejects any arg key outside
+// `/^[A-Za-z_][A-Za-z0-9_]*$/` -- a raw ESC byte among them -- with a loud
+// parse error, before this module ever sees the flow. The scenario this
+// test used to prove safe by STRIPPING the escape byte before printing it
+// is now impossible by construction: `readPendingFlow` (which calls
+// `parseFlow`) refuses the whole file first, and `approve` never reaches
+// its own print calls at all. `stripControlChars` on `argNames` (flows.mjs)
+// stays in place as defense-in-depth -- see `commands.test.mjs` for its
+// direct unit coverage -- but this specific injection vector is now closed
+// one layer earlier, which is what this test pins.
+test('approve refuses a flow whose arg name is not a valid identifier (a raw ESC byte among them) before ever printing anything', async () => {
   const pendingFlow = validFlow({
     name: 'log-in',
     args: { 'user\x1b[31mname': { type: 'string', required: true } },
   });
   const prints = [];
 
-  await flows(
-    { sub: 'approve', name: 'log-in', json: false },
-    {
-      paths: { flowsPendingDir: '/h/pending', flowsDir: '/h/flows', dataDir: '/h' },
-      interactive: true,
-      readFlowFile: async (filePath) => {
-        if (filePath === '/h/flows/log-in.flow.json') {
-          const error = new Error('nope');
-          error.code = 'ENOENT';
-          throw error;
-        }
-        return JSON.stringify(pendingFlow);
+  await assert.rejects(
+    () => flows(
+      { sub: 'approve', name: 'log-in', json: false },
+      {
+        paths: { flowsPendingDir: '/h/pending', flowsDir: '/h/flows', dataDir: '/h' },
+        interactive: true,
+        readFlowFile: async (filePath) => {
+          if (filePath === '/h/flows/log-in.flow.json') {
+            const error = new Error('nope');
+            error.code = 'ENOENT';
+            throw error;
+          }
+          return JSON.stringify(pendingFlow);
+        },
+        pathExists: async () => false,
+        print: (line) => prints.push(line),
+        confirmApprove: async () => true,
+        moveFlow: async () => {},
       },
-      pathExists: async () => false,
-      print: (line) => prints.push(line),
-      confirmApprove: async () => true,
-      moveFlow: async () => {},
-    },
+    ),
+    (error) => error.name === 'LifecycleError' && /invalid and cannot be approved/.test(error.message),
   );
-
-  // Only the raw ESC byte (0x1b) is stripped -- the printable characters
-  // that followed it in the crafted key ("[31m") are left as inert literal
-  // text, no longer capable of being interpreted as a terminal escape once
-  // the ESC byte that introduces it is gone.
-  const joined = prints.join('\n');
-  assert.doesNotMatch(joined, /\x1b/);
-  assert.match(joined, /Args: user\[31mname/);
+  assert.deepEqual(prints, []);
 });
 
 // Fix round 2, item 4: the denylist grew past raw C0 controls to cover
 // line-breaking (NEL/LS/PS), invisible (ZWSP), and bidi
 // embedding/override/isolate controls (RLO can visually REVERSE text) --
-// while still leaving ordinary Unicode (NBSP, emoji, CJK) untouched. Every
-// non-ASCII character below is a \uXXXX/\u{XXXX} escape, deliberately,
-// never a literal: several ARE the exact invisible/reordering bytes under
-// test, so writing them literally would make this file unreviewable in a
-// diff (and at the mercy of any tool that "helpfully" normalizes them).
-test('approve strips the extended control/bidi character set from arg names, preserving emoji/CJK/NBSP', async () => {
+// while still leaving ordinary Unicode (NBSP, emoji, CJK) untouched.
+//
+// MAT-149 supersedes this scenario the same way as the ESC-byte test just
+// above: `parseArgs` now requires every arg key to match
+// `/^[A-Za-z_][A-Za-z0-9_]*$/`, so NBSP/ZWSP/RLO/emoji/CJK -- none of them
+// ASCII letters, digits, or underscore -- can never survive into an arg
+// key `readPendingFlow` accepts. The file is refused at parse, loudly,
+// before any printing happens; the "preserve the harmless characters,
+// strip only the dangerous ones" behavior this test used to pin no longer
+// has a reachable arg-name code path to exercise (it still applies to
+// every OTHER printed field `stripControlChars` guards, per
+// `commands.test.mjs` and the other call sites in lib/cli/main.mjs).
+test('approve refuses a flow whose arg name carries invisible/bidi characters (NBSP/ZWSP/RLO/emoji/CJK) before ever printing anything', async () => {
   const trickyName = 'user\u00a0\u200b\u202ename\u00a0\u{1F600}\u6f22';
   const pendingFlow = validFlow({
     name: 'log-in',
@@ -773,36 +1069,29 @@ test('approve strips the extended control/bidi character set from arg names, pre
   });
   const prints = [];
 
-  await flows(
-    { sub: 'approve', name: 'log-in', json: false },
-    {
-      paths: { flowsPendingDir: '/h/pending', flowsDir: '/h/flows', dataDir: '/h' },
-      interactive: true,
-      readFlowFile: async (filePath) => {
-        if (filePath === '/h/flows/log-in.flow.json') {
-          const error = new Error('nope');
-          error.code = 'ENOENT';
-          throw error;
-        }
-        return JSON.stringify(pendingFlow);
+  await assert.rejects(
+    () => flows(
+      { sub: 'approve', name: 'log-in', json: false },
+      {
+        paths: { flowsPendingDir: '/h/pending', flowsDir: '/h/flows', dataDir: '/h' },
+        interactive: true,
+        readFlowFile: async (filePath) => {
+          if (filePath === '/h/flows/log-in.flow.json') {
+            const error = new Error('nope');
+            error.code = 'ENOENT';
+            throw error;
+          }
+          return JSON.stringify(pendingFlow);
+        },
+        pathExists: async () => false,
+        print: (line) => prints.push(line),
+        confirmApprove: async () => true,
+        moveFlow: async () => {},
       },
-      pathExists: async () => false,
-      print: (line) => prints.push(line),
-      confirmApprove: async () => true,
-      moveFlow: async () => {},
-    },
+    ),
+    (error) => error.name === 'LifecycleError' && /invalid and cannot be approved/.test(error.message),
   );
-
-  const joined = prints.join('\n');
-  const extendedControlPattern = new RegExp(
-    '[\\x00-\\x08\\x0b-\\x1f\\x7f\\u0085\\u2028\\u2029\\u200b\\u202a-\\u202e\\u2066-\\u2069]',
-  );
-  assert.doesNotMatch(joined, extendedControlPattern);
-  assert.match(joined, /Args: user/);
-  assert.match(joined, /name/);
-  assert.match(joined, /\u00a0/);
-  assert.match(joined, /\u{1F600}/u);
-  assert.match(joined, /\u6f22/);
+  assert.deepEqual(prints, []);
 });
 
 // Fix round 2, item 2: a reviewer reproduced a scenario where the ORIGINAL

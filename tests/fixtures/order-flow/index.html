@@ -15,11 +15,14 @@
       const app = document.querySelector('#app');
       const state = { customer: '', plan: 'starter', seats: 1 };
 
-      // WS3a Task 9 (healing e2e, tests/e2e/healing.test.mjs) -- only TWO
-      // behaviors in this whole script are variant-conditional; every other
-      // element (id, tag, text) is byte-identical across every variant, so
-      // tests/e2e/sites.test.mjs's pinned locator-kind assertions (mined
-      // from a 'base'-variant recording) are untouched by this file.
+      // WS3a Task 9 / WS3b Task 10 (healing e2e, tests/e2e/healing.test.mjs)
+      // -- only a handful of behaviors in this whole script are
+      // variant-conditional; every element the 'base'-variant recording
+      // script (flows.test.mjs/sites.test.mjs's own script, which never
+      // varies) actually interacts with is byte-identical across every
+      // variant, so tests/e2e/sites.test.mjs's pinned locator-kind
+      // assertions (mined from that recording) are untouched by any of this
+      // file's variant branches, including the two WS3b Task 10 adds below.
       //
       // 'overlay': a consent banner covers the page and the underlying
       // #app is held `visibility: hidden` until `#consent-accept` is
@@ -33,6 +36,25 @@
         document.querySelector('#consent-accept').addEventListener('click', () => {
           document.querySelector('#consent-overlay').remove();
           app.style.visibility = 'visible';
+        });
+      }
+
+      // WS3b Task 10 (tests/fixtures/order-flow/server.mjs's own doc
+      // comment has the full write-up): unlike 'overlay' above, #app's own
+      // visibility/display is never touched here -- #intercept-overlay
+      // alone (a separate, explicitly z-indexed element) is what blocks
+      // the click, and removing it is the whole dismissal.
+      // `window.__interceptDismissClicks__` is read back via
+      // `browser_evaluate` at the end of tests/e2e/healing.test.mjs's own
+      // interception leg -- direct, observable proof (not merely an
+      // inference from the runner's own "at most one quirk attempt per
+      // step" doc comment) that the quirk fired exactly once, never
+      // retried.
+      if (VARIANT === 'intercept') {
+        window.__interceptDismissClicks__ = 0;
+        document.querySelector('#intercept-dismiss').addEventListener('click', () => {
+          window.__interceptDismissClicks__ += 1;
+          document.querySelector('#intercept-overlay').remove();
         });
       }
 
@@ -85,11 +107,62 @@
       // against the target's recorded NAME, and this is what keeps that
       // score high despite the tag/id change. See
       // tests/e2e/healing.test.mjs for the full write-up.
+      // 'role-drifted' (WS3b Task 10): the ONE element whose markup itself
+      // changes shape for the role+text heal leg -- every other element,
+      // INCLUDING "Place order", stays exactly 'base' shape, mirroring how
+      // 'drifted' above isolates ITS OWN one-element change. The base/
+      // every-other-variant branch is a plain native button with an id (no
+      // `data-testid`, no `role`/`aria-label` attribute -- a heal here can
+      // only ever come from role+text).
+      //
+      // Why REWORDING, not hiding, is what makes the recorded locator walk
+      // miss: flow-runner.js's `candidateLocator` resolves a step's 'role'
+      // kind candidate via `page.getByRole(target.role, {name:
+      // target.name})` -- a query for role+ACCESSIBLE-NAME, evaluated fresh
+      // against the LIVE page every time, completely independent of the
+      // literal recorded selector string or the target element's identity/
+      // position. That query is IDENTICAL on the original (pre-heal) replay
+      // and the healed replay (the healed alternate is also role+name-
+      // based, synthesized as `internal:role=button[name="<observed
+      // text>"i]` -- see heal.mjs's `synthesizeLocator`), so anything that
+      // makes role+accessible-name resolution genuinely, permanently fail
+      // (an explicit `role`/`aria-label` override, `aria-hidden`, a
+      // `display:none`/zero-size box) makes BOTH replays fail identically
+      // -- there is no page-state difference between the two calls for a
+      // static variant to exploit (confirmed empirically before settling on
+      // this approach: an `aria-hidden` version of this same idea defeats
+      // its own heal for exactly this reason). What actually creates the
+      // needed asymmetry is the SAME thing that makes the testid heal above
+      // work: the healed locator must query for something the ORIGINAL
+      // recording never had. Here, `id="confirm-order"` is dropped (the
+      // recorded css locator misses) AND the button's wording changes from
+      // "Confirm order" to "Confirm your order" -- inserting a word
+      // mid-string, not merely appending/prepending one, is what defeats
+      // `getByRole`'s own default substring+case-insensitive name matching
+      // (verified directly against the real runtime: "confirm order" is
+      // NOT a substring of "confirm your order", so a query for the
+      // ORIGINAL recorded name -- "Confirm order" -- misses; a fresh query
+      // for the CURRENT observed text -- "Confirm your order", exactly what
+      // `collectCandidates`'s raw `innerText` read at heal time recovers
+      // and `synthesizeLocator` embeds verbatim -- matches immediately).
+      // Both words survive as distinct, case-insensitive-alphanumeric
+      // tokens (heal.mjs's own `tokenize`/`jaccard`), so lexical ranking
+      // still scores this candidate well clear of `HEAL_MIN_SCORE`/
+      // `HEAL_MIN_MARGIN` against "Place order" as the only other
+      // candidate on this screen -- "role+text evidence survives" in the
+      // sense that matters (the heal fires from it, correctly, over the
+      // reworded text), even though the literal string is no longer
+      // byte-identical to the base recording's.
       function showReview() {
         app.innerHTML = `
           <h1>Review order</h1>
           <p>${state.customer} — ${state.plan} — ${state.seats}</p>
         `;
+        if (VARIANT === 'role-drifted') {
+          app.insertAdjacentHTML('beforeend', '<button type="button">Confirm your order</button>');
+        } else {
+          app.insertAdjacentHTML('beforeend', '<button type="button" id="confirm-order">Confirm order</button>');
+        }
         if (VARIANT === 'drifted') {
           app.insertAdjacentHTML('beforeend', '<a class="order-action" data-testid="submit-v2">Place order</a>');
           document.querySelector('.order-action').addEventListener('click', showComplete);

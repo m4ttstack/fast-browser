@@ -404,3 +404,43 @@ test('score is always a number and reasons is always an array', () => {
   assert.equal(typeof result[0].score, 'number');
   assert.ok(Array.isArray(result[0].reasons));
 });
+
+// --- band flags (WS3b Task 7): additive booleans find's rerank stage reads
+// to keep an encoder-backed reorder from ever crossing an exact-first
+// boundary. Pinned independently of `score` itself, since score also mixes
+// in the lexical layer. ---
+
+test('urlPatternHit/nameTokenHit are both true for a candidate that earns both exact-first layers', () => {
+  const flow = baseFlow({ name: 'place-order' });
+  const result = matchFlows({
+    flows: [entry(flow)],
+    origin: flow.origin,
+    url: `${flow.origin}/checkout/gold`,
+    intent: 'place order now',
+  });
+  assert.equal(result.length, 1);
+  assert.equal(result[0].urlPatternHit, true);
+  assert.equal(result[0].nameTokenHit, true);
+});
+
+test('urlPatternHit/nameTokenHit are both false for a lexical-only match', () => {
+  const flow = baseFlow({
+    name: 'unrelated-flow-name',
+    description: 'Renew a membership subscription plan today.',
+  });
+  const result = matchFlows({
+    flows: [entry(flow)],
+    intent: 'renew a membership subscription plan',
+  });
+  assert.equal(result.length, 1);
+  assert.equal(result[0].urlPatternHit, false);
+  assert.equal(result[0].nameTokenHit, false);
+});
+
+test('urlPatternHit and nameTokenHit are independent -- a name-token hit with no url given', () => {
+  const flow = baseFlow({ name: 'place-order' });
+  const result = matchFlows({ flows: [entry(flow)], intent: 'place order' });
+  assert.equal(result.length, 1);
+  assert.equal(result[0].urlPatternHit, false);
+  assert.equal(result[0].nameTokenHit, true);
+});

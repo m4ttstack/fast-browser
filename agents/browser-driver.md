@@ -27,8 +27,9 @@ concise caveat if recovery is not possible.
 When you manually dismiss a cookie banner or interrupt overlay, record it
 with `fast-browser sites quirk add <name> --origin <origin> --selector
 <css>` so future sessions know. That recording also feeds live interrupt
-recovery: a later flow replay tries the same click once per step, only
-after its full locator walk has missed.
+recovery: a later flow replay tries the same click once per step, either
+when the step's locator walk missed outright or when the step resolved
+cleanly but its own click was then blocked by an intercepting overlay.
 
 Fast Browser drives the real Chrome instance launched for its extension
 bridge. Do not claim access to arbitrary pre-existing Chrome windows, Incognito

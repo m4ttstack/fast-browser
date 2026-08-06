@@ -93,7 +93,15 @@ check (`ENOENT` or "outside allowed roots").
   quirk add`; running one during replay is permitted only as this
   interrupt-recovery dismissal, since the human already performed the same
   click once by hand when recording the quirk -- that prior, manual
-  dismissal is the consent basis for repeating it automatically here.
+  dismissal is the consent basis for repeating it automatically here. The
+  same rung also recovers a step whose ACT throws Playwright's own
+  pointer-interception timeout (an overlay that blocks the action without
+  hiding the target, so both locator passes above still succeed) under the
+  identical one-quirk-per-step budget and click-only quirk rule, this time
+  re-attempting only the step's own action against the already-resolved
+  target rather than re-walking locators; any other act failure, or a
+  second act failure after a dismissal, leaves the step's original act
+  error in the payload untouched.
   Absent or empty `quirks` disables this pass entirely. A post-action
   network-settle wait never fails an action that already completed. `wait`
   steps are capped at 5s, a post-action network-settle wait is capped at
@@ -153,7 +161,13 @@ check (`ENOENT` or "outside allowed roots").
   role, since the same evidence costs one round trip instead of up to
   eight), each entry `{ role, name, testid, text }` with every string
   clamped to 80 characters, capped at 12 entries, and further trimmed from
-  the end if needed so the WHOLE payload stays under 8KB. Collection is
+  the end if needed so the WHOLE payload stays under 8KB. `role` prefers the
+  element's own attribute; absent that (WS3b Task 5), it is derived from the
+  tag -- `button`; `a` only when it has `href`, as `link`; `select` as
+  `combobox`; `input` by its `type` (`checkbox`/`radio` as themselves,
+  `button`/`submit` as `button`, anything else as `textbox`) -- so a bare
+  `<button>`/`<a href>` still carries role evidence instead of collecting
+  text-only. Collection is
   fully try/caught: if it throws for any reason, the payload silently
   degrades to the pre-Task-2 shape and the original failure's `error` is
   never touched -- a host-side heal module (a later task) treats this as

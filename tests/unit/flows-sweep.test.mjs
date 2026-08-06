@@ -88,6 +88,18 @@ async function rewriteMeta(paths, epochMs, meta) {
   await writeFile(path.join(dir, 'meta.json'), JSON.stringify(meta));
 }
 
+// WS3b Task 2: the byte cursor a fully-caught-up sweep writes back is
+// exactly the session's actions.jsonl current byte length (every fixture
+// here writes complete, newline-terminated lines -- `jsonl()` above -- so
+// there is never a trailing partial line to exclude). Reading the real
+// file's size, rather than hand-computing/hardcoding it, keeps these
+// assertions honest against whatever `record()`/`traceTarget()` actually
+// serialize to.
+async function sessionByteLength(paths, epochMs) {
+  const { size } = await stat(path.join(paths.dataDir, `trace-${epochMs}`, 'actions.jsonl'));
+  return size;
+}
+
 async function listFlowFiles(dir) {
   try {
     return (await readdir(dir)).sort();
@@ -217,7 +229,12 @@ test('a fresh sweep compiles a completed session into flows landed in the correc
   assert.deepEqual(result.updated, []);
   assert.equal(result.replaysSeen, 0);
   assert.deepEqual(result.skippedBySession, {});
-  assert.deepEqual(result.cursor, { 'trace-1000': { lines: 4, provenanceLines: 4 } });
+  const bytes1000 = await sessionByteLength(paths, 1000);
+  assert.deepEqual(result.cursor, {
+    'trace-1000': {
+      lines: 4, provenanceLines: 4, bytes: bytes1000, provenanceBytes: bytes1000,
+    },
+  });
 
   assert.deepEqual(await listFlowFiles(paths.flowsDir), ['view-details.flow.json']);
   assert.deepEqual(await listFlowFiles(paths.flowsPendingDir), ['place-order.flow.json']);
@@ -289,7 +306,12 @@ test('a completed session that grows after its first sweep is reprocessed from i
       { reason: 'error-truncated', seqRange: [2, 2] },
     ],
   });
-  assert.deepEqual(first.cursor, { 'trace-3000': { lines: 2, provenanceLines: 2 } });
+  const bytesAfterFirst = await sessionByteLength(paths, 3000);
+  assert.deepEqual(first.cursor, {
+    'trace-3000': {
+      lines: 2, provenanceLines: 2, bytes: bytesAfterFirst, provenanceBytes: bytesAfterFirst,
+    },
+  });
 
   await appendRecords(paths, 3000, [
     record({
@@ -309,7 +331,12 @@ test('a completed session that grows after its first sweep is reprocessed from i
   // absorb a redundant nothing here, since records 1-2 never compiled a
   // flow at all -- but it WOULD re-surface both error-truncated skips).
   assert.deepEqual(second.skippedBySession, {});
-  assert.deepEqual(second.cursor, { 'trace-3000': { lines: 4, provenanceLines: 4 } });
+  const bytesAfterSecond = await sessionByteLength(paths, 3000);
+  assert.deepEqual(second.cursor, {
+    'trace-3000': {
+      lines: 4, provenanceLines: 4, bytes: bytesAfterSecond, provenanceBytes: bytesAfterSecond,
+    },
+  });
 
   assert.deepEqual(await listFlowFiles(paths.flowsDir), []);
   assert.deepEqual(await listFlowFiles(paths.flowsPendingDir), ['place-order.flow.json']);
@@ -347,7 +374,12 @@ test('a successful replay record increments successRuns and resets failStreak on
   assert.equal(second.replaysSeen, 1);
   assert.deepEqual(second.compiled, []); // never compiled into a js-step flow
   assert.deepEqual(second.updated, [{ name, successRuns: 1, failStreak: 0 }]);
-  assert.deepEqual(second.cursor, { 'trace-4000': { lines: 3, provenanceLines: 3 } });
+  const bytes4000 = await sessionByteLength(paths, 4000);
+  assert.deepEqual(second.cursor, {
+    'trace-4000': {
+      lines: 3, provenanceLines: 3, bytes: bytes4000, provenanceBytes: bytes4000,
+    },
+  });
 
   const updatedOnDisk = await readFlow(paths.flowsDir, 'view-details.flow.json');
   assert.equal(updatedOnDisk.provenance.successRuns, 1);
@@ -563,10 +595,22 @@ test('a corrupt flows-state.json is treated as empty and never throws; a fresh v
   const result = await sweep({ paths });
 
   assert.deepEqual(result.compiled, [{ name: 'view-details', tier: 'ready' }]);
-  assert.deepEqual(result.cursor, { 'trace-8000': { lines: 2, provenanceLines: 2 } });
+  const bytes8000 = await sessionByteLength(paths, 8000);
+  assert.deepEqual(result.cursor, {
+    'trace-8000': {
+      lines: 2, provenanceLines: 2, bytes: bytes8000, provenanceBytes: bytes8000,
+    },
+  });
 
   const onDisk = await readState(paths);
-  assert.deepEqual(onDisk, { schemaVersion: 1, processed: { 'trace-8000': { lines: 2, provenanceLines: 2 } } });
+  assert.deepEqual(onDisk, {
+    schemaVersion: 1,
+    processed: {
+      'trace-8000': {
+        lines: 2, provenanceLines: 2, bytes: bytes8000, provenanceBytes: bytes8000,
+      },
+    },
+  });
 });
 
 test('a flows-state.json with the wrong schemaVersion is treated as empty; a poisoned cursor for a REAL session does not survive the gate', async (t) => {
@@ -594,10 +638,19 @@ test('a flows-state.json with the wrong schemaVersion is treated as empty; a poi
 
   const result = await sweep({ paths });
   assert.deepEqual(result.compiled, [{ name: 'view-details', tier: 'ready' }]);
-  assert.deepEqual(result.cursor, { 'trace-8100': { lines: 2, provenanceLines: 2 } });
+  const bytes8100 = await sessionByteLength(paths, 8100);
+  assert.deepEqual(result.cursor, {
+    'trace-8100': {
+      lines: 2, provenanceLines: 2, bytes: bytes8100, provenanceBytes: bytes8100,
+    },
+  });
 
   const onDisk = await readState(paths);
-  assert.deepEqual(onDisk.processed, { 'trace-8100': { lines: 2, provenanceLines: 2 } });
+  assert.deepEqual(onDisk.processed, {
+    'trace-8100': {
+      lines: 2, provenanceLines: 2, bytes: bytes8100, provenanceBytes: bytes8100,
+    },
+  });
 });
 
 test('an old (pre-fix) one-cursor state entry upgrades cleanly: absent provenanceLines defaults to lines, no re-counted replay', async (t) => {
@@ -621,15 +674,26 @@ test('an old (pre-fix) one-cursor state entry upgrades cleanly: absent provenanc
 
   // Now hand-roll an old-shape state entry (as if written before this fix)
   // that only carries `lines`, at the same total the real sweep just
-  // reached -- overwriting the (already-correct) new-shape entry.
+  // reached -- overwriting the (already-correct) new-shape entry. No
+  // `bytes`/`provenanceBytes` at all -- the pre-WS3b-Task-2 shape.
   const state = await readState(paths);
   state.processed['trace-8200'] = { lines: 3 }; // no provenanceLines at all
   await writeFile(paths.flowsStateFile, JSON.stringify(state));
 
+  // WS3b Task 2: with no byte cursor to resume from, this sweep falls back
+  // to a full read from byte zero (exactly what every pre-Task-2 sweep
+  // always did) and backfills a fresh, correct `bytes`/`provenanceBytes`
+  // pair matching the session's actual current byte length -- never a
+  // guess, and never something that skips/loses content.
   const second = await sweep({ paths });
   assert.deepEqual(second.compiled, []);
   assert.deepEqual(second.updated, []); // NOT re-applied -- provenanceLines defaulted to lines (3), already caught up
-  assert.deepEqual(second.cursor, { 'trace-8200': { lines: 3, provenanceLines: 3 } });
+  const bytes8200 = await sessionByteLength(paths, 8200);
+  assert.deepEqual(second.cursor, {
+    'trace-8200': {
+      lines: 3, provenanceLines: 3, bytes: bytes8200, provenanceBytes: bytes8200,
+    },
+  });
 
   const onDisk = await readFlow(paths.flowsDir, 'view-details.flow.json');
   assert.equal(onDisk.provenance.successRuns, 1); // still just the one real application
@@ -648,10 +712,19 @@ test('a live session (no meta.endedAt) defers compilation entirely; it compiles 
     ],
   });
 
+  const bytes9000 = await sessionByteLength(paths, 9000); // constant -- nothing appended in this test
+
   const first = await sweep({ paths, now: clock });
   assert.deepEqual(first.compiled, []); // deferred -- not yet complete
   assert.equal(first.sessionsProcessed, 0); // nothing substantive happened (no compile, no replay)
-  assert.deepEqual(first.cursor, { 'trace-9000': { lines: 0, provenanceLines: 2, incomplete: true } });
+  // WS3b Task 2: `bytes` mirrors `lines` -- frozen at 0 while live, since
+  // the compile cursor never advances (compilation deferred); only
+  // `provenanceBytes` (mirroring `provenanceLines`) catches up.
+  assert.deepEqual(first.cursor, {
+    'trace-9000': {
+      lines: 0, provenanceLines: 2, bytes: 0, provenanceBytes: bytes9000, incomplete: true,
+    },
+  });
   assert.deepEqual(await listFlowFiles(paths.flowsDir), []);
   assert.deepEqual(await listFlowFiles(paths.flowsPendingDir), []);
 
@@ -659,7 +732,11 @@ test('a live session (no meta.endedAt) defers compilation entirely; it compiles 
   const second = await sweep({ paths, now: clock });
   assert.deepEqual(second.compiled, []);
   assert.equal(second.sessionsProcessed, 0);
-  assert.deepEqual(second.cursor, { 'trace-9000': { lines: 0, provenanceLines: 2, incomplete: true } });
+  assert.deepEqual(second.cursor, {
+    'trace-9000': {
+      lines: 0, provenanceLines: 2, bytes: 0, provenanceBytes: bytes9000, incomplete: true,
+    },
+  });
 
   // The session ends -- meta gains endedAt, still zero new lines beyond
   // what was already scanned for provenance. The WHOLE coherent file
@@ -667,7 +744,11 @@ test('a live session (no meta.endedAt) defers compilation entirely; it compiles 
   await rewriteMeta(paths, 9000, baseMeta());
   const third = await sweep({ paths, now: clock });
   assert.deepEqual(third.compiled, [{ name: 'view-details', tier: 'ready' }]);
-  assert.deepEqual(third.cursor, { 'trace-9000': { lines: 2, provenanceLines: 2 } });
+  assert.deepEqual(third.cursor, {
+    'trace-9000': {
+      lines: 2, provenanceLines: 2, bytes: bytes9000, provenanceBytes: bytes9000,
+    },
+  });
 
   const compiledFlow = await readFlow(paths.flowsDir, 'view-details.flow.json');
   // meta.endedAt now present -- wins over the injected clock (compile.mjs's
@@ -703,12 +784,16 @@ test('a replay record inside a still-live session updates the stored artifact im
     ],
   });
 
+  const bytes13000 = await sessionByteLength(paths, 13000); // constant -- nothing appended in this test
+
   const result = await sweep({ paths });
   assert.equal(result.replaysSeen, 1);
   assert.equal(result.sessionsProcessed, 1); // only the live session did anything this round
   assert.deepEqual(result.updated, [{ name, successRuns: 1, failStreak: 0 }]);
   assert.deepEqual(result.compiled, []); // the live session itself compiles nothing
-  assert.deepEqual(result.cursor['trace-13000'], { lines: 0, provenanceLines: 1, incomplete: true });
+  assert.deepEqual(result.cursor['trace-13000'], {
+    lines: 0, provenanceLines: 1, bytes: 0, provenanceBytes: bytes13000, incomplete: true,
+  });
 
   const updatedOnDisk = await readFlow(paths.flowsDir, 'view-details.flow.json');
   assert.equal(updatedOnDisk.provenance.successRuns, 1);
@@ -720,7 +805,9 @@ test('a replay record inside a still-live session updates the stored artifact im
   const after = await sweep({ paths });
   assert.deepEqual(after.compiled, []);
   assert.deepEqual(after.updated, []); // not re-applied
-  assert.deepEqual(after.cursor['trace-13000'], { lines: 1, provenanceLines: 1 });
+  assert.deepEqual(after.cursor['trace-13000'], {
+    lines: 1, provenanceLines: 1, bytes: bytes13000, provenanceBytes: bytes13000,
+  });
 });
 
 // --- F1: per-session state persistence survives a mid-sweep failure ---
@@ -800,8 +887,13 @@ test('a state entry for a trace dir that no longer exists is pruned from the per
       record({ seq: 2, targets: [traceTarget({ name: 'View details' })], mutating: false }),
     ],
   });
+  const bytes11000 = await sessionByteLength(paths, 11000);
   const first = await sweep({ paths });
-  assert.deepEqual(first.cursor, { 'trace-11000': { lines: 2, provenanceLines: 2 } });
+  assert.deepEqual(first.cursor, {
+    'trace-11000': {
+      lines: 2, provenanceLines: 2, bytes: bytes11000, provenanceBytes: bytes11000,
+    },
+  });
 
   // The session directory is gone (e.g. archived/cleaned up elsewhere).
   await rm(path.join(paths.dataDir, 'trace-11000'), { recursive: true, force: true });
@@ -840,7 +932,10 @@ test('a session whose actions.jsonl becomes unreadable is left completely untouc
   const second = await sweep({ paths });
   assert.deepEqual(second.updated, [{ name, successRuns: 1, failStreak: 0 }]);
   const cursorBeforeFault = second.cursor['trace-14000'];
-  assert.deepEqual(cursorBeforeFault, { lines: 3, provenanceLines: 3 });
+  const bytes14000 = await sessionByteLength(paths, 14000);
+  assert.deepEqual(cursorBeforeFault, {
+    lines: 3, provenanceLines: 3, bytes: bytes14000, provenanceBytes: bytes14000,
+  });
 
   const actionsFile = path.join(paths.dataDir, 'trace-14000', 'actions.jsonl');
   await chmod(actionsFile, 0o000);
@@ -909,7 +1004,10 @@ test('a session whose actions.jsonl vanishes (file deleted, dir still present) r
   const second = await sweep({ paths });
   assert.deepEqual(second.updated, [{ name, successRuns: 1, failStreak: 0 }]);
   const cursorBeforeVanish = second.cursor['trace-15000'];
-  assert.deepEqual(cursorBeforeVanish, { lines: 3, provenanceLines: 3 });
+  const bytes15000 = await sessionByteLength(paths, 15000);
+  assert.deepEqual(cursorBeforeVanish, {
+    lines: 3, provenanceLines: 3, bytes: bytes15000, provenanceBytes: bytes15000,
+  });
 
   // The file itself vanishes -- the session DIRECTORY (and its meta.json)
   // stays put, so this is not the F8 stale-directory-pruning case.
@@ -960,9 +1058,12 @@ test('a session whose actions.jsonl vanishes (file deleted, dir still present) r
       error: 'replay failed',
     }),
   ]);
+  const bytes15000After4 = await sessionByteLength(paths, 15000);
   const fifth = await sweep({ paths });
   assert.deepEqual(fifth.updated, [{ name, successRuns: 1, failStreak: 1 }]);
-  assert.deepEqual(fifth.cursor['trace-15000'], { lines: 4, provenanceLines: 4 });
+  assert.deepEqual(fifth.cursor['trace-15000'], {
+    lines: 4, provenanceLines: 4, bytes: bytes15000After4, provenanceBytes: bytes15000After4,
+  });
 });
 
 // --- site memory mining (WS2b plan, Task 4) ---
@@ -1093,7 +1194,12 @@ test('a sites store write failure is caught per-origin and reported in sites.err
   // Flows compile regardless -- a sites store fault never fails the flow
   // sweep.
   assert.deepEqual(result.compiled, [{ name: 'view-details', tier: 'ready' }]);
-  assert.deepEqual(result.cursor, { 'trace-24000': { lines: 2, provenanceLines: 2 } });
+  const bytes24000 = await sessionByteLength(paths, 24000);
+  assert.deepEqual(result.cursor, {
+    'trace-24000': {
+      lines: 2, provenanceLines: 2, bytes: bytes24000, provenanceBytes: bytes24000,
+    },
+  });
 });
 
 test('a multi-origin session mines both origins into their own dirs, aggregated into one sites report', async (t) => {
@@ -1315,6 +1421,67 @@ test('a failed replay with a heal-worthy payload heals the artifact: alternate a
   assert.deepEqual(await listFlowFiles(paths.flowsPendingDir), []); // heal never moves tiers
 });
 
+// WS3b Task 7: `sweep({ ranker })` is this module's own plain pass-through
+// down to every `proposeHeal` call it makes (see `applyReplayRecords`'s doc
+// comment) -- lib/commands/flows.mjs is what actually resolves
+// `config.encoder` into a real ranker in production; this test only proves
+// the forwarding itself, with a stub standing in for that resolved ranker.
+test('sweep forwards its configured ranker down to proposeHeal, overriding the lexical default', async (t) => {
+  const paths = await tempPaths(t);
+  await writeSession(paths, 32000, {
+    meta: baseMeta(),
+    records: [
+      record({ seq: 1, tool: 'browser_navigate', params: { url: 'https://shop.example/cart' } }),
+      record({ seq: 2, targets: [traceTarget({ name: 'View details' })], mutating: false }),
+    ],
+  });
+  const first = await sweep({ paths });
+  const [{ name }] = first.compiled;
+  const stored = await readFlow(paths.flowsDir, 'view-details.flow.json');
+
+  await appendRecords(paths, 32000, [
+    record({
+      seq: 3,
+      tool: 'browser_run_code_unsafe',
+      params: { filename: 'flow-runner.js', args: { flow: { id: stored.id, name } } },
+      // Candidate 1 (testid 'vd-btn') is what the LEXICAL scorer would pick
+      // -- full role/name token overlap with the target. The stub ranker
+      // below instead scores candidate 0 (testid 'wrong-btn') the winner,
+      // so a passing assertion on 'wrong-btn' below proves sweep actually
+      // threaded the ranker through rather than silently keeping lexical.
+      error: failurePayload(1, [
+        { role: 'button', name: 'Nothing alike', testid: 'wrong-btn', text: '' },
+        { role: 'button', name: 'View details', testid: 'vd-btn', text: 'View details' },
+      ]),
+    }),
+  ]);
+
+  // Fix round 1, Folded Minor 2: async, not sync -- the real production
+  // shape (`encoderRanker`'s returned function) is always async, so
+  // pinning this stub as async is what actually exercises the
+  // Promise-returning `proposeHeal` -> `await`ed `applyReplayRecords` path
+  // end to end through `sweep`, rather than only the synchronous branch a
+  // sync stub would take.
+  let rankerInvoked = false;
+  const ranker = async () => {
+    rankerInvoked = true;
+    return [{ index: 0, score: 1 }, { index: 1, score: 0 }];
+  };
+
+  const second = await sweep({ paths, ranker });
+  assert.equal(rankerInvoked, true, 'the injected ranker must have been called');
+  assert.deepEqual(second.healed, [{ name, stepIndex: 1, kind: 'testid' }]);
+
+  const healedFlow = await readFlow(paths.flowsDir, 'view-details.flow.json');
+  assert.deepEqual(
+    healedFlow.steps[1].target.locators,
+    [
+      ...stored.steps[1].target.locators,
+      { kind: 'testid', selector: 'internal:testid=[data-testid="wrong-btn"]' },
+    ],
+  );
+});
+
 test('a failed replay whose payload scores below the heal threshold leaves the artifact\'s steps/id untouched; failStreak still increments', async (t) => {
   const paths = await tempPaths(t);
   await writeSession(paths, 31000, {
@@ -1438,7 +1605,12 @@ test('a heal write failure is caught and reported in healErrors; the sweep still
   // The cursor still advances -- as if the heal attempt had not run at all
   // (mirrors the sites-mining containment posture: "the cursor still
   // advances, exactly as if mining had not run at all for that origin").
-  assert.deepEqual(result.cursor, { 'trace-33000': { lines: 3, provenanceLines: 3 } });
+  const bytes33000 = await sessionByteLength(paths, 33000);
+  assert.deepEqual(result.cursor, {
+    'trace-33000': {
+      lines: 3, provenanceLines: 3, bytes: bytes33000, provenanceBytes: bytes33000,
+    },
+  });
 
   const onDisk = await readFlow(paths.flowsDir, 'view-details.flow.json');
   assert.equal(onDisk.id, stored.id);
@@ -1488,7 +1660,22 @@ test('records A,B / replay / C,D compile into two segments, never one merged A-B
 // --- BINDING (Task 5 review): both obligations must appear in tests, not
 // just in the implementation ---
 
-test('a replay naming a flow by an id from before an earlier heal in this same sweep resolves to a superseded registry entry: the second heal is skipped, not misapplied, and the first heal survives', async (t) => {
+// WS3b Task 2 fold-in: this test used to pin WS3a's "skip, not misapplied"
+// response to a stale-flowId gate failure. That response over-corrected --
+// a stale `flow` reference only means the FIRST proposal was scored
+// against outdated content, not that the second replay's failure evidence
+// is unhealable. The fix re-proposes ONCE against the freshly-read
+// `current` flow before giving up (sweep.mjs's `applyReplayRecords` doc
+// comment, "WS3b Task 2 fold-in" note); here that retry legitimately heals
+// a SECOND, different locator onto the SAME step, since record 4's
+// candidate (`vd-btn-2`) is not what record 3 already healed in
+// (`vd-btn-1`). The registry-supersession mechanics this test exercises
+// (byId still resolving to the pre-heal entry, byName always current) are
+// unchanged -- only the outcome of what happens once the gate fails is
+// different, so this test still pins that machinery, just against its
+// corrected result. See the two dedicated re-propose tests below for the
+// "different step" and "idempotent skip" branches.
+test('a replay naming a flow by an id from before an earlier heal in this same sweep resolves to a superseded registry entry: the second heal re-proposes against the freshly healed flow and heals a second locator', async (t) => {
   const paths = await tempPaths(t);
   await writeSession(paths, 35000, {
     meta: baseMeta(),
@@ -1529,21 +1716,23 @@ test('a replay naming a flow by an id from before an earlier heal in this same s
 
   const result = await sweep({ paths });
   assert.equal(result.replaysSeen, 2);
-  // Exactly ONE heal applied -- the second was skipped by the flowId gate,
-  // never silently applied on top of stale (pre-heal-1) content.
-  assert.equal(result.healed.length, 1);
+  // BOTH heal: the second's stale-gate failure is re-proposed against the
+  // freshly healed `current` flow, and `vd-btn-2` is a genuinely new
+  // locator (not what record 3 already healed in), so it heals too.
+  assert.equal(result.healed.length, 2);
   assert.equal(result.healed[0].name, name);
+  assert.equal(result.healed[1].name, name);
   assert.deepEqual(result.healErrors, []);
-  // Both failures still counted -- a skipped heal is not an error, and the
-  // ordinary provenance update still lands for record 2.
+  // Both failures still counted.
   assert.deepEqual(result.updated, [{ name, successRuns: 0, failStreak: 2 }]);
 
   const onDisk = await readFlow(paths.flowsDir, 'view-details.flow.json');
-  // The first heal's locator survives -- record 2's write was based on the
+  // Both locators landed, in order -- record 2's write was based on the
   // FRESHEST known copy (resolved by name), never the stale `stored.id`
-  // snapshot, so nothing regressed.
-  assert.equal(onDisk.steps[1].target.locators.length, 2);
+  // snapshot, so the first heal's locator was never lost or regressed.
+  assert.equal(onDisk.steps[1].target.locators.length, 3);
   assert.equal(onDisk.steps[1].target.locators[1].selector, 'internal:testid=[data-testid="vd-btn-1"]');
+  assert.equal(onDisk.steps[1].target.locators[2].selector, 'internal:testid=[data-testid="vd-btn-2"]');
   assert.equal(onDisk.provenance.failStreak, 2);
   assert.equal(onDisk.id, flowId(onDisk));
 });
@@ -1723,4 +1912,365 @@ test('a name shared by both tiers: a replay resolved by id to the PENDING artifa
   assert.equal(pendingFinal.provenance.successRuns, 1);
   const readyFinal = await readFlow(paths.flowsDir, 'view-details.flow.json');
   assert.deepEqual(readyFinal, readyBefore); // still fully untouched
+});
+
+// --- WS3b Task 2: byte cursors ---
+
+// Observation mechanism (pinned here, per the task brief): a `JSON.parse`
+// counting wrapper. `node:fs/promises`'s named exports are frozen ESM
+// namespace bindings (cannot be monkey-patched from a test), and
+// `node:test`'s `mock.module` needs `--experimental-test-module-mocks`,
+// which this repo's `npm test`/`npm run test:unit` scripts don't pass and
+// which doesn't exist at all on Node 20 (this repo's stated floor) --
+// neither is available here. `JSON.parse` is a plain, writable global
+// property, unaffected by either constraint, and every trace line
+// sweep.mjs's byte-cursor path might re-parse goes through it exactly once
+// per line (trace-reader.mjs's `readTraceRecordsFrom`). Each fixture
+// record embeds a unique marker string (via its `params.url`/target
+// `name`, themselves plain fields JSON.stringify/JSON.parse round-trips
+// verbatim) so the wrapper can attribute each parse call to the specific
+// line it came from, filtering out incidental JSON.parse calls elsewhere
+// in the sweep pipeline (the state file, existing flow artifacts) whose
+// content never contains these markers -- with ONE exception the fixture
+// below deliberately avoids: a marker placed in a field compile.mjs COPIES
+// into the compiled flow (a target's `name`, a goto's url) would ALSO show
+// up when `loadArtifactRegistry` re-reads that flow file at the START of
+// sweep 2 (an unrelated, expected read on every sweep, not the trace-line
+// re-parse this test is pinning) -- so each marker instead rides a
+// dedicated `_testMarker` field on the record itself, a key
+// `readTraceRecordsFrom` happily preserves (unknown fields on an
+// otherwise-valid v1 record are never stripped) but `compileSession` never
+// reads or copies anywhere.
+test('a second sweep over an append-only session parses only the appended lines: a JSON.parse counting wrapper shows the already-consumed lines are never re-parsed', async (t) => {
+  const paths = await tempPaths(t);
+  const OLD_MARKER = 'ws3b-task2-old-marker-19f2';
+  const NEW_MARKER = 'ws3b-task2-new-marker-7ac4';
+  await writeSession(paths, 50000, {
+    meta: baseMeta(),
+    records: [
+      record({ seq: 1, tool: 'browser_navigate', params: { url: 'https://shop.example/cart' }, _testMarker: OLD_MARKER }),
+      record({
+        seq: 2, targets: [traceTarget({ name: 'View details' })], mutating: false, _testMarker: OLD_MARKER,
+      }),
+    ],
+  });
+
+  const originalParse = JSON.parse;
+  let parsedTexts = [];
+  JSON.parse = (text, ...rest) => {
+    if (typeof text === 'string') parsedTexts.push(text);
+    return originalParse(text, ...rest);
+  };
+  t.after(() => { JSON.parse = originalParse; });
+
+  const first = await sweep({ paths });
+  assert.equal(first.compiled.length, 1);
+  // Sanity on the harness itself: sweep 1 (a fresh session, no byte cursor
+  // yet) genuinely parsed the old lines at least once.
+  assert.ok(parsedTexts.some((text) => text.includes(OLD_MARKER)));
+
+  await appendRecords(paths, 50000, [
+    record({
+      seq: 3, tool: 'browser_navigate', params: { url: 'https://other.example/checkout' }, _testMarker: NEW_MARKER,
+    }),
+    record({
+      seq: 4, targets: [traceTarget({ name: 'Buy now' })], mutating: true, _testMarker: NEW_MARKER,
+    }),
+  ]);
+
+  parsedTexts = []; // only interested in what sweep 2 itself parses
+  const second = await sweep({ paths });
+  assert.equal(second.compiled.length, 1); // the newly appended segment compiles
+
+  const oldMarkerReparses = parsedTexts.filter((text) => text.includes(OLD_MARKER));
+  const newMarkerParses = parsedTexts.filter((text) => text.includes(NEW_MARKER));
+  // The byte-cursor optimization: sweep 2 never hands the already-consumed
+  // lines back to JSON.parse at all.
+  assert.deepEqual(oldMarkerReparses, []);
+  // Each of the two genuinely new lines is parsed exactly once.
+  assert.equal(newMarkerParses.length, 2);
+});
+
+test('a corrupted byte cursor (bytes greater than the file\'s actual size) falls back to a full read and loses nothing', async (t) => {
+  const paths = await tempPaths(t);
+  await writeSession(paths, 51000, {
+    meta: baseMeta(),
+    records: [
+      record({ seq: 1, tool: 'browser_navigate', params: { url: 'https://shop.example/cart' } }),
+      record({ seq: 2, targets: [traceTarget({ name: 'View details' })], mutating: false }),
+    ],
+  });
+  const first = await sweep({ paths });
+  assert.deepEqual(first.compiled, [{ name: 'view-details', tier: 'ready' }]);
+
+  // Hand-corrupt the byte cursor to a value well past the file's actual
+  // size -- e.g. a stale value left over from a since-truncated/replaced
+  // file. Trusting it would resume `readTraceRecordsFrom` past EOF, which
+  // silently reports "nothing new" (`Buffer#indexOf` past the buffer's
+  // length just returns -1) and would permanently lose the record appended
+  // below.
+  const state = await readState(paths);
+  state.processed['trace-51000'].bytes = 999999;
+  state.processed['trace-51000'].provenanceBytes = 999999;
+  await writeFile(paths.flowsStateFile, JSON.stringify(state));
+
+  await appendRecords(paths, 51000, [
+    record({ seq: 3, tool: 'browser_navigate', params: { url: 'https://shop.example/other' } }),
+    record({ seq: 4, targets: [traceTarget({ name: 'Buy now' })], mutating: true }),
+  ]);
+
+  const second = await sweep({ paths });
+  assert.deepEqual(second.compiled, [{ name: 'buy-now', tier: 'pending' }]);
+  const bytes51000 = await sessionByteLength(paths, 51000);
+  assert.deepEqual(second.cursor, {
+    'trace-51000': {
+      lines: 4, provenanceLines: 4, bytes: bytes51000, provenanceBytes: bytes51000,
+    },
+  });
+});
+
+// Reviewer-reproduced regression (review round 1, Critical): an old-format
+// entry (no bytes/provenanceBytes at all) that then hits a sweep with no
+// trustworthy byte value to report -- here, `actions.jsonl` vanishing --
+// used to get `bytes: 0`/`provenanceBytes: 0` written back alongside its
+// real, nonzero `lines`/`provenanceLines`. That poisoned pair still passed
+// `byteCursorsSane` (which only checks `bytes <= provenanceBytes`, never
+// bytes-against-lines), so the NEXT sweep -- the file restored, byte-
+// identical to before -- resumed from byte 0 while still treating the
+// result as a from-`previousLines` delta: every already-counted record got
+// read and counted again (`lines` inflating past its true total, a
+// replay's `successRuns` incrementing a second time). The fix
+// (`resolveNextByteCursor`) omits the byte key entirely when there is
+// nothing trustworthy to write, which correctly fails `byteCursorsSane`
+// next time and forces a full read that backfills cleanly once the session
+// actually has new content to report.
+test('an old-format entry whose actions.jsonl vanishes then is restored byte-identically does not inflate lines or double-count a replay (review round 1 regression)', async (t) => {
+  const paths = await tempPaths(t);
+  const sessionRecords = [
+    record({ seq: 1, tool: 'browser_navigate', params: { url: 'https://shop.example/cart' } }),
+    record({ seq: 2, targets: [traceTarget({ name: 'View details' })], mutating: false }),
+    record({
+      seq: 3,
+      tool: 'browser_run_code_unsafe',
+      params: { filename: 'flow-runner.js', args: { flow: { name: 'view-details' } } },
+    }),
+  ];
+  await writeSession(paths, 55000, { meta: baseMeta(), records: sessionRecords });
+
+  const setup = await sweep({ paths }); // compiles the flow + applies the one replay
+  assert.deepEqual(setup.updated, [{ name: 'view-details', successRuns: 1, failStreak: 0 }]);
+
+  // Downgrade the just-written new-format entry to the OLD (pre-Task-2)
+  // shape -- no bytes/provenanceBytes at all -- simulating state carried
+  // forward from before this optimization existed.
+  const state = await readState(paths);
+  state.processed['trace-55000'] = { lines: 3, provenanceLines: 3 };
+  await writeFile(paths.flowsStateFile, JSON.stringify(state));
+
+  // The file vanishes (dir stays put) -- the sweep that observes this has
+  // no new content and no prior byte value to carry forward.
+  await unlink(path.join(paths.dataDir, 'trace-55000', 'actions.jsonl'));
+  const vanished = await sweep({ paths });
+  assert.deepEqual(vanished.updated, []); // nothing new -- not yet the bug's trigger point
+  assert.deepEqual(vanished.cursor['trace-55000'], { lines: 3, provenanceLines: 3 }); // still old-shaped: no poisoned bytes
+
+  // Restored with EXACTLY its prior content (byte-identical) -- the bug's
+  // trigger: a buggy `bytes: 0` cursor would resume from byte zero here and
+  // treat all 3 already-counted records as new.
+  await writeFile(
+    path.join(paths.dataDir, 'trace-55000', 'actions.jsonl'),
+    jsonl(sessionRecords),
+  );
+  const restored = await sweep({ paths });
+  assert.deepEqual(restored.compiled, []); // no fresh compile duplicate
+  assert.deepEqual(restored.updated, []); // NOT re-applied -- the successful replay is not re-counted
+  // NOT inflated to 6 -- the byte-identical restore reads as a genuine
+  // full-file re-parse whose 3 records were already fully accounted for
+  // (the safe fallback path was taken throughout; no byte cursor was ever
+  // trusted for this session). `bytes`/`provenanceBytes` are correctly
+  // backfilled this time, since this read's own total (3) finally matches
+  // both line cursors.
+  const bytes55000 = await sessionByteLength(paths, 55000);
+  assert.deepEqual(restored.cursor['trace-55000'], {
+    lines: 3, provenanceLines: 3, bytes: bytes55000, provenanceBytes: bytes55000,
+  });
+
+  const onDisk = await readFlow(paths.flowsDir, 'view-details.flow.json');
+  assert.equal(onDisk.provenance.successRuns, 1); // still just the one real application
+});
+
+// --- WS3b Task 2: single-pass site mining ---
+
+test('mining runs ONCE per session over the concatenated completed-segment records: a target on both sides of a mid-session replay boundary is counted once, matching WS2b single-pass semantics (WS3a per-chunk mining double-counted it)', async (t) => {
+  const paths = await tempPaths(t);
+  await writeSession(paths, 52000, {
+    meta: baseMeta(),
+    records: [
+      ...siteMiningRecords(), // seq 1 (nav -> /cart), seq 2 (click 'View details', /cart -> /product/42)
+      record({
+        seq: 3,
+        tool: 'browser_run_code_unsafe',
+        params: { filename: 'flow-runner.js', args: { flow: { id: 'a'.repeat(64), name: 'ghost' } } },
+      }), // replay boundary -- unmatched, its only effect here is the segment split
+      // The SAME origin/target content again, on the OTHER side of the
+      // replay -- a session that legitimately touches the same route twice.
+      record({
+        seq: 4,
+        tool: 'browser_navigate',
+        params: { url: 'https://shop.example/cart' },
+        urlBefore: 'about:blank',
+        urlAfter: 'https://shop.example/cart',
+      }),
+      record({
+        seq: 5,
+        targets: [traceTarget({ name: 'View details' })],
+        mutating: false,
+        urlBefore: 'https://shop.example/cart',
+        urlAfter: 'https://shop.example/product/42',
+      }),
+    ],
+  });
+
+  const result = await sweep({ paths });
+
+  assert.equal(result.replaysSeen, 1);
+  assert.deepEqual(result.sites.origins, ['https://shop.example']);
+  // `mineInventory` dedupes duplicate (pattern, role, name) targets WITHIN
+  // one call -- the discriminating metric here (`mineGraphEdges` never
+  // dedupes its own per-record output either way, so `sites.edges` is the
+  // same total under both per-chunk and single-pass mining and would not
+  // have caught the WS3a regression). Two per-chunk `mineSiteMemory` calls
+  // would report `targets: 2` (one fresh Map per chunk, no memory of the
+  // other); a single call over the concatenated segments reports 1.
+  assert.equal(result.sites.targets, 1);
+
+  const inventory = await readSiteFile(paths, 'https://shop.example', 'inventory.json');
+  // Both real occurrences are still counted -- merged into ONE store
+  // write, not lost.
+  assert.equal(inventory.patterns['/cart'].targets[0].count, 2);
+});
+
+// --- WS3b Task 2: stale-flow second-heal re-propose ---
+
+test('two heal-worthy failures for the same flow in one sweep, for DIFFERENT steps: the first heals, the second (naming the flow by its now-stale pre-heal id) re-proposes against the freshly healed flow and heals the other step', async (t) => {
+  const paths = await tempPaths(t);
+  await writeSession(paths, 53000, {
+    meta: baseMeta(),
+    records: [
+      record({ seq: 1, tool: 'browser_navigate', params: { url: 'https://shop.example/cart' } }),
+      record({ seq: 2, targets: [traceTarget({ name: 'View details' })], mutating: false }),
+      record({ seq: 3, targets: [traceTarget({ name: 'Buy now' })], mutating: true }),
+    ],
+  });
+  const first = await sweep({ paths });
+  const [{ name, tier }] = first.compiled;
+  const dir = tier === 'pending' ? paths.flowsPendingDir : paths.flowsDir;
+  const stored = await readFlow(dir, `${name}.flow.json`);
+  assert.equal(stored.steps.length, 3); // goto + 2 clicks
+  assert.equal(stored.steps[1].target.name, 'View details');
+  assert.equal(stored.steps[2].target.name, 'Buy now');
+
+  // TWO failed replays in the SAME provenance slice, both naming the flow
+  // by `stored.id` (the pre-either-heal id) -- the first heals step 1
+  // ("View details"); `resolveReplayTarget`'s id-first match then resolves
+  // the SECOND record straight back to the now-superseded registry entry
+  // (same setup as the id-supersession test above), but THIS record's
+  // payload targets a DIFFERENT step (2, "Buy now") -- the re-propose
+  // fold-in re-tries it against the freshly healed `current` flow, and it
+  // heals cleanly since nothing about step 2 was touched by the first heal.
+  await appendRecords(paths, 53000, [
+    record({
+      seq: 4,
+      tool: 'browser_run_code_unsafe',
+      params: { filename: 'flow-runner.js', args: { flow: { id: stored.id, name } } },
+      error: failurePayload(1, [{
+        role: 'button', name: 'View details', testid: 'vd-btn', text: 'View details',
+      }]),
+    }),
+    record({
+      seq: 5,
+      tool: 'browser_run_code_unsafe',
+      params: { filename: 'flow-runner.js', args: { flow: { id: stored.id, name } } },
+      error: failurePayload(2, [{
+        role: 'button', name: 'Buy now', testid: 'buy-btn', text: 'Buy now',
+      }]),
+    }),
+  ]);
+
+  const result = await sweep({ paths });
+  assert.equal(result.replaysSeen, 2);
+  // BOTH heal -- one per step, neither discarded by the stale-id gate.
+  assert.equal(result.healed.length, 2);
+  assert.deepEqual(result.healed.map((h) => h.stepIndex).sort(), [1, 2]);
+  assert.deepEqual(result.healErrors, []);
+  assert.deepEqual(result.updated, [{ name, successRuns: 0, failStreak: 2 }]);
+
+  const healedFlow = await readFlow(dir, `${name}.flow.json`);
+  assert.equal(healedFlow.steps[1].target.locators.length, 2);
+  assert.equal(healedFlow.steps[1].target.locators[1].selector, 'internal:testid=[data-testid="vd-btn"]');
+  assert.equal(healedFlow.steps[2].target.locators.length, 2);
+  assert.equal(healedFlow.steps[2].target.locators[1].selector, 'internal:testid=[data-testid="buy-btn"]');
+  assert.equal(healedFlow.id, flowId(healedFlow));
+});
+
+// Note: this test passes against BOTH the pre-fix (WS3a "skip on gate
+// failure") and post-fix (re-propose once) implementations -- the two only
+// diverge in OBSERVABLE outcome when the re-proposal legitimately finds
+// new heal-worthy content (see the two tests above); here it doesn't
+// (`proposeHeal`'s own idempotence check returns null either way), so
+// "skip" and "re-propose then get null" produce the identical result. Kept
+// per the brief's "pin both branches" instruction -- it still verifies the
+// required behavior, just isn't independent RED/GREEN evidence for the
+// fold-in the way the other two re-propose tests are.
+test('two heal-worthy failures for the same flow, same step, same winning candidate: the first heals, the second re-proposes against the healed flow and skips idempotently (no error, no double heal)', async (t) => {
+  const paths = await tempPaths(t);
+  await writeSession(paths, 54000, {
+    meta: baseMeta(),
+    records: [
+      record({ seq: 1, tool: 'browser_navigate', params: { url: 'https://shop.example/cart' } }),
+      record({ seq: 2, targets: [traceTarget({ name: 'View details' })], mutating: false }),
+    ],
+  });
+  const first = await sweep({ paths });
+  const [{ name }] = first.compiled;
+  const stored = await readFlow(paths.flowsDir, 'view-details.flow.json');
+
+  // TWO failed replays, both naming the flow by its pre-heal id, both
+  // carrying the EXACT SAME winning candidate (testid `vd-btn-1`). The
+  // first heals normally. The second's proposal (against the stale `flow`)
+  // fails the flowId gate and is re-proposed against `current` -- but
+  // `current` already has `vd-btn-1` from the first heal, so
+  // `proposeHeal`'s own idempotence check (the synthesized locator is
+  // already present) returns null: not an error, just no second heal.
+  await appendRecords(paths, 54000, [
+    record({
+      seq: 3,
+      tool: 'browser_run_code_unsafe',
+      params: { filename: 'flow-runner.js', args: { flow: { id: stored.id, name } } },
+      error: failurePayload(1, [{
+        role: 'button', name: 'View details', testid: 'vd-btn-1', text: 'View details',
+      }]),
+    }),
+    record({
+      seq: 4,
+      tool: 'browser_run_code_unsafe',
+      params: { filename: 'flow-runner.js', args: { flow: { id: stored.id, name } } },
+      error: failurePayload(1, [{
+        role: 'button', name: 'View details', testid: 'vd-btn-1', text: 'View details',
+      }]),
+    }),
+  ]);
+
+  const result = await sweep({ paths });
+  assert.equal(result.replaysSeen, 2);
+  // Only the FIRST heals -- the second's re-propose is an idempotent no-op.
+  assert.equal(result.healed.length, 1);
+  assert.deepEqual(result.healErrors, []);
+  // Both failures still counted -- an idempotent skip is not an error.
+  assert.deepEqual(result.updated, [{ name, successRuns: 0, failStreak: 2 }]);
+
+  const onDisk = await readFlow(paths.flowsDir, 'view-details.flow.json');
+  assert.equal(onDisk.steps[1].target.locators.length, 2); // not 3 -- no double heal
+  assert.equal(onDisk.steps[1].target.locators[1].selector, 'internal:testid=[data-testid="vd-btn-1"]');
+  assert.equal(onDisk.provenance.failStreak, 2);
 });

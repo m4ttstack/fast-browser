@@ -350,6 +350,22 @@ test('rejects a non-boolean arg required flag', () => {
   );
 });
 
+// MAT-149: flow-runner.js's `{arg}` substitution regex is
+// `/\{([A-Za-z_][A-Za-z0-9_]*)\}/g` -- a digit-leading arg key can never
+// match it, so a flow that somehow carries one (a stale compiler, a
+// hand-edited/hand-authored artifact) would replay with the literal
+// `{2faToken}` placeholder still in the URL rather than a real value. This
+// is the other end of MAT-149's fix: the compiler now sanitizes at mint
+// time (see flows-compile.test.mjs), but a pre-existing bad artifact must
+// still fail loudly here rather than silently replaying wrong.
+test('MAT-149: rejects a digit-leading arg key ("2faToken") instead of replaying a template the runner can never match, naming the offending key', () => {
+  const flow = baseFlow({ args: { '2faToken': { type: 'string', required: true } } });
+  assert.throws(
+    () => parseFlow(flow),
+    (error) => error instanceof FlowError && /args\.2faToken/.test(error.message),
+  );
+});
+
 test('rejects an empty steps array', () => {
   assert.throws(() => parseFlow(baseFlow({ steps: [] })), FlowError);
 });

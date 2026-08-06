@@ -4,7 +4,22 @@ import { fileURLToPath } from 'node:url';
 
 const pageTemplate = await readFile(new URL('./index.html', import.meta.url), 'utf8');
 
-const VARIANTS = new Set(['base', 'drifted', 'overlay']);
+// WS3b Task 10: two variants added to WS3a's original three ('base',
+// 'drifted', 'overlay'), each isolating one of this task's two new healing
+// paths so neither perturbs the other's (or WS3a's) already-pinned
+// assertions -- see tests/e2e/healing.test.mjs's own doc comments for the
+// full write-up of each.
+//
+// 'role-drifted': ONLY the "Confirm order" button's markup differs from
+// 'base' (every other element, INCLUDING "Place order", stays exactly
+// 'base' shape) -- proves the role+text heal path in isolation from the
+// existing testid heal path.
+//
+// 'intercept': adds a pointer-event-blocking overlay that leaves #app
+// fully CSS-visible (unlike 'overlay', which hides #app until dismissed)
+// -- proves act-phase interception recovery in isolation from the
+// existing probe-miss recovery path.
+const VARIANTS = new Set(['base', 'drifted', 'overlay', 'role-drifted', 'intercept']);
 
 const CONSENT_OVERLAY_HTML = `
     <div id="consent-overlay" style="position:fixed;inset:0;background:rgba(15,23,42,.55);display:flex;align-items:center;justify-content:center;">
@@ -12,6 +27,23 @@ const CONSENT_OVERLAY_HTML = `
         <p>This demo uses cookies.</p>
         <button type="button" id="consent-accept">Accept</button>
       </div>
+    </div>`;
+
+// 'intercept' variant (WS3b Task 10): a transparent, full-viewport,
+// explicitly z-indexed overlay stacked ABOVE #app -- #app itself is never
+// touched (no visibility/display change, unlike 'overlay''s #consent-
+// overlay), so flow-runner's locator PROBE (`Locator#waitFor({state:
+// 'visible'})`, bounding-box/CSS visibility only) succeeds immediately on
+// "Start order". Only the actual `.click()` -- which performs Playwright's
+// separate hit-target check -- gets intercepted, because this div is the
+// top-most element at "Start order"'s own screen coordinates. The dismiss
+// button is a CHILD of the overlay (so a click aimed at ITS OWN
+// coordinates still lands on it, not on the overlay covering everything
+// else) and removes the whole overlay from the DOM on click, unblocking
+// every element beneath it for the runner's post-quirk re-attempted act.
+const INTERCEPT_OVERLAY_HTML = `
+    <div id="intercept-overlay" style="position:fixed;inset:0;z-index:999;background:rgba(15,23,42,.05);">
+      <button type="button" id="intercept-dismiss" style="position:fixed;top:1rem;right:1rem;">Dismiss overlay</button>
     </div>`;
 
 // WS3a Task 9 (healing e2e) drift mechanism -- see tests/e2e/healing.test.mjs
@@ -23,10 +55,16 @@ const CONSENT_OVERLAY_HTML = `
 // on the NEXT request is an in-process variable the test flips directly via
 // `setVariant` below (no extra network round trip, no env var, no query
 // string) -- entirely test-side, confined to this fixture module.
+function overlayHtmlFor(variant) {
+  if (variant === 'overlay') return CONSENT_OVERLAY_HTML;
+  if (variant === 'intercept') return INTERCEPT_OVERLAY_HTML;
+  return '';
+}
+
 function renderPage(variant) {
   return pageTemplate
     .replace('<!--FIXTURE_VARIANT-->', `<script>window.__FIXTURE_VARIANT__ = ${JSON.stringify(variant)};</script>`)
-    .replace('<!--FIXTURE_OVERLAY-->', variant === 'overlay' ? CONSENT_OVERLAY_HTML : '');
+    .replace('<!--FIXTURE_OVERLAY-->', overlayHtmlFor(variant));
 }
 
 export async function startOrderFixture({ port = 0 } = {}) {

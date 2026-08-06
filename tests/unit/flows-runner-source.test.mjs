@@ -290,6 +290,14 @@ test('flow-runner.js collects up to 12 bounded, clamped candidates on a locator-
         return null;
       },
       innerText: async () => (i === 0 ? LONG_TEXT : `text-${i}`),
+      // WS3b Task 5: element 0 carries an explicit `role` attribute above,
+      // so implicit-role derivation never reads this element's tag (an
+      // explicit attribute always wins -- see the derivation tests below).
+      // Elements 1+ have no `role` attribute, so derivation DOES run for
+      // them; `DIV` is not in the Scope ruling's tag map, so it derives no
+      // role, keeping this test's existing `role: ''` assertion on element 1
+      // intact.
+      evaluate: async () => ({ tagName: 'DIV', type: null, hasHref: false }),
     });
   }
 
@@ -1199,4 +1207,873 @@ test('flow-runner.js degrades a quirk with a malformed locator element to no dis
       return true;
     },
   );
+});
+
+// --- WS3b Task 6: rung 3 extends to act-phase interception ---
+// WS3a's rung 3 (above) only fires on a LOCATOR miss -- an overlay that
+// merely intercepts pointer events, never affecting the target's own
+// 'visible' state, lets both probe passes hit, so `resolveTarget` never
+// throws and the step's ACT throws instead, after resolution already
+// succeeded. These tests pin the extension: the step's ACT throwing a
+// message matching Playwright's own pointer-interception signature
+// (`/intercepts pointer events/`, verified against the vendored
+// playwright-core actionability implementation -- see the flow-runner doc
+// comment) is eligible for the identical one-quirk-per-step budget, with
+// the post-quirk pass re-attempting ONLY the action against the
+// already-resolved target rather than re-walking locators.
+
+test("flow-runner.js recovers a click that throws Playwright's pointer-interception timeout via the matching quirk, succeeding on the second act attempt with no quirkAttempted key on success (WS3b Task 6)", async () => {
+  // The step's own locator probe succeeds on the FIRST try (the target is
+  // visible -- only the click itself is blocked), proving this is genuinely
+  // an act-phase recovery, not a repeat of the WS3a locator-miss path. The
+  // step's `click` throws the interception message on its first call only;
+  // its second call (the post-quirk pass) must land on the SAME resolved
+  // Locator object, not a freshly re-resolved one -- `stepClickCount`
+  // reaching exactly 2 on ONE stub object proves the reuse.
+  const source = await readSource();
+  const sandbox = {};
+  vm.createContext(sandbox);
+  const script = new vm.Script(`(${source})`);
+  const macro = script.runInContext(sandbox);
+
+  const stepSelector = 'role=button[name="Buy now"]';
+  const quirkSelector = '#cookie-accept';
+  let stepClickCount = 0;
+  let quirkClickCount = 0;
+  const stubPage = {
+    url: () => 'http://x/checkout',
+    on: () => {},
+    off: () => {},
+    locator: (selector) => {
+      if (selector === quirkSelector) {
+        return {
+          waitFor: async () => {},
+          click: async () => { quirkClickCount += 1; },
+        };
+      }
+      return {
+        waitFor: async () => {},
+        click: async () => {
+          stepClickCount += 1;
+          if (stepClickCount === 1) {
+            throw new Error('<div id="cookie-banner"> intercepts pointer events');
+          }
+        },
+      };
+    },
+  };
+
+  const flow = {
+    schemaVersion: 1,
+    name: 'act-interception-recovery-success',
+    steps: [
+      { op: 'click', target: { locators: [{ kind: 'role', selector: stepSelector }] } },
+    ],
+  };
+  const quirks = [
+    {
+      name: 'cookie-banner',
+      urlPattern: null,
+      target: { locators: [{ kind: 'css', selector: quirkSelector }] },
+      action: 'click',
+    },
+  ];
+
+  const result = await macro(stubPage, { flow, args: {}, quirks });
+  assert.equal(result.ok, true);
+  assert.equal(stepClickCount, 2, 'the step action must be re-attempted exactly once, on the same resolved target, after the dismissal');
+  assert.equal(quirkClickCount, 1, 'the quirk must be clicked exactly once');
+  assert.equal(Object.prototype.hasOwnProperty.call(result, 'quirkAttempted'), false, 'quirkAttempted must never appear on a success payload');
+  // No locatorFallbacks entry either: the post-quirk act reuses the already
+  // -resolved Locator rather than running a second, escalated probe pass.
+  const locatorFallbacks = JSON.parse(JSON.stringify(result.locatorFallbacks));
+  assert.deepEqual(locatorFallbacks, []);
+});
+
+test("flow-runner.js keeps the step's ORIGINAL interception error (not the second act's) when the post-quirk act attempt fails too, still recording quirkAttempted and no candidates (WS3b Task 6)", async () => {
+  // The second act attempt throws a DIFFERENT message ('Target closed')
+  // than the first (the interception signature) -- proving the payload
+  // reports the FIRST, most-legible diagnosis, not whatever the second act
+  // attempt happened to throw. This is the documented divergence from the
+  // WS3a probe-miss branch, which reports the post-quirk PASS's own fresh
+  // throw.
+  const source = await readSource();
+  const sandbox = {};
+  vm.createContext(sandbox);
+  const script = new vm.Script(`(${source})`);
+  const macro = script.runInContext(sandbox);
+
+  const stepSelector = 'role=button[name="Buy now"]';
+  const quirkSelector = '#cookie-accept';
+  let stepClickCount = 0;
+  // A NON-empty compound-selector result: if the `finalMessage ===
+  // 'no locator candidate matched'` gate ever regressed and let this
+  // interception failure through to `collectCandidates()` anyway, this
+  // element would produce a real candidate and the `candidates` key WOULD
+  // appear -- an empty list here would let that regression pass silently
+  // (candidates: [] never gets attached either way, so the absence
+  // assertion below wouldn't discriminate between "the gate correctly
+  // skipped enrichment" and "enrichment ran but found nothing").
+  const fakeElement = {
+    getAttribute: async (attr) => (attr === 'role' ? 'button' : null),
+    innerText: async () => 'Buy now',
+  };
+  const stubPage = {
+    url: () => 'http://x/checkout',
+    on: () => {},
+    off: () => {},
+    locator: (selector) => {
+      if (selector === quirkSelector) {
+        return { waitFor: async () => {}, click: async () => {} };
+      }
+      if (typeof selector === 'string' && selector.indexOf(',') >= 0) {
+        return { all: async () => [fakeElement] };
+      }
+      return {
+        waitFor: async () => {},
+        click: async () => {
+          stepClickCount += 1;
+          if (stepClickCount === 1) {
+            throw new Error('<div id="cookie-banner"> intercepts pointer events');
+          }
+          throw new Error('Target closed');
+        },
+      };
+    },
+  };
+
+  const flow = {
+    schemaVersion: 1,
+    name: 'act-interception-recovery-second-act-fails',
+    steps: [
+      { op: 'click', target: { locators: [{ kind: 'role', selector: stepSelector }] } },
+    ],
+  };
+  const quirks = [
+    {
+      name: 'cookie-banner',
+      urlPattern: null,
+      target: { locators: [{ kind: 'css', selector: quirkSelector }] },
+      action: 'click',
+    },
+  ];
+
+  await assert.rejects(
+    () => macro(stubPage, { flow, args: {}, quirks }),
+    (error) => {
+      const payload = JSON.parse(error.message.slice('FLOW_RUNNER_FAILURE: '.length));
+      assert.equal(payload.failedStep, 0);
+      assert.equal(
+        payload.error,
+        '<div id="cookie-banner"> intercepts pointer events',
+        "must keep the ORIGINAL interception message, not the second act's \"Target closed\"",
+      );
+      assert.equal(payload.quirkAttempted, 'cookie-banner');
+      assert.equal(Object.prototype.hasOwnProperty.call(payload, 'candidates'), false, 'an interception failure never carries candidates -- it never matches the locator-miss message that gates enrichment');
+      return true;
+    },
+  );
+  assert.equal(stepClickCount, 2, 'exactly one post-quirk act attempt, no more');
+});
+
+test("flow-runner.js never probes a quirk for a NON-interception act failure, failing immediately with the original error (WS3b Task 6)", async () => {
+  // 'Target closed' does not match the interception signature -- there is
+  // no proof the action never fired, so rung 3 must stay ineligible: the
+  // quirk's own locator must never even be probed.
+  const source = await readSource();
+  const sandbox = {};
+  vm.createContext(sandbox);
+  const script = new vm.Script(`(${source})`);
+  const macro = script.runInContext(sandbox);
+
+  const stepSelector = 'role=button[name="Buy now"]';
+  const quirkSelector = '#cookie-accept';
+  let quirkLocatorCalls = 0;
+  const stubPage = {
+    url: () => 'http://x/checkout',
+    on: () => {},
+    off: () => {},
+    locator: (selector) => {
+      if (selector === quirkSelector) {
+        quirkLocatorCalls += 1;
+        return { waitFor: async () => {}, click: async () => {} };
+      }
+      return {
+        waitFor: async () => {},
+        click: async () => {
+          throw new Error('Target closed');
+        },
+      };
+    },
+  };
+
+  const flow = {
+    schemaVersion: 1,
+    name: 'act-non-interception-failure',
+    steps: [
+      { op: 'click', target: { locators: [{ kind: 'role', selector: stepSelector }] } },
+    ],
+  };
+  const quirks = [
+    {
+      name: 'cookie-banner',
+      urlPattern: null,
+      target: { locators: [{ kind: 'css', selector: quirkSelector }] },
+      action: 'click',
+    },
+  ];
+
+  await assert.rejects(
+    () => macro(stubPage, { flow, args: {}, quirks }),
+    (error) => {
+      const payload = JSON.parse(error.message.slice('FLOW_RUNNER_FAILURE: '.length));
+      assert.equal(payload.error, 'Target closed');
+      assert.equal(Object.prototype.hasOwnProperty.call(payload, 'quirkAttempted'), false);
+      return true;
+    },
+  );
+  assert.equal(quirkLocatorCalls, 0, 'a non-interception act failure must never probe the quirk target at all');
+});
+
+test('flow-runner.js does not attempt a second quirk dismissal at act time when the step already spent its budget dismissing during the probe phase (WS3b Task 6, shared budget)', async () => {
+  // Construct: the step's locator MISSES until the quirk is dismissed
+  // (WS3a's existing probe-miss recovery fires first), the post-quirk PROBE
+  // then succeeds, but the post-quirk ACT itself throws the interception
+  // signature. The shared per-step budget means this must NOT trigger a
+  // second, independent quirk-dismissal attempt -- the step simply fails
+  // with the interception message and the ONE quirkAttempted already spent.
+  const source = await readSource();
+  const sandbox = {};
+  vm.createContext(sandbox);
+  const script = new vm.Script(`(${source})`);
+  const macro = script.runInContext(sandbox);
+
+  const stepSelector = 'role=button[name="Buy now"]';
+  const quirkSelector = '#cookie-accept';
+  let dismissed = false;
+  let quirkClickCount = 0;
+  let stepClickCount = 0;
+  // NON-empty, same rationale as the sibling test above: an empty
+  // compound-selector result would let the `candidates` absence assertion
+  // below pass even if the message gate that is SUPPOSED to prevent
+  // enrichment here ever regressed.
+  const fakeElement = {
+    getAttribute: async (attr) => (attr === 'role' ? 'button' : null),
+    innerText: async () => 'Buy now',
+  };
+  const stubPage = {
+    url: () => 'http://x/checkout',
+    on: () => {},
+    off: () => {},
+    locator: (selector) => {
+      if (selector === quirkSelector) {
+        return {
+          waitFor: async () => {},
+          click: async () => {
+            quirkClickCount += 1;
+            dismissed = true;
+          },
+        };
+      }
+      if (typeof selector === 'string' && selector.indexOf(',') >= 0) {
+        return { all: async () => [fakeElement] };
+      }
+      return {
+        waitFor: async () => {
+          if (!dismissed) throw new Error('not found');
+        },
+        click: async () => {
+          stepClickCount += 1;
+          throw new Error('<div id="cookie-banner"> intercepts pointer events');
+        },
+      };
+    },
+  };
+
+  const flow = {
+    schemaVersion: 1,
+    name: 'budget-shared-probe-then-act',
+    steps: [
+      { op: 'click', target: { locators: [{ kind: 'role', selector: stepSelector }] } },
+    ],
+  };
+  const quirks = [
+    {
+      name: 'cookie-banner',
+      urlPattern: null,
+      target: { locators: [{ kind: 'css', selector: quirkSelector }] },
+      action: 'click',
+    },
+  ];
+
+  await assert.rejects(
+    () => macro(stubPage, { flow, args: {}, quirks }),
+    (error) => {
+      const payload = JSON.parse(error.message.slice('FLOW_RUNNER_FAILURE: '.length));
+      assert.equal(payload.quirkAttempted, 'cookie-banner');
+      assert.equal(payload.error, '<div id="cookie-banner"> intercepts pointer events');
+      assert.equal(Object.prototype.hasOwnProperty.call(payload, 'candidates'), false);
+      return true;
+    },
+  );
+  assert.equal(quirkClickCount, 1, 'the quirk must be dismissed only once total -- the shared budget, not attempted again at act time');
+  assert.equal(stepClickCount, 1, "the step's act only runs once, during the post-quirk pass -- no independent second attempt follows its own failure");
+});
+
+test("flow-runner.js recovers a fill step's act-phase interception the same way as click -- the recovery gate is the error message, not step.op (WS3b Task 6)", async () => {
+  // Playwright's own actionability implementation only performs the
+  // hit-target/interception check for pointer-dispatching actions (click,
+  // dblclick, hover, tap, check/uncheck, drag); `fill` waits on
+  // visible/enabled/editable only and cannot organically throw this exact
+  // message in real Playwright (verified against the vendored
+  // playwright-core actionability source -- see the flow-runner doc
+  // comment). This test still stubs `fill` throwing it, because the
+  // requirement under test is that THIS RUNNER's own eligibility gate is
+  // the error message alone, never `step.op` -- so it recovers correctly
+  // regardless of which op a message like this is ever observed from.
+  const source = await readSource();
+  const sandbox = {};
+  vm.createContext(sandbox);
+  const script = new vm.Script(`(${source})`);
+  const macro = script.runInContext(sandbox);
+
+  const stepSelector = 'role=textbox[name="Promo code"]';
+  const quirkSelector = '#cookie-accept';
+  let stepFillCount = 0;
+  let fillValueSeen = null;
+  const stubPage = {
+    url: () => 'http://x/checkout',
+    on: () => {},
+    off: () => {},
+    locator: (selector) => {
+      if (selector === quirkSelector) {
+        return { waitFor: async () => {}, click: async () => {} };
+      }
+      return {
+        waitFor: async () => {},
+        fill: async (value) => {
+          stepFillCount += 1;
+          fillValueSeen = value;
+          if (stepFillCount === 1) {
+            throw new Error('<div id="cookie-banner"> intercepts pointer events');
+          }
+        },
+      };
+    },
+  };
+
+  const flow = {
+    schemaVersion: 1,
+    name: 'act-interception-recovery-fill',
+    steps: [
+      { op: 'fill', target: { locators: [{ kind: 'role', selector: stepSelector }] }, value: 'SAVE10' },
+    ],
+  };
+  const quirks = [
+    {
+      name: 'cookie-banner',
+      urlPattern: null,
+      target: { locators: [{ kind: 'css', selector: quirkSelector }] },
+      action: 'click',
+    },
+  ];
+
+  const result = await macro(stubPage, { flow, args: {}, quirks });
+  assert.equal(result.ok, true);
+  assert.equal(stepFillCount, 2, 'the fill action must be re-attempted exactly once after the dismissal');
+  assert.equal(fillValueSeen, 'SAVE10');
+});
+
+// --- WS3b Task 6, review fix round 1: anchor the interception signature ---
+// The bare substring `/intercepts pointer events/` is forgeable: Playwright
+// appends a call log to EVERY channel error, and that log's own `locator
+// resolved to <previewNode>` line renders a page-controlled element's
+// attributes/text verbatim -- a page author's `<button aria-label=
+// "intercepts pointer events">` puts the phrase inside the call log of ANY
+// failure on that element, even one whose action already dispatched. These
+// two tests pin the anchored `INTERCEPTION_SIGNATURE` (line-end only, with
+// an optional trailing ANSI reset) against exactly that forgery, and
+// against a genuine call-log-shaped message carrying a real trailing reset
+// code -- the bare, no-ANSI genuine case is already covered by every other
+// WS3b Task 6 test above (their messages end the string immediately after
+// the phrase, which is what the anchor is supposed to keep matching).
+
+test('flow-runner.js does NOT recover an act failure whose call log merely mentions the interception phrase mid-line inside a previewNode-rendered attribute (WS3b Task 6, review fix round 1)', async () => {
+  // The step's REAL failure is 'Target closed' -- nothing to do with
+  // interception. The call log's `locator resolved to <previewNode>` line
+  // (a real Playwright shape) happens to describe an element whose
+  // `aria-label` a page author set to the exact phrase; on the OLD
+  // unanchored regex this substring match would have (wrongly) treated a
+  // non-interception, possibly-already-dispatched failure as recoverable.
+  // The quirk locator must never even be probed.
+  const source = await readSource();
+  const sandbox = {};
+  vm.createContext(sandbox);
+  const script = new vm.Script(`(${source})`);
+  const macro = script.runInContext(sandbox);
+
+  const stepSelector = 'role=button[name="Buy now"]';
+  const quirkSelector = '#cookie-accept';
+  let quirkLocatorCalls = 0;
+  const forgedMessage = [
+    'page.click: Target closed',
+    'Call log:',
+    '  - waiting for locator(\'role=button[name="Buy now"]\')',
+    '  -   locator resolved to <button aria-label="intercepts pointer events">Buy now</button>',
+    '  -   attempting click action',
+  ].join('\n');
+  const stubPage = {
+    url: () => 'http://x/checkout',
+    on: () => {},
+    off: () => {},
+    locator: (selector) => {
+      if (selector === quirkSelector) {
+        quirkLocatorCalls += 1;
+        return { waitFor: async () => {}, click: async () => {} };
+      }
+      return {
+        waitFor: async () => {},
+        click: async () => {
+          throw new Error(forgedMessage);
+        },
+      };
+    },
+  };
+
+  const flow = {
+    schemaVersion: 1,
+    name: 'act-interception-forged-previewnode',
+    steps: [
+      { op: 'click', target: { locators: [{ kind: 'role', selector: stepSelector }] } },
+    ],
+  };
+  const quirks = [
+    {
+      name: 'cookie-banner',
+      urlPattern: null,
+      target: { locators: [{ kind: 'css', selector: quirkSelector }] },
+      action: 'click',
+    },
+  ];
+
+  await assert.rejects(
+    () => macro(stubPage, { flow, args: {}, quirks }),
+    (error) => {
+      const payload = JSON.parse(error.message.slice('FLOW_RUNNER_FAILURE: '.length));
+      assert.equal(payload.error, forgedMessage);
+      assert.equal(Object.prototype.hasOwnProperty.call(payload, 'quirkAttempted'), false);
+      return true;
+    },
+  );
+  assert.equal(quirkLocatorCalls, 0, 'a forged mid-line mention of the phrase must never probe the quirk target at all');
+});
+
+test('flow-runner.js recovers a genuine act-phase interception whose call log carries a trailing ANSI dim-reset on the last line (WS3b Task 6, review fix round 1)', async () => {
+  // `formatCallLog` wraps the WHOLE joined call log in a single
+  // `colors.dim(...)` call, so a real trailing reset code (`\x1b[22m`,
+  // dim's own close code) can only ever land after the LAST call-log line
+  // -- exactly where a persistent interception's final logged retry sits,
+  // immediately before the overall action timeout aborts the loop.
+  const source = await readSource();
+  const sandbox = {};
+  vm.createContext(sandbox);
+  const script = new vm.Script(`(${source})`);
+  const macro = script.runInContext(sandbox);
+
+  const stepSelector = 'role=button[name="Buy now"]';
+  const quirkSelector = '#cookie-accept';
+  let stepClickCount = 0;
+  let quirkClickCount = 0;
+  const genuineMessage = [
+    'locator.click: Timeout 5000ms exceeded.',
+    'Call log:',
+    '\x1b[2m  - waiting for locator(\'role=button[name="Buy now"]\')',
+    '  -   attempting click action',
+    '  -   waiting for element to be visible, enabled and stable',
+    '  -   element is visible, enabled and stable',
+    '  -   scrolling into view if needed',
+    '  -   done scrolling',
+    '  -   <div id="cookie-banner"> intercepts pointer events\x1b[22m',
+    '',
+  ].join('\n');
+  const stubPage = {
+    url: () => 'http://x/checkout',
+    on: () => {},
+    off: () => {},
+    locator: (selector) => {
+      if (selector === quirkSelector) {
+        return {
+          waitFor: async () => {},
+          click: async () => { quirkClickCount += 1; },
+        };
+      }
+      return {
+        waitFor: async () => {},
+        click: async () => {
+          stepClickCount += 1;
+          if (stepClickCount === 1) {
+            throw new Error(genuineMessage);
+          }
+        },
+      };
+    },
+  };
+
+  const flow = {
+    schemaVersion: 1,
+    name: 'act-interception-recovery-with-ansi-reset',
+    steps: [
+      { op: 'click', target: { locators: [{ kind: 'role', selector: stepSelector }] } },
+    ],
+  };
+  const quirks = [
+    {
+      name: 'cookie-banner',
+      urlPattern: null,
+      target: { locators: [{ kind: 'css', selector: quirkSelector }] },
+      action: 'click',
+    },
+  ];
+
+  const result = await macro(stubPage, { flow, args: {}, quirks });
+  assert.equal(result.ok, true);
+  assert.equal(stepClickCount, 2, 'the step action must be re-attempted after the dismissal despite the trailing ANSI reset on the first message');
+  assert.equal(quirkClickCount, 1);
+});
+
+// --- WS3b Task 5: implicit-role derivation (candidate collection) ---
+// Today `role` on a collected candidate comes only from the raw `role`
+// ATTRIBUTE, so a plain `<button>Place order</button>` (no `role`, no
+// `aria-label`) collects as bare-text-only and heal synthesis (which skips
+// text-only candidates) can never use it. This derives a role from the tag
+// when the attribute is absent, using the Scope ruling's exact tag map and
+// nothing else. Table-driven (one `test()`, several stub/assert cycles
+// inside it, each with its own fresh vm sandbox) rather than one `test()`
+// per tag/type combination -- the setup and assertion shape are identical
+// across every case; only the stubbed tag/type/href and the expected
+// derived role differ.
+test("flow-runner.js derives an implicit role from tag/type/href when the role attribute is absent -- the Scope ruling's exact tag map, nothing more (WS3b Task 5)", async () => {
+  const source = await readSource();
+
+  const cases = [
+    { label: 'button, no role attr -> button', tagName: 'BUTTON', type: null, hasHref: false, roleAttr: null, expected: 'button' },
+    { label: 'a WITH href, no role attr -> link', tagName: 'A', type: null, hasHref: true, roleAttr: null, expected: 'link' },
+    { label: 'a WITHOUT href, no role attr -> no derived role', tagName: 'A', type: null, hasHref: false, roleAttr: null, expected: '' },
+    { label: 'select, no role attr -> combobox', tagName: 'SELECT', type: null, hasHref: false, roleAttr: null, expected: 'combobox' },
+    { label: 'input type=checkbox, no role attr -> checkbox', tagName: 'INPUT', type: 'checkbox', hasHref: false, roleAttr: null, expected: 'checkbox' },
+    { label: 'input type=radio, no role attr -> radio', tagName: 'INPUT', type: 'radio', hasHref: false, roleAttr: null, expected: 'radio' },
+    { label: 'input type=submit, no role attr -> button', tagName: 'INPUT', type: 'submit', hasHref: false, roleAttr: null, expected: 'button' },
+    { label: 'input type=button, no role attr -> button', tagName: 'INPUT', type: 'button', hasHref: false, roleAttr: null, expected: 'button' },
+    { label: 'input type=text, no role attr -> textbox', tagName: 'INPUT', type: 'text', hasHref: false, roleAttr: null, expected: 'textbox' },
+    { label: 'input with no type attribute at all, no role attr -> textbox', tagName: 'INPUT', type: null, hasHref: false, roleAttr: null, expected: 'textbox' },
+    { label: 'a tag outside the map (div), no role attr -> no derived role', tagName: 'DIV', type: null, hasHref: false, roleAttr: null, expected: '' },
+    { label: 'explicit role attribute wins over tag derivation', tagName: 'BUTTON', type: null, hasHref: false, roleAttr: 'tab', expected: 'tab' },
+  ];
+
+  for (const testCase of cases) {
+    const sandbox = {};
+    vm.createContext(sandbox);
+    const script = new vm.Script(`(${source})`);
+    const macro = script.runInContext(sandbox);
+
+    let evaluateCallCount = 0;
+    const fakeElement = {
+      getAttribute: async (attr) => (attr === 'role' ? testCase.roleAttr : null),
+      innerText: async () => '',
+      evaluate: async () => {
+        evaluateCallCount += 1;
+        return { tagName: testCase.tagName, type: testCase.type, hasHref: testCase.hasHref };
+      },
+    };
+
+    const stubPage = {
+      url: () => 'http://x/cart',
+      on: () => {},
+      off: () => {},
+      locator: (selector) => {
+        if (typeof selector === 'string' && selector.indexOf(',') >= 0) {
+          return { all: async () => [fakeElement] };
+        }
+        return {
+          waitFor: async () => {
+            throw new Error('not found');
+          },
+        };
+      },
+    };
+
+    const flow = {
+      schemaVersion: 1,
+      name: 'implicit-role',
+      steps: [
+        { op: 'click', target: { locators: [{ kind: 'role', selector: 'role=button[name="Go"]' }] } },
+      ],
+    };
+
+    await assert.rejects(
+      () => macro(stubPage, { flow, args: {} }),
+      (error) => {
+        const payload = JSON.parse(error.message.slice('FLOW_RUNNER_FAILURE: '.length));
+        assert.equal(payload.candidates[0].role, testCase.expected, testCase.label);
+        return true;
+      },
+    );
+
+    // An explicit `role` attribute must short-circuit derivation entirely,
+    // not merely win the value: the tagName reads costs a page round trip
+    // that has no reason to happen at all once the attribute already
+    // answers the question (see the derivation comment in the macro source).
+    if (testCase.roleAttr !== null) {
+      assert.equal(evaluateCallCount, 0, `${testCase.label}: an explicit role attribute must skip the tagName round trip entirely`);
+    }
+  }
+});
+
+// --- WS3b Task 5: ledgered macro minors deferred from WS3a ---
+
+test("flow-runner.js treats a dismissed quirk named '' as a real dismissal, not a truthiness no-op (WS3b Task 5 ledger: dismissedQuirk !== null)", async () => {
+  // A quirk named '' passes the shape check (`typeof quirk.name === 'string'`
+  // requires only a string, not a non-empty one) even though the store's own
+  // `sites quirk add` kebab-case validation would never persist one -- a
+  // caller that embeds `quirks` directly, bypassing the store, still can.
+  // `dismissInterrupt` returns the clicked quirk's `name` on a hit, so a
+  // click against THIS quirk returns '' -- falsy, but not null. The old `if
+  // (dismissedQuirk)` truthiness check treated that exactly like "nothing
+  // was dismissed" and skipped the step's post-quirk pass entirely, silently
+  // dropping a click that DID happen. `dismissedQuirk !== null` fixes it.
+  const source = await readSource();
+  const sandbox = {};
+  vm.createContext(sandbox);
+  const script = new vm.Script(`(${source})`);
+  const macro = script.runInContext(sandbox);
+
+  const stepSelector = 'role=button[name="Buy now"]';
+  const quirkSelector = '#cookie-accept';
+  let quirkClickCount = 0;
+  const stubPage = {
+    url: () => 'http://x/checkout',
+    on: () => {},
+    off: () => {},
+    locator: (selector) => {
+      if (selector === quirkSelector) {
+        return {
+          waitFor: async () => {},
+          click: async () => {
+            quirkClickCount += 1;
+          },
+        };
+      }
+      if (typeof selector === 'string' && selector.indexOf(',') >= 0) {
+        return { all: async () => [] };
+      }
+      return {
+        waitFor: async () => {
+          throw new Error('not found');
+        },
+      };
+    },
+  };
+
+  const flow = {
+    schemaVersion: 1,
+    name: 'quirk-empty-name',
+    steps: [
+      { op: 'click', target: { locators: [{ kind: 'role', selector: stepSelector }] } },
+    ],
+  };
+  const quirks = [
+    { name: '', urlPattern: null, target: { locators: [{ kind: 'css', selector: quirkSelector }] }, action: 'click' },
+  ];
+
+  await assert.rejects(
+    () => macro(stubPage, { flow, args: {}, quirks }),
+    (error) => {
+      const payload = JSON.parse(error.message.slice('FLOW_RUNNER_FAILURE: '.length));
+      assert.equal(payload.quirkAttempted, '', "a dismissal with an empty name must still be reported, not dropped by a truthiness check");
+      return true;
+    },
+  );
+  assert.equal(quirkClickCount, 1, 'the empty-named quirk must still be clicked exactly once');
+});
+
+test("flow-runner.js probes a quirk at 1500ms and gives the post-quirk pass exactly 3000ms, no other timeout (WS3b Task 5 ledger: rung 3 timeout pins)", async () => {
+  // Records every `waitFor` call's selector+timeout using the same
+  // recording-stub pattern as the rung 1/2 dedupe test above. Order proves
+  // the sequence, not just the set: the step's own rung 1 (1500) then rung 2
+  // (3000) both miss first (the quirk has not been dismissed yet), THEN the
+  // quirk itself is probed once at 1500ms (dismissInterrupt's own pass never
+  // escalates -- it is a dismissal check, not the step's walk), and only
+  // after a successful dismissal does the post-quirk pass run, at a single
+  // escalated 3000ms (forcedEscalatedOnly skips straight past rung 1).
+  const source = await readSource();
+  const sandbox = {};
+  vm.createContext(sandbox);
+  const script = new vm.Script(`(${source})`);
+  const macro = script.runInContext(sandbox);
+
+  const stepSelector = 'role=button[name="Buy now"]';
+  const quirkSelector = '#cookie-accept';
+  const waitForCalls = [];
+  let dismissed = false;
+  const stubPage = {
+    url: () => 'http://x/checkout',
+    on: () => {},
+    off: () => {},
+    locator: (selector) => {
+      if (selector === quirkSelector) {
+        return {
+          waitFor: async ({ timeout }) => {
+            waitForCalls.push({ selector, timeout });
+          },
+          click: async () => {
+            dismissed = true;
+          },
+        };
+      }
+      return {
+        waitFor: async ({ timeout }) => {
+          waitForCalls.push({ selector, timeout });
+          if (!dismissed) throw new Error('not found');
+        },
+        click: async () => {},
+      };
+    },
+  };
+
+  const flow = {
+    schemaVersion: 1,
+    name: 'quirk-timeout-pins',
+    steps: [
+      { op: 'click', target: { locators: [{ kind: 'role', selector: stepSelector }] } },
+    ],
+  };
+  const quirks = [
+    {
+      name: 'cookie-banner',
+      urlPattern: null,
+      target: { locators: [{ kind: 'css', selector: quirkSelector }] },
+      action: 'click',
+    },
+  ];
+
+  const result = await macro(stubPage, { flow, args: {}, quirks });
+  assert.equal(result.ok, true);
+  assert.deepEqual(waitForCalls, [
+    { selector: stepSelector, timeout: 1500 },
+    { selector: stepSelector, timeout: 3000 },
+    { selector: quirkSelector, timeout: 1500 },
+    { selector: stepSelector, timeout: 3000 },
+  ]);
+});
+
+test('flow-runner.js drops fat candidates from the end until the whole payload is <= 8KB (WS3b Task 5 ledger: boundCandidatesToPayload trim loop)', async () => {
+  // Every clamped candidate string field maxes out at 80 characters
+  // (CANDIDATE_STRING_CAP); plain ASCII text at that cap across 12
+  // candidates never reaches 8KB on its own (~4.4KB), so the trim loop's
+  // drop-from-end branch would go untested by accident. Using a double-quote
+  // character for all 80 -- each one costs 2 bytes once JSON-escaped (`\"`)
+  // -- makes even the 12-candidate (post-MAX_CANDIDATES-cap) payload exceed
+  // 8192 bytes (verified: 8341 bytes for this exact shape), forcing the
+  // drop-from-end loop to fire for real rather than merely being reachable
+  // in principle. 13 elements are offered so the MAX_CANDIDATES cap (Task
+  // 2) is exercised first, same as the sibling 12-candidate test above --
+  // this test is about what happens to the payload AFTER that cap, not the
+  // cap itself.
+  const source = await readSource();
+  const sandbox = {};
+  vm.createContext(sandbox);
+  const script = new vm.Script(`(${source})`);
+  const macro = script.runInContext(sandbox);
+
+  const FAT = '"'.repeat(200); // clamped to 80 chars, still all quotes
+  const fakeElements = [];
+  for (let i = 0; i < 13; i += 1) {
+    fakeElements.push({
+      // Every element carries an explicit (fat) `role` attribute, so
+      // implicit-role derivation's `evaluate` round trip is never reached
+      // here -- this test is about the trim loop, not role derivation.
+      getAttribute: async () => FAT,
+      innerText: async () => FAT,
+    });
+  }
+
+  const stubPage = {
+    url: () => 'http://x/cart',
+    on: () => {},
+    off: () => {},
+    locator: (selector) => {
+      if (typeof selector === 'string' && selector.indexOf(',') >= 0) {
+        return { all: async () => fakeElements };
+      }
+      return {
+        waitFor: async () => {
+          throw new Error('not found');
+        },
+      };
+    },
+  };
+
+  const flow = {
+    schemaVersion: 1,
+    name: 'trim-loop',
+    steps: [
+      { op: 'click', target: { locators: [{ kind: 'role', selector: 'role=button[name="Go"]' }] } },
+    ],
+  };
+
+  await assert.rejects(
+    () => macro(stubPage, { flow, args: {} }),
+    (error) => {
+      const payload = JSON.parse(error.message.slice('FLOW_RUNNER_FAILURE: '.length));
+      assert.ok(
+        payload.candidates.length > 0 && payload.candidates.length < 12,
+        `expected fewer than 12 (but more than 0) survivors, got ${payload.candidates.length}`,
+      );
+      const serialized = JSON.stringify(payload);
+      assert.ok(serialized.length <= 8192, `expected the full payload to be <= 8192 bytes, got ${serialized.length}`);
+      return true;
+    },
+  );
+});
+
+// --- MAT-149: digit-leading arg names sanitized at mint ---
+//
+// This runner's own `{arg}` substitution regex (`TOKEN`, above) is
+// deliberately untouched by MAT-149's fix -- the fix is on the compile
+// side (lib/flows/compile.mjs mints only names the regex can match) and
+// the parse side (lib/flows/artifact.mjs rejects any that slip through).
+// This proves the two ends actually connect: a flow whose arg is already
+// sanitized (`arg2faToken`, never `2faToken`) round-trips through this
+// runner's real substitution path end to end, with the supplied arg value
+// landing in the `goto` step's url exactly where the template placeholder
+// was -- the replayability the compile-side fix exists to preserve.
+test('flow-runner.js substitutes a sanitized digit-leading arg name ("arg2faToken") into a goto step url end-to-end (MAT-149)', async () => {
+  const source = await readSource();
+  const sandbox = {};
+  vm.createContext(sandbox);
+  const script = new vm.Script(`(${source})`);
+  const macro = script.runInContext(sandbox);
+
+  const gotoCalls = [];
+  const stubPage = {
+    url: () => 'https://example.com/',
+    on: () => {},
+    off: () => {},
+    goto: async (url) => { gotoCalls.push(url); },
+    waitForLoadState: async () => {},
+  };
+
+  const flow = {
+    schemaVersion: 1,
+    name: 'verify-2fa',
+    origin: 'https://example.com',
+    args: { arg2faToken: { type: 'string', required: true } },
+    steps: [
+      { op: 'goto', url: '/verify?2fa_token={arg2faToken}' },
+    ],
+  };
+
+  const result = await macro(stubPage, { flow, args: { arg2faToken: 'live-otp-value' } });
+  assert.equal(result.ok, true);
+  assert.deepEqual(gotoCalls, ['https://example.com/verify?2fa_token=live-otp-value']);
 });

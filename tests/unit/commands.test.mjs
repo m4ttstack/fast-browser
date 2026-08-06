@@ -72,6 +72,7 @@ function validConfig(overrides = {}) {
     annotation: { palette: null },
     video: null,
     trace: true,
+    encoder: 'lexical',
     ...overrides,
   };
 }
@@ -3989,6 +3990,25 @@ test('CLI main renders a quirks-dropped warning on its own line, never folded in
   assert.match(output, /https:\/\/example\.com - 3 quirks dropped from the replay invocation \(max 10\)/);
   // The quirk-drop warning must never be counted as a second artifact file.
   assert.doesNotMatch(output, /2 flow artifact files/i);
+});
+
+// WS3b Task 7: the encoder degrade rule's human-visible surface -- a human
+// running `flows find` interactively (no --json) still learns the ranking
+// they're looking at fell back to lexical order this call.
+test('CLI main renders an encoder-degraded warning on its own line', async () => {
+  const report = {
+    command: 'flows',
+    sub: 'find',
+    candidates: [],
+    warnings: [{ kind: 'encoder-degraded', reason: 'voyage embeddings request failed: HTTP 500' }],
+  };
+  const writes = [];
+  await main(
+    { command: 'flows', json: false },
+    { commands: { flows: async () => report }, write: (text) => writes.push(text) },
+  );
+  const output = writes.join('');
+  assert.match(output, /ranking fell back to lexical order - voyage embeddings request failed: HTTP 500/);
 });
 
 // Fix round 1, item 6: `description` traces back to page-derived content

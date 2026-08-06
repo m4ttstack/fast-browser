@@ -366,6 +366,85 @@ test('the browser-driver return contract makes distilled results checkable', asy
   }
 });
 
+// The reconciliation between script-first automation and the flow compiler:
+// `flows find` first still wins regardless of what runs next, but the
+// compiler (lib/flows/compile.mjs) only turns discrete tool-call sessions
+// into replayable steps -- a scripted `browser_run_code_unsafe` run compiles
+// to a single opaque `js` step that can never become a runnable candidate on
+// its own (the same "not replayable in v1" case the flows section above
+// already names). Losing this subsection sends an agent back to scripting a
+// repeatable journey it should instead be driving discretely so the next
+// sweep can compile it.
+test('fast-browsing reconciles script-first automation with flow compilation', async () => {
+  const text = await readFile(path.join(pluginRoot, 'skills/fast-browsing/SKILL.md'), 'utf8');
+
+  assert.match(text, /discrete tool calls/);
+  assert.match(text, /opaque `js` step/);
+  assert.match(text, /not replayable in v1/);
+  assert.match(text, /flows compile/);
+  // The rule ordering must survive the new subsection: `flows find` first,
+  // unconditionally, is restated rather than only implied.
+  assert.match(text, /`flows find` first stays the rule/);
+});
+
+// The know-the-site section quotes `sites affordances`/`sites show` field
+// names and command lines from memory; nothing gated them against CLI drift
+// the way the flows-first section is pinned elsewhere in this file. Cross-
+// checked against the real return shapes in lib/commands/sites.mjs (not
+// against the skill's own internal consistency) so a renamed field breaks
+// this test instead of silently drifting from what the skill tells agents to
+// look for.
+test('fast-browsing pins the sites affordances/show CLI shapes against the real command', async () => {
+  const text = await readFile(path.join(pluginRoot, 'skills/fast-browsing/SKILL.md'), 'utf8');
+  const sitesSource = await readFile(path.join(pluginRoot, 'lib/commands/sites.mjs'), 'utf8');
+
+  assert.match(text, /fast-browser\s+sites affordances --url <url> --json/);
+  assert.match(text, /fast-browser sites show <origin> --json/);
+
+  const affordancesReturn = sitesSource.match(
+    /async function affordances\([\s\S]*?return \{([\s\S]*?)\};/,
+  );
+  assert.ok(affordancesReturn, 'affordances() return shape found in lib/commands/sites.mjs');
+  const affordancesFields = [...affordancesReturn[1].matchAll(/^\s*(\w+)(?::|,)/gm)]
+    .map(([, name]) => name);
+  assert.deepEqual(
+    affordancesFields,
+    ['command', 'sub', 'found', 'stale', 'savedAt', 'pattern', 'digest', 'inventory'],
+  );
+  for (const field of ['found', 'stale', 'inventory', 'digest']) {
+    assert.match(text, new RegExp('`' + field + '`'), field);
+  }
+
+  const showReturn = sitesSource.match(/async function show\([\s\S]*?return \{([\s\S]*?)\};/);
+  assert.ok(showReturn, 'show() return shape found in lib/commands/sites.mjs');
+  assert.match(showReturn[1], /^\s*edges:/m);
+  assert.match(text, /`edges`/);
+});
+
+// WS3a shipped the flows-first check, sites-affordances guidance, and quirk
+// interrupt recovery in the Claude agent file only; the Codex template never
+// caught up (MAT-150 item 2). Pinned in BOTH hosts, on the same load-bearing
+// substrings, so a future edit to one host without the other regresses
+// silently instead of failing here.
+test('the codex template matches the Claude agent on flow-first, site-affordances, and quirk-recovery guidance', async () => {
+  const claude = await readFile(path.join(pluginRoot, 'agents/browser-driver.md'), 'utf8');
+  const codex = await readFile(
+    path.join(pluginRoot, 'templates/codex/browser_driver.toml'),
+    'utf8',
+  );
+
+  for (const [host, text] of [['claude', claude], ['codex', codex]]) {
+    assert.match(text, /flows find --intent/, host);
+    assert.match(text, /flows approve/, host);
+    assert.match(text, /sites affordances --url/, host);
+    assert.match(text, /sites quirk add/, host);
+    // The WS3b Task 6 extension: quirk recovery also fires when a step
+    // resolves cleanly but its click is blocked by an intercepting overlay,
+    // not only when the locator walk missed outright.
+    assert.match(text, /blocked by an intercepting overlay/, host);
+  }
+});
+
 test('skills and delegated browser guidance use authoritative live ledgers', async () => {
   const browserMacros = await readFile(
     path.join(pluginRoot, 'skills/browser-macros/SKILL.md'),
