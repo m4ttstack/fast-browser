@@ -1,17 +1,18 @@
 import assert from 'node:assert/strict';
 import {
-  copyFile, mkdir, mkdtemp, readFile, rm,
+  mkdtemp, readFile, rm,
 } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { fileURLToPath } from 'node:url';
 
 import { flows } from '../../lib/commands/flows.mjs';
 import { sites } from '../../lib/commands/sites.mjs';
 import { flowFileName, flowId } from '../../lib/flows/artifact.mjs';
 import { startOrderFixture } from '../fixtures/order-flow/server.mjs';
-import { startMcpClient } from './helpers/mcp-client.mjs';
+import {
+  installFlowRunner, pathsForOutputDir, tracedSession,
+} from './helpers/flow-fixtures.mjs';
 
 // The healing e2e (WS3a plan, Task 9): the workstream's acceptance test.
 // Proves the whole rung 1-3 + host-side heal loop end to end against a real
@@ -68,51 +69,11 @@ import { startMcpClient } from './helpers/mcp-client.mjs';
 // it on the very first pass, and rung 3 (quirk dismissal) would never have
 // anything to recover from.
 
-const pluginRoot = fileURLToPath(new URL('../../', import.meta.url));
-
-// Hand-built paths object matching lib/core/paths.mjs's key shape, rooted at
-// `outputDir` itself -- copied from flows.test.mjs's own `pathsForOutputDir`
-// (see that file's doc comment for why `dataDir` IS `outputDir`, never a
-// nested subdirectory of it, and why `sitesDir` must still be a string even
-// though this test's `sites quirk add` call is the only thing that ever
-// writes under it before replay reads it back).
-function pathsForOutputDir(outputDir) {
-  return {
-    dataDir: outputDir,
-    flowsDir: path.join(outputDir, 'flows'),
-    flowsPendingDir: path.join(outputDir, 'flows-pending'),
-    flowsStateFile: path.join(outputDir, 'flows-state.json'),
-    macrosDir: path.join(outputDir, 'macros'),
-    rejectedFlowsFile: path.join(outputDir, 'rejected-flows.md'),
-    sitesDir: path.join(outputDir, 'sites'),
-  };
-}
-
-// flows.mjs's `buildInvocation` embeds an absolute `<macrosDir>/
-// flow-runner.js` filename -- the physical file has to exist under this
-// traced session's own output dir for that filename to resolve at replay
-// time. Copied verbatim from flows.test.mjs's own `installFlowRunner`.
-async function installFlowRunner(paths) {
-  await mkdir(paths.macrosDir, { recursive: true });
-  await copyFile(
-    path.join(pluginRoot, 'builtins/macros/flow-runner.js'),
-    path.join(paths.macrosDir, 'flow-runner.js'),
-  );
-}
-
-// Wraps startMcpClient with an idempotent close registered via t.after as a
-// safety net -- copied verbatim from flows.test.mjs's own `tracedSession`.
-async function tracedSession(t, outputDir) {
-  const session = await startMcpClient({ outputDir, extraArgs: ['--save-trace'] });
-  let closed = false;
-  const close = async () => {
-    if (closed) return;
-    closed = true;
-    await session.close();
-  };
-  t.after(close);
-  return { callTool: session.callTool, metrics: session.metrics, close };
-}
+// `pathsForOutputDir`/`installFlowRunner`/`tracedSession` are the shared
+// e2e flow-fixture trio (Task 10, WS3b) -- see
+// tests/e2e/helpers/flow-fixtures.mjs's own doc comment for the shape/
+// rationale; this file, flows.test.mjs, and sites.test.mjs all import the
+// same implementation now, no per-file copies.
 
 // Runs the order-flow recording script (flows.test.mjs/sites.test.mjs's
 // script, verbatim) against whatever variant the fixture is currently

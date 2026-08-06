@@ -1,16 +1,17 @@
 import assert from 'node:assert/strict';
 import {
-  copyFile, mkdir, mkdtemp, readFile, rm,
+  mkdtemp, readFile, rm,
 } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { fileURLToPath } from 'node:url';
 
 import { flows } from '../../lib/commands/flows.mjs';
 import { flowFileName } from '../../lib/flows/artifact.mjs';
 import { startOrderFixture } from '../fixtures/order-flow/server.mjs';
-import { startMcpClient } from './helpers/mcp-client.mjs';
+import {
+  installFlowRunner, pathsForOutputDir, tracedSession,
+} from './helpers/flow-fixtures.mjs';
 
 // The flywheel e2e (WS2a plan, Task 10): the program's signature acceptance
 // test. Record a flow through a traced session, gate it on the mutating
@@ -26,8 +27,6 @@ import { startMcpClient } from './helpers/mcp-client.mjs';
 // `record.error` when a macro throws, and sweep.mjs's replay-provenance
 // scan keys off exactly that.
 
-const pluginRoot = fileURLToPath(new URL('../../', import.meta.url));
-
 // The recording and replay runs deliberately use DIFFERENT customer/plan
 // values (never the compiled flow's own recorded literals played back) so
 // that verifying each run's own order-id independently (step 1, step 5)
@@ -40,66 +39,11 @@ const pluginRoot = fileURLToPath(new URL('../../', import.meta.url));
 const RECORDED_ORDER_ID = 'ADA-TEAM-7';
 const REPLAY_ORDER_ID = 'GRACE-SCALE-7';
 
-// Hand-built paths object matching lib/core/paths.mjs's key shape (Task 1),
-// but rooted at `outputDir` itself rather than at `homeDir/.fast-browser`:
-// lib/runtime/launch.mjs's real wiring is `--output-dir=${paths.dataDir}`
-// (runtimeArgs), and mcp-client.mjs's startMcpClient passes `outputDir` as
-// `--output-dir` verbatim -- so in this test `paths.dataDir` IS `outputDir`,
-// never a nested subdirectory of it. This is where `TraceLog.create` writes
-// `trace-<epochMs>/` (TRACE.md's "Directory layout"), which is exactly what
-// sweep.mjs's `listTraceSessions` scans -- resolvePaths({ homeDir: outputDir
-// }) would instead compute `outputDir/.fast-browser`, one level too deep.
-function pathsForOutputDir(outputDir) {
-  return {
-    dataDir: outputDir,
-    flowsDir: path.join(outputDir, 'flows'),
-    flowsPendingDir: path.join(outputDir, 'flows-pending'),
-    flowsStateFile: path.join(outputDir, 'flows-state.json'),
-    macrosDir: path.join(outputDir, 'macros'),
-    rejectedFlowsFile: path.join(outputDir, 'rejected-flows.md'),
-    // WS3a Task 4: `flows find` now looks up the flow's own origin's stored
-    // quirks via lib/sites/store.mjs's `readSite(paths, origin)`, which
-    // requires `paths.sitesDir` (lib/core/paths.mjs's real shape). This
-    // fixture never writes anything under it -- readSite degrades a
-    // never-seen origin to `{ quirks: [] }` on its own -- but the key must
-    // be a string or `path.join(paths.sitesDir, ...)` throws.
-    sitesDir: path.join(outputDir, 'sites'),
-  };
-}
-
-// flows.mjs's `buildInvocation` embeds an absolute `<macrosDir>/
-// flow-runner.js` filename (never inline code -- a macro sandboxed by
-// browser_run_code_unsafe has no fs access to look itself up any other way).
-// The physical file has to exist under this traced session's own output dir
-// for that filename to resolve at replay time -- production's setup.mjs
-// does this via installBuiltinMacros (which also writes MACROS.md and a
-// hashes ledger this test has no use for); a plain copy of the one file the
-// invocation ever names is sufficient here.
-async function installFlowRunner(paths) {
-  await mkdir(paths.macrosDir, { recursive: true });
-  await copyFile(
-    path.join(pluginRoot, 'builtins/macros/flow-runner.js'),
-    path.join(paths.macrosDir, 'flow-runner.js'),
-  );
-}
-
-// Wraps startMcpClient with an idempotent close registered via t.after as a
-// safety net -- this test closes each session explicitly and early (sweep
-// defers compilation entirely until `meta.endedAt` exists, so a session
-// MUST be closed before the next `flows compile` call can see it), but an
-// assertion throwing between session creation and that explicit close must
-// still not leak the spawned runtime process.
-async function tracedSession(t, outputDir) {
-  const session = await startMcpClient({ outputDir, extraArgs: ['--save-trace'] });
-  let closed = false;
-  const close = async () => {
-    if (closed) return;
-    closed = true;
-    await session.close();
-  };
-  t.after(close);
-  return { callTool: session.callTool, metrics: session.metrics, close };
-}
+// `pathsForOutputDir`/`installFlowRunner`/`tracedSession` are the shared
+// e2e flow-fixture trio (Task 10, WS3b) -- see
+// tests/e2e/helpers/flow-fixtures.mjs's own doc comment for the shape/
+// rationale; this file, healing.test.mjs, and sites.test.mjs all import
+// the same implementation now, no per-file copies.
 
 // Runs two `browser_find` text searches (completion heading, then the
 // specific order id) and asserts each matched exactly once -- the page-state
