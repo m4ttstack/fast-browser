@@ -31,9 +31,19 @@
       // fail flow-runner's locator probe (Playwright's `waitFor({state:
       // 'visible'})` -- what that probe calls -- checks bounding-box/CSS
       // visibility only, never pointer-event occlusion).
+      // `window.__consentDismissClicks__` (WS4a Task 4): mirrors the
+      // 'intercept' branch's own `__interceptDismissClicks__` below --
+      // added per the drift-harness rung-distribution matrix's ledger
+      // ruling that a successful quirk-driven dismissal here needs its own
+      // directly countable fixture-side evidence, not just the escalated
+      // fallback entry the runner's post-quirk retry also happens to leave
+      // behind (that entry alone cannot distinguish "a quirk recovered
+      // this" from "the retry would have succeeded regardless").
       if (VARIANT === 'overlay') {
         app.style.visibility = 'hidden';
+        window.__consentDismissClicks__ = 0;
         document.querySelector('#consent-accept').addEventListener('click', () => {
+          window.__consentDismissClicks__ += 1;
           document.querySelector('#consent-overlay').remove();
           app.style.visibility = 'visible';
         });

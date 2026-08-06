@@ -104,17 +104,23 @@ export function replayArgsFor(invocation, argValues) {
   };
 }
 
-// Default dismiss-counter reader: `window.__interceptDismissClicks__` is
-// the one fixture-side counter that exists today (tests/fixtures/order-flow
-// /index.html's 'intercept'/'banner-intercepts' branch) -- see that file's
-// own doc comment. It is `undefined` (-> 0) on every OTHER variant/profile,
-// including 'base', which is exactly what the base-profile skeleton leg
-// needs. A flow descriptor may override this via its own
-// `readDismissCount` for a fixture with a different (or additional)
-// counter.
+// Default dismiss-counter reader: two fixture-side counters exist today
+// (tests/fixtures/order-flow/index.html's 'intercept'/'banner-intercepts'
+// branch sets `window.__interceptDismissClicks__`; the 'overlay'/
+// 'banner-hides' branch mirrors it with `window.__consentDismissClicks__`,
+// added by WS4a Task 4 per the ledger ruling that 'banner-hides' needs its
+// own countable dismiss evidence -- see index.html's own doc comment).
+// Exactly one of the two variants is ever live on a given page load (they
+// are mutually exclusive overlays), so summing both is equivalent to
+// reading "whichever one applies" without this reader needing to know
+// which profile is currently selected. Both are `undefined` (-> 0) on
+// every OTHER variant/profile, including 'base', which is exactly what the
+// base-profile skeleton leg needs. A flow descriptor may override this via
+// its own `readDismissCount` for a fixture with a different (or
+// additional) counter.
 async function defaultReadDismissCount(session) {
   return session.callTool('browser_evaluate', {
-    function: '() => window.__interceptDismissClicks__ || 0',
+    function: '() => (window.__interceptDismissClicks__ || 0) + (window.__consentDismissClicks__ || 0)',
   });
 }
 
@@ -128,6 +134,17 @@ async function defaultReadDismissCount(session) {
 //     name: string,                                   // harness-facing label
 //     intent: string,                                  // `flows find` intent
 //     startFixture: () => Promise<{ origin, close, setProfile }>,
+//     setup?: ({ origin, paths }) => Promise<void>,     // WS4a Task 4: runs
+//                                                        // once, right after
+//                                                        // startFixture, before
+//                                                        // recording -- e.g.
+//                                                        // registering site-
+//                                                        // memory quirks
+//                                                        // against the
+//                                                        // fixture's real
+//                                                        // origin so every
+//                                                        // leg's own `flows
+//                                                        // find` embeds them
 //     record: (session, origin) => Promise<void>,       // discrete tool calls
 //     replayArgs: (invocation) => object,                // -> callTool args
 //     readDismissCount?: (session) => Promise<number>,   // default above
@@ -141,7 +158,7 @@ async function defaultReadDismissCount(session) {
 // the approved artifact's raw bytes immediately after approval: this is
 // the ONE canonical recording every profile leg below replays against, and
 // the snapshot is what makes each leg's own restore step meaningful.
-async function recordAndApprove(t, flow, fixture, paths) {
+export async function recordAndApprove(t, flow, fixture, paths) {
   const recorder = await tracedSession(t, paths.dataDir);
   await flow.record(recorder, fixture.origin);
   await recorder.close();
@@ -184,6 +201,17 @@ async function recordAndApprove(t, flow, fixture, paths) {
 // derived fresh from the just-restored artifact, never a prior leg's
 // mutated one), replay, read the dismiss-counter delta, sweep, classify.
 //
+// Exported (WS4a Task 4) so a caller that needs finer-grained control than
+// `runHarness`'s own all-restore-every-leg loop can drive extra legs
+// directly: the quarantine-threshold leg (`text-rename-far`, three
+// consecutive failures needed to trip `QUARANTINE_FAIL_STREAK_THRESHOLD`)
+// must NOT restore between attempts (a restore would reset `failStreak`
+// back to 0 every time, exactly the isolation this function's own restore
+// step deliberately provides for every OTHER, independent leg) -- passing
+// `restore: false` skips exactly that one step and nothing else, so a
+// caller opting out of it takes on full responsibility for what's left on
+// disk when it starts.
+//
 // The restore happens BEFORE every leg, including the very first, and it
 // undoes MORE than heals: sweep.mjs's `applyReplayRecords` rewrites the
 // SAME ready-tier file for every processed replay it sees, heal or not --
@@ -200,10 +228,10 @@ async function recordAndApprove(t, flow, fixture, paths) {
 // raw byte-equality against the snapshot after any leg's OWN sweep has
 // run (that sweep's own provenance bump is real, expected drift from an
 // actual replay, not a leak -- see that test's own comment).
-async function replayOneProfile({
-  t, flow, fixture, paths, recorded, profileName,
+export async function replayOneProfile({
+  t, flow, fixture, paths, recorded, profileName, restore = true,
 }) {
-  await writeFile(recorded.flowFilePath, recorded.snapshot);
+  if (restore) await writeFile(recorded.flowFilePath, recorded.snapshot);
   fixture.setProfile(profileName);
 
   const findReport = await flowsCommand(
@@ -293,6 +321,7 @@ export async function runHarness({
   for (const flow of flowDescriptors) {
     const fixture = await flow.startFixture();
     try {
+      if (flow.setup) await flow.setup({ origin: fixture.origin, paths });
       const recorded = await recordAndApprove(t, flow, fixture, paths);
       recordings.push(recorded);
 

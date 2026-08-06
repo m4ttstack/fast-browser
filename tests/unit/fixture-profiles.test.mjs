@@ -184,6 +184,31 @@ test('delayed-render: the place-order insert and its listener both defer behind 
   assert.ok(output.includes('<button type="button" id="place-order">Place order</button>'));
 });
 
+// --- WS4a Task 4 (ledger ruling, constraint 1): banner-hides' dismissal
+// must be fixture-side countable, mirroring banner-intercepts' own
+// `__interceptDismissClicks__`, so the harness can classify a successful
+// recovery as 'quirk' rather than 'escalated'. Provable by string
+// inspection alone (same discipline as every other targeted diff above):
+// the counter's init and increment are both present verbatim in the
+// banner-hides transform's output, since profiles.mjs never edits
+// index.html's script text -- it only swaps the VARIANT global and inserts
+// the overlay markup, so the (always-present, runtime-gated) counter logic
+// simply becomes reachable this time.
+test('banner-hides: the consent-accept dismissal is fixture-side countable, mirroring window.__interceptDismissClicks__', () => {
+  const base = renderBase();
+  const output = PROFILES['banner-hides'].transform(base);
+
+  assert.ok(output.includes('window.__consentDismissClicks__ = 0;'), 'expected the counter initialized in the overlay variant branch');
+  assert.ok(output.includes('window.__consentDismissClicks__ += 1;'), 'expected the #consent-accept click handler to increment the counter');
+  // The base (unmutated) markup still has this counter logic present too
+  // (it's part of index.html's always-shipped script, just runtime-gated
+  // behind `VARIANT === 'overlay'`) -- pinned here so a future edit can't
+  // accidentally make the counter banner-hides-transform-specific instead
+  // of a property of the fixture's own source.
+  assert.ok(base.includes('window.__consentDismissClicks__ = 0;'));
+  assert.ok(base.includes('window.__consentDismissClicks__ += 1;'));
+});
+
 // --- carry-forward 2: the HTTP-layer unknown-profile 400, exercised for
 // real (a running server, a real request), not just the pure function ---
 
