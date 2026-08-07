@@ -677,6 +677,115 @@ test('an ordinary resolution miss still reports FLOW_RUNNER_FAILURE with "no loc
   assert.equal(actCalls, 0);
 });
 
+// `hasCompletedMutatingStep` (the qualification `fail` uses to choose
+// between the two SIDECAR_LOST `recovery` strings) had zero coverage before
+// this: the two `restart the flow from navigation` assertions above both use
+// flows with no `mutating: true` step at all, so neither can tell the
+// mutating branch apart from the plain one, and neither can catch the
+// off-by-one this loop bound is exposed to (`i < stepsCompleted` vs
+// `i <= stepsCompleted`, which would wrongly count the CURRENTLY FAILING
+// step -- never actually completed -- as already having run).
+//
+// Reused by both tests below: a stub whose `click` always succeeds and
+// whose `fill` always throws `message` (a sidecar-lost signature), driving
+// a two-step flow whose first step completes and whose second step is the
+// one that fails. Only the *placement* of `mutating: true` differs between
+// the two call sites, which is exactly the variable under test.
+async function runFlowExpectingSidecarLost(flow, message) {
+  const source = await readSource();
+  const macro = new Function(`"use strict"; return (${source});`)();
+  const page = {
+    url: () => 'https://example.test/start',
+    on: () => {},
+    off: () => {},
+    goto: async () => {},
+    locator: () => ({
+      waitFor: async () => {},
+      click: async () => {},
+      fill: async () => { throw new Error(message); },
+      frames: () => [],
+    }),
+    waitForLoadState: async () => {},
+  };
+  try {
+    await macro(page, { flow });
+  } catch (error) {
+    return error.message;
+  }
+  throw new Error('expected the macro to throw');
+}
+
+test('SIDECAR_LOST after a completed mutating step tells the caller to verify, not restart (hasCompletedMutatingStep positive case)', async () => {
+  // Step 0 is `mutating: true` and completes (click resolves and fires);
+  // step 1 is the one that hits the sidecar-lost signature. `stepsCompleted`
+  // is pinned to 1, documenting that "completed" means "index < stepsCompleted"
+  // -- step 0 is in range, step 1 (the failing step itself) is not.
+  const flow = {
+    schemaVersion: 1,
+    name: 'mutating-completed-probe',
+    origin: 'https://example.test',
+    steps: [
+      { op: 'click', mutating: true, target: { locators: [{ kind: 'css', selector: '#submit' }] } },
+      { op: 'fill', target: { locators: [{ kind: 'css', selector: '#username' }] }, value: 'someone' },
+    ],
+  };
+  const message = await runFlowExpectingSidecarLost(
+    flow,
+    'locator.fill: Target page, context or browser has been closed',
+  );
+  assert.match(message, /^SIDECAR_LOST: /);
+  const shape = JSON.parse(message.slice('SIDECAR_LOST: '.length));
+  assert.equal(shape.stepsCompleted, 1, 'only step 0 (the click) had completed');
+  // Exact text, read out of flow-runner.js's own `fail()` (source lines
+  // ~172-176), not re-derived: a wrong flag name or a broken comparison
+  // that still happened to produce SOME string would slip past a looser
+  // assertion here.
+  assert.equal(
+    shape.recovery,
+    'do not repeat this call; a completed step was mutating -- verify '
+      + 'its effect on the site before deciding whether to continue; '
+      + 'when in doubt, stop and report instead of re-running the flow',
+  );
+  // The negative half matters as much as the positive match above: without
+  // it, this test would still pass if both branches of `fail()` happened to
+  // emit the same "restart" string -- a regression that flattened the
+  // qualification back to the single fixed string it replaced.
+  assert.doesNotMatch(shape.recovery, /restart the flow from navigation/i);
+});
+
+test('SIDECAR_LOST on the step that is itself failing (never completed) still says restart, even when that step is mutating (hasCompletedMutatingStep boundary case)', async () => {
+  // The ONLY mutating step is step 1 -- the one currently throwing the
+  // sidecar-lost signature. It never "completed": `stepsCompleted` is 1, so
+  // `hasCompletedMutatingStep`'s loop (`i < stepsCompleted`) never visits
+  // index 1 at all. This is the case that would silently break if that
+  // loop bound were ever widened from `<` to `<=`: a `<=` walk would visit
+  // index 1, see `mutating: true`, and wrongly tell the caller to verify a
+  // step that never actually ran instead of the correct, safe "restart".
+  const flow = {
+    schemaVersion: 1,
+    name: 'mutating-boundary-probe',
+    origin: 'https://example.test',
+    steps: [
+      { op: 'click', target: { locators: [{ kind: 'css', selector: '#submit' }] } },
+      {
+        op: 'fill',
+        mutating: true,
+        target: { locators: [{ kind: 'css', selector: '#username' }] },
+        value: 'someone',
+      },
+    ],
+  };
+  const message = await runFlowExpectingSidecarLost(
+    flow,
+    'locator.fill: Target page, context or browser has been closed',
+  );
+  assert.match(message, /^SIDECAR_LOST: /);
+  const shape = JSON.parse(message.slice('SIDECAR_LOST: '.length));
+  assert.equal(shape.stepsCompleted, 1, 'only step 0 (the non-mutating click) had completed');
+  assert.equal(shape.recovery, 'restart the flow from navigation; do not repeat this call');
+  assert.match(shape.recovery, /restart the flow from navigation/i);
+});
+
 test('flow-runner.js never says "retry", including in comments', async () => {
   // Duplicated deliberately from the existing canary above: the recovery
   // wording added for SIDECAR_LOST is the most likely accidental
