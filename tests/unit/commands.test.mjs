@@ -73,6 +73,7 @@ function validConfig(overrides = {}) {
     video: null,
     trace: true,
     encoder: 'lexical',
+    registry: { url: null, publicKey: null, assumeYes: false },
     ...overrides,
   };
 }
@@ -4833,4 +4834,133 @@ test('CLI main --help mentions stats among the supported commands', async () => 
   const writes = [];
   await main({ command: 'doctor', help: true }, { write: (text) => writes.push(text) });
   assert.match(writes.join(''), /\bstats\b/);
+});
+
+// --- registry (WS4b Task 7) ---
+
+test('CLI main --help mentions registry and its subcommands', async () => {
+  const writes = [];
+  await main({ command: 'doctor', help: true }, { write: (text) => writes.push(text) });
+  const output = writes.join('');
+  assert.match(output, /\bregistry\b/);
+  assert.match(output, /init\|push\|pull\|search\|status/);
+});
+
+test('CLI main dispatches registry status and renders a short human block', async () => {
+  const writes = [];
+  const report = {
+    command: 'registry',
+    sub: 'status',
+    configured: true,
+    url: 'https://registry.example.com',
+    fingerprint: 'aa:bb:cc:dd:ee:ff:00:11:22:33:44:55:66:77:88:99',
+    assumeYes: false,
+    hasToken: true,
+    reachable: true,
+    health: { ok: true, version: '1.0.0', clustering: false },
+  };
+  await main(
+    { command: 'registry', sub: 'status', json: false },
+    { commands: { registry: async () => report }, write: (text) => writes.push(text) },
+  );
+  const output = writes.join('');
+  assert.match(output, /Configured: true/);
+  assert.match(output, /URL: https:\/\/registry\.example\.com/);
+  assert.match(output, /Fingerprint: aa:bb:cc:dd:ee:ff:00:11:22:33:44:55:66:77:88:99/);
+  assert.match(output, /Token present: true/);
+  assert.doesNotMatch(output, /assumeYes: undefined/);
+});
+
+test('CLI main --json passes the registry report straight through', async () => {
+  const writes = [];
+  const report = {
+    command: 'registry', sub: 'search', mode: 'lexical', results: [],
+  };
+  await main(
+    {
+      command: 'registry', sub: 'search', intent: 'log in', json: true,
+    },
+    { commands: { registry: async () => report }, write: (text) => writes.push(text) },
+  );
+  assert.deepEqual(JSON.parse(writes.join('')), report);
+});
+
+test('CLI main renders registry search results with mode, score, description, and args', async () => {
+  const writes = [];
+  const report = {
+    command: 'registry',
+    sub: 'search',
+    mode: 'semantic',
+    results: [{
+      envelope: {
+        artifact: {
+          name: 'log-in', origin: 'https://example.com', description: 'Logs in.',
+        },
+      },
+      score: 0.97,
+      args: { username: { type: 'string', required: true } },
+    }],
+  };
+  await main(
+    { command: 'registry', sub: 'search', json: false },
+    { commands: { registry: async () => report }, write: (text) => writes.push(text) },
+  );
+  const output = writes.join('');
+  assert.match(output, /Mode: semantic/);
+  assert.match(output, /log-in \(https:\/\/example\.com\) score=0\.97 - Logs in\. \[args: username\]/);
+});
+
+test('CLI main exits non-zero when a registry pull reports a verify failure, but not when it reports ok', async () => {
+  const okExitCode = await main(
+    { command: 'registry', sub: 'pull', json: false },
+    {
+      commands: {
+        registry: async () => ({
+          command: 'registry', sub: 'pull', ok: true, results: [], warnings: [],
+        }),
+      },
+      write: () => {},
+    },
+  );
+  assert.equal(okExitCode, 0);
+
+  const failedExitCode = await main(
+    { command: 'registry', sub: 'pull', json: false },
+    {
+      commands: {
+        registry: async () => ({
+          command: 'registry',
+          sub: 'pull',
+          ok: false,
+          results: [{ name: 'log-in', outcome: 'rejected', reason: 'signature-invalid' }],
+          warnings: [{ kind: 'pull-rejected', name: 'log-in', reason: 'signature verification failed' }],
+        }),
+      },
+      write: () => {},
+    },
+  );
+  assert.equal(failedExitCode, 1);
+});
+
+test('CLI main strips control characters from registry search text before printing', async () => {
+  const writes = [];
+  const report = {
+    command: 'registry',
+    sub: 'search',
+    mode: 'lexical',
+    results: [{
+      envelope: {
+        artifact: {
+          name: 'log-in\x1b[31m', origin: 'https://example.com', description: 'Logs in\x1b[0m.',
+        },
+      },
+      score: 1,
+      args: {},
+    }],
+  };
+  await main(
+    { command: 'registry', sub: 'search', json: false },
+    { commands: { registry: async () => report }, write: (text) => writes.push(text) },
+  );
+  assert.doesNotMatch(writes.join(''), /\x1b/);
 });

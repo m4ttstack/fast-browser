@@ -55,6 +55,7 @@ function migrationConfig() {
     video: null,
     trace: true,
     encoder: 'lexical',
+    registry: { url: null, publicKey: null, assumeYes: false },
   };
 }
 
@@ -395,6 +396,13 @@ test('the reinstall branch rewrites its declared fields and carries everything e
     // unchanged. A non-default value ('voyage', not 'lexical') proves it
     // was actually carried, not just coincidentally still the default.
     encoder: 'voyage',
+    // WS4b Task 7: config.registry is pinned exclusively by `fast-browser
+    // registry init`'s own TOFU consent gate -- setup has no flag for it
+    // and no claim on it either, so a reinstall must carry it through
+    // unchanged, same reasoning as encoder/trace/annotation/video/
+    // connection above. Non-default values throughout prove it was
+    // actually carried, not coincidentally still the default.
+    registry: { url: 'https://registry.example.com', publicKey: 'a-pinned-key', assumeYes: true },
   };
   assert.deepEqual(
     Object.keys(defaultConfig()).sort(),

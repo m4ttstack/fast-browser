@@ -32,6 +32,7 @@ const requiredEntries = [
   'package/lib/commands/doctor.mjs',
   'package/lib/commands/flows.mjs',
   'package/lib/commands/migrate.mjs',
+  'package/lib/commands/registry.mjs',
   'package/lib/commands/setup.mjs',
   'package/lib/commands/sites.mjs',
   'package/lib/commands/stats.mjs',
@@ -54,6 +55,17 @@ const requiredEntries = [
   'package/lib/sites/inventory.mjs',
   'package/lib/sites/patterns.mjs',
   'package/lib/sites/store.mjs',
+  // WS4b Task 7: lib/commands/registry.mjs imports these three
+  // registry/lib modules directly (each is dependency-free -- see their
+  // own doc comments -- so importing them keeps the plugin's own
+  // `dependencies: {}` pin intact). The REST of registry/ (server.mjs,
+  // store.mjs, pg-store.mjs, ...) is deliberately never packaged here --
+  // it's a separate Railway-deployed service, not part of the installed
+  // plugin -- so only these three files are listed in package.json's
+  // `files`, not a blanket `registry/lib/`.
+  'package/registry/lib/pii-lint.mjs',
+  'package/registry/lib/signature-fields.mjs',
+  'package/registry/lib/signing.mjs',
   'package/skills/annotating-screenshots/agents/openai.yaml',
   'package/skills/browser-macros/agents/openai.yaml',
   'package/skills/fast-browsing/agents/openai.yaml',

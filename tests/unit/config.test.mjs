@@ -35,6 +35,7 @@ test('safe config contains no secret and disables recording', () => {
     video: null,
     trace: true,
     encoder: 'lexical',
+    registry: { url: null, publicKey: null, assumeYes: false },
   });
 });
 
@@ -62,6 +63,7 @@ test('parsing returns a clean supported config without unknown keys', () => {
     video: null,
     trace: true,
     encoder: 'lexical',
+    registry: { url: null, publicKey: null, assumeYes: false },
   });
 });
 
@@ -276,5 +278,53 @@ test('rejects an encoder value that is neither lexical nor voyage', () => {
   assert.throws(
     () => parseConfig(configFor({ encoder: 'openai' })),
     /encoder/,
+  );
+});
+
+// --- registry (WS4b Task 7) ---
+
+test('registry defaults to unconfigured so a fresh install pins nothing', () => {
+  assert.deepEqual(defaultConfig().registry, { url: null, publicKey: null, assumeYes: false });
+});
+
+test('an existing v1 config without a registry field still parses as unconfigured', () => {
+  const legacy = defaultConfig();
+  delete legacy.registry;
+  assert.deepEqual(parseConfig(legacy).registry, { url: null, publicKey: null, assumeYes: false });
+});
+
+test('a pinned registry url/publicKey/assumeYes round-trips', () => {
+  const registry = { url: 'https://registry.example.com', publicKey: '-----BEGIN PUBLIC KEY-----\nabc\n-----END PUBLIC KEY-----\n', assumeYes: true };
+  assert.deepEqual(parseConfig(configFor({ registry })).registry, registry);
+});
+
+test('rejects a registry.url that is not an absolute http(s) URL', () => {
+  for (const url of ['not-a-url', 'ftp://example.com', '/relative/path']) {
+    assert.throws(
+      () => parseConfig(configFor({ registry: { url, publicKey: null, assumeYes: false } })),
+      /registry\.url/,
+      url,
+    );
+  }
+});
+
+test('rejects a non-string registry.publicKey', () => {
+  assert.throws(
+    () => parseConfig(configFor({ registry: { url: null, publicKey: 123, assumeYes: false } })),
+    /registry\.publicKey/,
+  );
+});
+
+test('rejects a non-boolean registry.assumeYes', () => {
+  assert.throws(
+    () => parseConfig(configFor({ registry: { url: null, publicKey: null, assumeYes: 'yes' } })),
+    /registry\.assumeYes/,
+  );
+});
+
+test('registry.assumeYes defaults to false when omitted from an otherwise-present registry block', () => {
+  assert.equal(
+    parseConfig(configFor({ registry: { url: null, publicKey: null } })).registry.assumeYes,
+    false,
   );
 });
