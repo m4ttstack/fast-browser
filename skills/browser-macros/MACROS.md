@@ -175,6 +175,27 @@ check (`ENOENT` or "outside allowed roots").
   never touched -- a host-side heal module (a later task) treats this as
   optional ranking evidence, never as something the failure contract
   depends on.
+  A lost CDP connection during replay is a THIRD, distinct contract, not a
+  variant of the FLOW_RUNNER_FAILURE shape above: the thrown error's
+  message is instead the literal prefix `SIDECAR_LOST: ` followed by the
+  JSON-serialized shape `{ failedStep, error, url, stepsCompleted,
+  locatorFallbacks, quirkAttempted?, candidates?, recovery }` -- the same
+  fields FLOW_RUNNER_FAILURE carries, plus one additive field, `recovery`,
+  always the fixed string `restart the flow from navigation; do not repeat
+  this call`. Classification runs off the underlying Playwright/relay error
+  text (`Target closed`, `Target crashed`, `Browser has been disconnected`,
+  `WebSocket is not open`, and similar connection-loss signatures on the
+  message's first line), not off which step failed, so any step -- including
+  one that would otherwise report an ordinary locator-miss -- can produce
+  SIDECAR_LOST instead. A caller must not parse `stepsCompleted` from this
+  shape and resume the flow partway, and must not repeat the call that
+  failed: the browser behind a lost connection has been reconnected or
+  replaced by the time the error surfaces and has no page state left, so
+  either would run against a blank browser and produce output that looks
+  successful and is wrong -- and on a flow whose earlier steps already
+  mutated something, resuming from the start would repeat those mutations.
+  `recovery` exists to make that instruction explicit in the payload itself
+  rather than leaving a caller to infer it from the prefix alone.
 - Target: Any page; site-specific per invocation, driven entirely by
   `flow.origin`
 - Script: `~/.fast-browser/macros/flow-runner.js`

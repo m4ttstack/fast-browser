@@ -23,6 +23,9 @@ Never run a candidate with `runnable: false`. Its `reasons` say why:
 run that command; `contains js step: not replayable in v1` means the flow
 needs re-recording. Do not attempt either yourself.
 
+A failed `flow-runner` call errors with one of two distinct prefixes; check
+which one fired before deciding what to do next.
+
 If the call errors with a message starting `FLOW_RUNNER_FAILURE: `, parse
 the JSON payload after that prefix (`failedStep`, `error`, `url`,
 `stepsCompleted`, `locatorFallbacks`, and on a locator-miss failure,
@@ -32,6 +35,11 @@ hand-edit the flow artifact to fix a failure: the next `flows compile`
 sweep reads this same evidence and heals the artifact automatically when
 it is unambiguous. If the flow keeps failing, it quarantines on its own;
 re-record it instead.
+
+If the call errors with a message starting `SIDECAR_LOST: ` instead, do not
+treat it like the case above: it is not a step failure and does not fall
+through to macros. See "When a tool call fails with SIDECAR_LOST" below
+before doing anything else.
 
 ## Scripts vs. discrete steps
 
@@ -126,8 +134,11 @@ Fast Browser drives the real Chrome instance connected through its extension.
 Do not claim access to arbitrary existing windows, Incognito windows, other
 profiles, non-Chrome browsers, or a separate isolated browser.
 
-Never enter credentials or log in for the user. When authentication is needed,
-ask the user to complete it in the real Chrome window, then continue.
+Never enter a credential VALUE yourself, and never ask the user for one. When
+a site needs a login and a named secret is configured for it, log in with
+that name using "Logging in with credentials" below. When no secret is
+configured, ask the user to complete the login in the real Chrome window,
+then continue.
 
 ## Quick reference
 
@@ -140,4 +151,43 @@ ask the user to complete it in the real Chrome window, then continue.
 | Predictable multi-step flow | Batch it |
 | Known text or region | Read it narrowly |
 | Same step failed twice | Change to single-step recovery |
+| `SIDECAR_LOST` from flow-runner | Restart the flow from navigation; never repeat the call |
 | Task complete | Return only the distilled result |
+
+## When a tool call fails with SIDECAR_LOST
+
+`SIDECAR_LOST` means the browser connection dropped mid-flow. It is not an
+ordinary step failure.
+
+Do not repeat the call that failed, and do not resume the flow partway. The
+browser has no page state left, so continuing produces output that looks
+successful and is wrong.
+
+Re-run the flow from its first navigation step. If the second attempt raises
+`SIDECAR_LOST` again, stop and report it: the sidecar is restarting or gone,
+and that is the pod's problem to fix, not something more attempts will
+resolve.
+
+## Logging in with credentials
+
+Secrets resolve inside the runtime, and only in `browser_fill_form` (textbox
+and slider fields) and `browser_type`. Nothing else reaches them. That means
+login cannot be a macro and cannot be a replayed flow: `flow-runner` fills
+through the page directly, so a placeholder would be typed in literally.
+
+Log in with real tool calls, passing the secret's NAME as the field value:
+
+1. `browser_navigate` to the login URL.
+2. `browser_fill_form` with the secret names as values, for example
+   `APP_USERNAME` and `APP_PASSWORD`. Never the values themselves.
+3. `browser_click` on the submit control.
+4. Assert an element that only renders once authenticated.
+
+Step 4 is required, not a nicety. An unmatched secret name is filled in
+literally rather than raising, so a mistyped name types `APP_PASSWORD` into
+the password field and the flow proceeds into a logged-out session. The
+assertion is what turns that into a visible failure before anything is
+captured.
+
+Never put a credential value in a tool argument, a macro argument, or a flow
+artifact. Only the name.
