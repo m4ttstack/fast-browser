@@ -1,10 +1,14 @@
 import assert from 'node:assert/strict';
+import os from 'node:os';
+import path from 'node:path';
 import test from 'node:test';
 
 import { EnvContractError, cloudConfig, isCloudInvocation } from '../../lib/core/env-config.mjs';
 
-// The one filesystem probe is injected so these tests never touch a real disk.
-function fakeFs({ readable = [] } = {}) {
+// Both filesystem calls are injected so these tests never touch a real disk.
+// `mkdtemp` records the prefix it was handed, so the default-output-dir tests
+// can assert where a pod's scratch directory would actually be created.
+function fakeFs({ readable = [], mkdtempCalls = [] } = {}) {
   return {
     access: async (target) => {
       if (!readable.includes(target)) {
@@ -12,6 +16,10 @@ function fakeFs({ readable = [] } = {}) {
         error.code = 'ENOENT';
         throw error;
       }
+    },
+    mkdtemp: async (prefix) => {
+      mkdtempCalls.push(prefix);
+      return `${prefix}abc123`;
     },
   };
 }
@@ -38,7 +46,8 @@ test('a minimal valid contract produces a cdp config with local-only machinery d
   assert.equal(config.engine, 'cdp');
   assert.equal(config.cdpEndpoint, 'http://127.0.0.1:9222');
   assert.equal(config.secretsFile, null);
-  assert.equal(config.outputDir, null);
+  // Never null, and never paths.dataDir: see the dedicated tests below.
+  assert.ok(config.outputDir, 'an unset output dir must still resolve to a real path');
   assert.equal(config.debugCapture, false);
   // Trace and session recording are off in a pod unless debug capture asks
   // for them, inverting the local default.
@@ -104,6 +113,32 @@ test('an unreadable secrets path exits 78, and a readable one is forwarded verba
     fakeFs({ readable: ['/run/secrets/app.env'] }),
   );
   assert.equal(config.secretsFile, '/run/secrets/app.env');
+});
+
+test('an unset output dir becomes a fresh tmpdir, never the home data dir', async () => {
+  const mkdtempCalls = [];
+  const config = await cloudConfig(MINIMAL, fakeFs({ mkdtempCalls }));
+
+  // The pod bake does not set FAST_BROWSER_OUTPUT_DIR, and a baked $HOME can
+  // be read-only. Resolving to ~/.fast-browser would defer the failure to the
+  // first write instead of failing at startup, which is exactly the silent
+  // late failure this contract exists to prevent.
+  assert.equal(mkdtempCalls.length, 1, 'exactly one scratch directory per launch');
+  assert.equal(mkdtempCalls[0], path.join(os.tmpdir(), 'fast-browser-'));
+  assert.equal(config.outputDir, `${path.join(os.tmpdir(), 'fast-browser-')}abc123`);
+  assert.ok(config.outputDir.startsWith(os.tmpdir()), 'must live under the system tmpdir');
+  assert.ok(!config.outputDir.includes('.fast-browser/'), 'must not be the home data dir');
+});
+
+test('an explicit output dir is forwarded verbatim and creates no tmpdir', async () => {
+  const mkdtempCalls = [];
+  const config = await cloudConfig(
+    { ...MINIMAL, FAST_BROWSER_OUTPUT_DIR: '/mnt/scratch' },
+    fakeFs({ mkdtempCalls }),
+  );
+
+  assert.equal(config.outputDir, '/mnt/scratch');
+  assert.deepEqual(mkdtempCalls, [], 'no scratch directory when the operator named one');
 });
 
 test('cloudConfig never reads the secrets file contents', async () => {
