@@ -1,0 +1,9 @@
+# Railway upload exclusions. The deployed service is registry/ plus the
+# dependency-free lib/flows and registry/lib modules it imports; tests are
+# never needed at runtime, and tests/fixtures/legacy-home contains
+# intentionally dangling symlinks that break the upload indexer.
+tests/
+.superpowers/
+.github/
+skills/
+docs/
