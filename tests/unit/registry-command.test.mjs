@@ -280,6 +280,96 @@ test('registry init re-run with the SAME already-pinned key does not warn of a k
   assert.ok(!prints.some((line) => /WARNING/.test(line)));
 });
 
+// Final whole-branch review, blocking #1: the SAME key re-encoded with
+// CRLF line endings, or with its trailing newline stripped, must fingerprint
+// identically and never trip the key-change warning -- both are pure
+// formatting differences over the identical key material.
+function toCrlf(pem) {
+  return pem.replace(/\n/g, '\r\n');
+}
+
+function withoutTrailingNewline(pem) {
+  return pem.endsWith('\n') ? pem.slice(0, -1) : pem;
+}
+
+test('registry init produces an identical fingerprint for the same key regardless of CRLF line endings or a missing trailing newline', async () => {
+  const { publicKey } = keyPair();
+  const variants = [publicKey, toCrlf(publicKey), withoutTrailingNewline(publicKey)];
+  const fingerprints = [];
+
+  for (const variant of variants) {
+    // eslint-disable-next-line no-await-in-loop
+    const report = await registry(
+      { sub: 'init', registryUrl: 'https://registry.example.com', json: false },
+      {
+        interactive: true,
+        loadConfig: async () => baseConfig(),
+        saveConfig: async () => {},
+        fetch: async () => jsonResponse(200, {
+          ok: true, version: '1.0.0', publicKey: variant, clustering: false,
+        }),
+        print: () => {},
+        confirmInit: async () => true,
+      },
+    );
+    fingerprints.push(report.fingerprint);
+  }
+
+  assert.equal(fingerprints[0], fingerprints[1]);
+  assert.equal(fingerprints[0], fingerprints[2]);
+});
+
+test('registry init re-run with the same key in a different formatting (CRLF) does not warn of a key change, and pins the normalized form', async () => {
+  const { publicKey } = keyPair();
+  const saved = [];
+  const prints = [];
+
+  const report = await registry(
+    { sub: 'init', registryUrl: 'https://registry.example.com', json: false },
+    {
+      interactive: true,
+      // Pinned in its original LF form; the registry now presents the
+      // SAME key reformatted with CRLF line endings.
+      loadConfig: async () => configuredConfig(publicKey),
+      saveConfig: async (paths, config) => saved.push(config),
+      fetch: async () => jsonResponse(200, {
+        ok: true, version: '1.0.0', publicKey: toCrlf(publicKey), clustering: false,
+      }),
+      print: (line) => prints.push(line),
+      confirmInit: async () => true,
+    },
+  );
+
+  assert.equal(report.keyChanged, false);
+  assert.ok(!prints.some((line) => /WARNING/.test(line)));
+  // Pinned form is normalized (LF, matches the original), not the raw
+  // CRLF bytes the registry happened to send this time.
+  assert.equal(saved[0].registry.publicKey, publicKey);
+});
+
+test('registry init still warns when the key has genuinely changed, not merely been reformatted', async () => {
+  const previous = keyPair();
+  const next = keyPair();
+  const prints = [];
+
+  const report = await registry(
+    { sub: 'init', registryUrl: 'https://registry.example.com', json: false },
+    {
+      interactive: true,
+      loadConfig: async () => configuredConfig(toCrlf(previous.publicKey)),
+      saveConfig: async () => {},
+      fetch: async () => jsonResponse(200, {
+        ok: true, version: '1.0.0', publicKey: next.publicKey, clustering: false,
+      }),
+      print: (line) => prints.push(line),
+      confirmInit: async () => true,
+    },
+  );
+
+  assert.equal(report.keyChanged, true);
+  assert.ok(prints.some((line) => /WARNING/.test(line)));
+});
+
 // --- push ---
 
 test('push manifest lists exactly the ready tier minus lint-excluded flows, with a pinned per-flow exclusion warning', async () => {
@@ -1000,6 +1090,100 @@ test('push/pull/search require a configured registry, naming `registry init` in 
           sub, json: true, intent: 'x', origin: null, yes: false,
         },
         { loadConfig: async () => baseConfig(), env: { FAST_BROWSER_REGISTRY_TOKEN: 'tok' } },
+      ),
+      (error) => error.name === 'LifecycleError' && /registry init/.test(error.message),
+    );
+  }
+});
+
+// --- network hardening (final whole-branch review) ---
+
+// Blocking #2: every request this client makes must refuse to follow a
+// redirect rather than silently sending a subsequent request (potentially
+// carrying a push body, or an Authorization header) wherever the redirect
+// points.
+test('every registry request sets redirect: "error", never following a redirect', async () => {
+  const { publicKey } = keyPair();
+  const flow = validFlow({ name: 'clean-flow' });
+  const calls = [];
+  const fetchSpy = async (url, options) => {
+    calls.push({ url, redirect: options.redirect });
+    if (url.endsWith('/health')) return jsonResponse(200, { ok: true, version: '1.0.0', publicKey, clustering: false });
+    if (url.endsWith('/v1/search?intent=x')) return jsonResponse(200, { mode: 'lexical', results: [] });
+    return jsonResponse(200, { flows: [] });
+  };
+
+  await registry(
+    { sub: 'status', json: false },
+    { loadConfig: async () => configuredConfig(publicKey), fetch: fetchSpy, env: {} },
+  );
+  await registry(
+    { sub: 'search', intent: 'x', origin: null, json: false },
+    {
+      loadConfig: async () => configuredConfig(publicKey), fetch: fetchSpy, env: { FAST_BROWSER_REGISTRY_TOKEN: 'tok' },
+    },
+  );
+  await registry(
+    { sub: 'pull', origin: null, json: false },
+    {
+      loadConfig: async () => configuredConfig(publicKey),
+      fetch: fetchSpy,
+      listFlowFiles: async () => [],
+      env: { FAST_BROWSER_REGISTRY_TOKEN: 'tok' },
+    },
+  );
+  await registry(
+    { sub: 'push', json: false, yes: false },
+    {
+      interactive: true,
+      loadConfig: async () => configuredConfig(publicKey),
+      listFlowFiles: async () => ['clean-flow.flow.json'],
+      readFlowFile: async () => JSON.stringify(flow),
+      paths: { flowsDir: '/h/flows', flowsPendingDir: '/h/pending' },
+      print: () => {},
+      confirmPush: async () => true,
+      fetch: fetchSpy,
+      env: { FAST_BROWSER_REGISTRY_TOKEN: 'tok' },
+    },
+  );
+
+  assert.ok(calls.length >= 4);
+  for (const call of calls) {
+    assert.equal(call.redirect, 'error', `${call.url} did not set redirect: "error"`);
+  }
+});
+
+// --- corrupt pinned key (final whole-branch review, fold-in #3) ---
+
+test('a corrupt pinned publicKey fails with a named LifecycleError, never a raw decoder error, before any network call', async () => {
+  let fetchCalled = false;
+  await assert.rejects(
+    registry(
+      { sub: 'pull', origin: null, json: false },
+      {
+        loadConfig: async () => configuredConfig('this is not a PEM at all'),
+        fetch: async () => { fetchCalled = true; return jsonResponse(200, { flows: [] }); },
+        env: { FAST_BROWSER_REGISTRY_TOKEN: 'tok' },
+      },
+    ),
+    (error) => error.name === 'LifecycleError'
+      && /registry init/.test(error.message)
+      && !/error:|OPENSSL|DECODER/i.test(error.message),
+  );
+  assert.equal(fetchCalled, false);
+});
+
+test('a corrupt pinned publicKey is refused the same way for push and search too', async () => {
+  for (const sub of ['push', 'search']) {
+    await assert.rejects(
+      registry(
+        {
+          sub, json: true, intent: 'x', origin: null, yes: false,
+        },
+        {
+          loadConfig: async () => configuredConfig('this is not a PEM at all'),
+          env: { FAST_BROWSER_REGISTRY_TOKEN: 'tok' },
+        },
       ),
       (error) => error.name === 'LifecycleError' && /registry init/.test(error.message),
     );
