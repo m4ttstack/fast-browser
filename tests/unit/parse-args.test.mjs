@@ -601,3 +601,38 @@ test('registry subcommand flag strictness still allows each subcommand its own a
   assert.equal(parseArgs(['registry', 'pull', '--json']).json, true);
   assert.equal(parseArgs(['registry', 'status', '--json']).json, true);
 });
+
+// Fix round 1, Important #1: `request.sub` is only resolved once its own
+// positional token has been consumed, so a flag legitimately accepted by a
+// subcommand must parse identically whether it appears BEFORE or AFTER
+// that subcommand's positional -- validation is deferred to the end of the
+// whole parse specifically so position can never matter.
+test('a flag valid for its subcommand parses identically whether placed before or after the subcommand positional', () => {
+  const prefixStatus = parseArgs(['registry', '--json', 'status']);
+  const postfixStatus = parseArgs(['registry', 'status', '--json']);
+  assert.equal(prefixStatus.sub, 'status');
+  assert.equal(prefixStatus.json, true);
+  assert.deepEqual(prefixStatus, postfixStatus);
+
+  const prefixPush = parseArgs(['registry', '--yes', 'push']);
+  const postfixPush = parseArgs(['registry', 'push', '--yes']);
+  assert.equal(prefixPush.sub, 'push');
+  assert.equal(prefixPush.yes, true);
+  assert.deepEqual(prefixPush, postfixPush);
+});
+
+// Fix round 1, Important #1 (the negative counterpart): a flag placed
+// BEFORE the subcommand positional that the eventually-resolved subcommand
+// still does not accept must still be rejected, naming that real
+// subcommand -- not silently accepted just because `request.sub` was not
+// yet set when the flag token was read.
+test('an invalid flag placed before the subcommand positional is still rejected, naming the real subcommand', () => {
+  assert.throws(
+    () => parseArgs(['registry', '--origin', 'https://example.com', 'push']),
+    (error) => error instanceof UsageError && /--origin/.test(error.message) && /push/.test(error.message),
+  );
+  assert.throws(
+    () => parseArgs(['registry', '--json', 'init', 'https://registry.example.com']),
+    (error) => error instanceof UsageError && /--json/.test(error.message) && /init/.test(error.message),
+  );
+});

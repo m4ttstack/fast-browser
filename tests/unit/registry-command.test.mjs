@@ -645,6 +645,7 @@ test('push over PUSH_MAX_FLOWS: one manifest, one confirm, sequential batched PO
   assert.deepEqual(report.results.map((result) => result.name), flows.map((flow) => flow.name));
   assert.ok(report.results.every((result) => result.outcome === 'created'));
   assert.deepEqual(report.batches, { count: 3, size: PUSH_MAX_FLOWS });
+  assert.deepEqual(report.unknown, []);
   assert.deepEqual(report.notAttempted, []);
 });
 
@@ -701,7 +702,13 @@ test('push with PUSH_MAX_FLOWS + 1 flows splits into two POSTs (PUSH_MAX_FLOWS, 
   assert.deepEqual(report.batches, { count: 2, size: PUSH_MAX_FLOWS });
 });
 
-test('a mid-sequence transport failure reports the batches already pushed, marks the rest not-attempted, exits non-zero, and its guidance says re-pushing is safe', async () => {
+// Fix round 1, Important #3: the batch whose OWN request threw (batch 2
+// here) is `unknown`, not `not-attempted` -- the client cannot tell
+// whether that POST reached the registry before the transport fault hit
+// (a timeout or reset after transmit is indistinguishable, from here, from
+// one before transmit). Only STRICTLY LATER batches (batch 3), which this
+// sequential loop never even calls `fetch` for, are `not-attempted`.
+test('a mid-sequence transport failure reports batch 1 outcomes, marks the failing batch unknown and later batches not-attempted, exits non-zero, and its guidance says re-pushing is safe', async () => {
   const total = PUSH_MAX_FLOWS * 2 + 20; // 3 batches: 50/50/20
   const flows = manyFlows(total);
   const { publicKey } = keyPair();
@@ -730,10 +737,20 @@ test('a mid-sequence transport failure reports the batches already pushed, marks
       // transport failure, distinct from a --yes/assumeYes bypass path).
       assert.equal(error.name, 'LifecycleError');
       assert.notEqual(error.exitCode, 0);
-      // Guidance: re-pushing is safe because identical bytes dedupe.
+      // Guidance: re-pushing is safe because identical bytes dedupe, and
+      // (fix round 1, Important #3) the message counts all three groups
+      // separately -- confirmed pushed, unknown, and not attempted.
       assert.match(error.message, /re-run/i);
       assert.match(error.message, /safe/i);
       assert.match(error.message, /dedupe/i);
+      assert.match(error.message, new RegExp(`${PUSH_MAX_FLOWS} flow\\(s\\) confirmed pushed`));
+      assert.match(error.message, new RegExp(`${PUSH_MAX_FLOWS} flow\\(s\\) unknown`));
+      assert.match(error.message, /unknown \(the failed request may have reached the registry\)/);
+      assert.match(error.message, /20 flow\(s\) not attempted/);
+      // Deferred minor #6: the failure's own message and the accounting
+      // sentence that follows it are properly separated (never run
+      // together like "...: ECONNRESET 0 flow(s)...").
+      assert.match(error.message, /ECONNRESET\. \d+ flow\(s\)/);
 
       const { partialState } = error;
       // Batch 1's outcomes are reported.
@@ -742,11 +759,18 @@ test('a mid-sequence transport failure reports the batches already pushed, marks
         partialState.results.map((result) => result.name),
         flows.slice(0, PUSH_MAX_FLOWS).map((flow) => flow.name),
       );
-      // Batch 2 and batch 3's flows are marked not-attempted, in order.
-      assert.equal(partialState.notAttempted.length, PUSH_MAX_FLOWS + 20);
+      // Batch 2 (the failing batch) is unknown, in order.
+      assert.equal(partialState.unknown.length, PUSH_MAX_FLOWS);
+      assert.deepEqual(
+        partialState.unknown.map((entry) => entry.name),
+        flows.slice(PUSH_MAX_FLOWS, PUSH_MAX_FLOWS * 2).map((flow) => flow.name),
+      );
+      assert.ok(partialState.unknown.every((entry) => entry.outcome === 'unknown'));
+      // Batch 3 is not-attempted, in order.
+      assert.equal(partialState.notAttempted.length, 20);
       assert.deepEqual(
         partialState.notAttempted.map((entry) => entry.name),
-        flows.slice(PUSH_MAX_FLOWS).map((flow) => flow.name),
+        flows.slice(PUSH_MAX_FLOWS * 2).map((flow) => flow.name),
       );
       assert.ok(partialState.notAttempted.every((entry) => entry.outcome === 'not-attempted'));
       assert.deepEqual(partialState.batches, { count: 3, size: PUSH_MAX_FLOWS });
@@ -756,6 +780,44 @@ test('a mid-sequence transport failure reports the batches already pushed, marks
 
   // Batch 3 is never attempted -- only batches 1 and 2 were sent.
   assert.equal(calls.length, 2);
+});
+
+// Fix round 1, Important #2: a failure that hits on the FIRST batch, before
+// any batch has returned real outcomes, must surface as the underlying
+// error UNCHANGED -- same stage, same message, same exitCode -- not
+// re-wrapped in batch-accounting language. A missing bearer token is the
+// canonical case: it is not a transport failure at all (no `fetch` call is
+// ever made -- `callRegistry` refuses before that), and it must still read
+// exactly as it did before chunking existed.
+test('a missing FAST_BROWSER_REGISTRY_TOKEN on push fails with the identical stage/message/exitCode as before chunking, never wrapped in batch language', async () => {
+  const flows = manyFlows(5);
+  const { publicKey } = keyPair();
+
+  await assert.rejects(
+    registry(
+      { sub: 'push', json: false, yes: false },
+      {
+        interactive: true,
+        loadConfig: async () => configuredConfig(publicKey),
+        ...readyTierFixture(flows),
+        paths: { flowsDir: '/h/flows', flowsPendingDir: '/h/pending' },
+        print: () => {},
+        confirmPush: async () => true,
+        fetch: async () => { throw new Error('must not fetch when the token is missing'); },
+        env: {}, // no FAST_BROWSER_REGISTRY_TOKEN
+      },
+    ),
+    (error) => {
+      assert.equal(error.name, 'LifecycleError');
+      assert.equal(error.stage, 'registry-auth');
+      assert.match(error.message, /FAST_BROWSER_REGISTRY_TOKEN/);
+      assert.equal(error.exitCode, 2);
+      // Never re-wrapped: no batch-accounting or dedupe/re-run language.
+      assert.doesNotMatch(error.message, /batch/i);
+      assert.doesNotMatch(error.message, /dedupe/i);
+      return true;
+    },
+  );
 });
 
 // --- pull ---
