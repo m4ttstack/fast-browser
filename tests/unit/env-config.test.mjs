@@ -26,6 +26,10 @@ test('isCloudInvocation forks only on FAST_BROWSER_ENGINE being present', () => 
   assert.equal(isCloudInvocation({ FAST_BROWSER_CDP_ENDPOINT: 'http://127.0.0.1:9222' }), false);
   assert.equal(isCloudInvocation({ FAST_BROWSER_ENGINE: 'cdp' }), true);
   assert.equal(isCloudInvocation({ FAST_BROWSER_ENGINE: 'nonsense' }), true);
+  // A present-but-empty value (an ordinary k8s `value: ""`, or an unset
+  // variable expansion) is still presence, not absence -- it must fork into
+  // the cloud path and fail loudly there, never fall through to local.
+  assert.equal(isCloudInvocation({ FAST_BROWSER_ENGINE: '' }), true);
 });
 
 test('a minimal valid contract produces a cdp config with local-only machinery disabled', async () => {
@@ -54,16 +58,19 @@ test('FAST_BROWSER_DEBUG_CAPTURE turns traces and sessions on together', async (
   assert.equal(config.sessions.enabled, true);
 });
 
-test('an unknown engine value exits 78 rather than falling back to local', async () => {
-  await assert.rejects(
-    () => cloudConfig({ ...MINIMAL, FAST_BROWSER_ENGINE: 'headless' }, fakeFs()),
-    (error) => {
-      assert.ok(error instanceof EnvContractError);
-      assert.equal(error.exitCode, 78);
-      assert.match(error.message, /FAST_BROWSER_ENGINE/);
-      return true;
-    },
-  );
+test('an unknown or empty engine value exits 78 rather than falling back to local', async () => {
+  for (const engine of ['headless', '']) {
+    await assert.rejects(
+      () => cloudConfig({ ...MINIMAL, FAST_BROWSER_ENGINE: engine }, fakeFs()),
+      (error) => {
+        assert.ok(error instanceof EnvContractError);
+        assert.equal(error.exitCode, 78);
+        assert.match(error.message, /FAST_BROWSER_ENGINE/);
+        return true;
+      },
+      `expected rejection for engine=${JSON.stringify(engine)}`,
+    );
+  }
 });
 
 test('a missing or unparseable cdp endpoint exits 78 and names the variable', async () => {
