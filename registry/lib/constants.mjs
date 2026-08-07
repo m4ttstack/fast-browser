@@ -70,3 +70,18 @@ export const EMBED_MODEL = 'voyage-3.5-lite';
 // null, same as every other embedder failure mode, rather than surfacing
 // as a mid-push crash.
 export const EMBED_DIM = 1024;
+
+// Whole-request cap for POST /v1/push (registry/lib/http.mjs's own
+// `validatePushRequest`): a request over this many flows is a WHOLE-REQUEST
+// 422, never a per-flow rejection -- see that function's own doc comment.
+// Moved here (MAT-160 client push chunking) rather than staying a local
+// `http.mjs` constant because lib/commands/registry.mjs's `push` now needs
+// the SAME number to decide where to cut the client's own POST batches, and
+// this module -- pure, already dependency-free, already the plan's "Shared
+// shapes" home for every other pinned registry number -- is the one place
+// both the server (enforcing the ceiling) and the client (staying under it)
+// can import from without either pulling in the other's dependency tree.
+// `http.mjs` re-exports this value under its own name so every existing
+// importer of `PUSH_MAX_FLOWS` from `registry/lib/http.mjs` keeps working
+// unchanged.
+export const PUSH_MAX_FLOWS = 50;

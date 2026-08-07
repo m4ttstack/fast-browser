@@ -547,3 +547,57 @@ test('registry pull and search accept --origin', () => {
     () => parseArgs(['registry', 'search', '--intent', 'x', '--origin', 'https://example.com']),
   );
 });
+
+// --- registry subcommand flag strictness (MAT-160) ---
+//
+// `--origin`, `--intent`, `--yes`, and `--json` are all registered at the
+// COMMAND level for `registry` (shared with other command families), so
+// without subcommand-level scoping every one of the inert-flag cases below
+// would parse clean and silently do nothing with the value. Each rejection
+// must name both the flag and the subcommand, per this file's existing
+// UsageError convention (see `requireCommand`'s own message shape).
+
+test('registry push rejects --origin, naming the flag and the subcommand', () => {
+  assert.throws(
+    () => parseArgs(['registry', 'push', '--origin', 'https://example.com']),
+    (error) => error instanceof UsageError && /--origin/.test(error.message) && /push/.test(error.message),
+  );
+});
+
+test('registry status rejects --yes, naming the flag and the subcommand', () => {
+  assert.throws(
+    () => parseArgs(['registry', 'status', '--yes']),
+    (error) => error instanceof UsageError && /--yes/.test(error.message) && /status/.test(error.message),
+  );
+});
+
+test('registry pull rejects --intent, naming the flag and the subcommand', () => {
+  assert.throws(
+    () => parseArgs(['registry', 'pull', '--intent', 'log in']),
+    (error) => error instanceof UsageError && /--intent/.test(error.message) && /pull/.test(error.message),
+  );
+});
+
+test('registry search rejects --yes, naming the flag and the subcommand', () => {
+  assert.throws(
+    () => parseArgs(['registry', 'search', '--intent', 'x', '--yes']),
+    (error) => error instanceof UsageError && /--yes/.test(error.message) && /search/.test(error.message),
+  );
+});
+
+test('registry init rejects --json outright at parse time, before the runtime TTY gate is ever reached', () => {
+  assert.throws(
+    () => parseArgs(['registry', 'init', 'https://registry.example.com', '--json']),
+    (error) => error instanceof UsageError && /--json/.test(error.message) && /init/.test(error.message),
+  );
+});
+
+test('registry subcommand flag strictness still allows each subcommand its own accepted flags', () => {
+  assert.doesNotThrow(() => parseArgs(['registry', 'push', '--yes']));
+  assert.doesNotThrow(() => parseArgs(['registry', 'push', '--json']));
+  assert.doesNotThrow(() => parseArgs(['registry', 'pull', '--origin', 'https://example.com', '--json']));
+  assert.doesNotThrow(() => parseArgs(['registry', 'search', '--intent', 'x', '--origin', 'https://example.com', '--json']));
+  assert.doesNotThrow(() => parseArgs(['registry', 'status', '--json']));
+  assert.equal(parseArgs(['registry', 'pull', '--json']).json, true);
+  assert.equal(parseArgs(['registry', 'status', '--json']).json, true);
+});

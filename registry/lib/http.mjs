@@ -23,12 +23,18 @@
 
 import { createHash, timingSafeEqual } from 'node:crypto';
 
+import { PUSH_MAX_FLOWS } from './constants.mjs';
 import { ingest } from './ingest.mjs';
 
-// Pinned constants (plan's Shared shapes). PUSH_MAX_FLOWS is enforced by
-// `validatePushRequest` below: a push with more than this many flows is a
-// whole-request 422, never a per-flow rejection.
-export const PUSH_MAX_FLOWS = 50;
+// PUSH_MAX_FLOWS now lives in registry/lib/constants.mjs (MAT-160: the
+// plugin's own client-side push chunking needs the identical number, and
+// constants.mjs -- pure, dependency-free -- is importable from the plugin
+// side without pulling this module's own `ingest.mjs` dependency chain
+// along with it). Re-exported here under its original name so every
+// existing `import { PUSH_MAX_FLOWS } from '.../http.mjs'` keeps working.
+export { PUSH_MAX_FLOWS };
+// Enforced by `validatePushRequest` below: a push with more than
+// PUSH_MAX_FLOWS flows is a whole-request 422, never a per-flow rejection.
 export const BODY_LIMIT_BYTES = 5_000_000;
 
 export class BodyTooLargeError extends Error {}

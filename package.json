@@ -21,6 +21,7 @@
     "bin/",
     "builtins/",
     "lib/",
+    "registry/lib/constants.mjs",
     "registry/lib/pii-lint.mjs",
     "registry/lib/signature-fields.mjs",
     "registry/lib/signing.mjs",
