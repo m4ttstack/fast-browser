@@ -134,11 +134,8 @@ Fast Browser drives the real Chrome instance connected through its extension.
 Do not claim access to arbitrary existing windows, Incognito windows, other
 profiles, non-Chrome browsers, or a separate isolated browser.
 
-Never enter a credential VALUE yourself, and never ask the user for one. When
-a site needs a login and a named secret is configured for it, log in with
-that name using "Logging in with credentials" below. When no secret is
-configured, ask the user to complete the login in the real Chrome window,
-then continue.
+Never enter credentials or log in for the user. When authentication is needed,
+ask the user to complete it in the real Chrome window, then continue.
 
 ## Quick reference
 
@@ -170,10 +167,22 @@ resolve.
 
 ## Logging in with credentials
 
+This section applies only when the runtime was started with a secrets file
+(`FAST_BROWSER_SECRETS`, forwarded as `--secrets=`) -- in practice, cloud or
+sandbox mode. A normal local install has no secrets file and no secret name
+ever resolves; there, the boundary above governs and logging in is never
+yours to perform.
+
 Secrets resolve inside the runtime, and only in `browser_fill_form` (textbox
 and slider fields) and `browser_type`. Nothing else reaches them. That means
 login cannot be a macro and cannot be a replayed flow: `flow-runner` fills
 through the page directly, so a placeholder would be typed in literally.
+
+The secret's NAME comes from the user or the sandbox operator for that
+specific site. Never guess it: an unmatched name is filled in literally
+rather than raising, so a guessed `APP_PASSWORD` types that literal string
+into the password field and submits it -- a failed, possibly
+lockout-triggering, login attempt instead of a caught error.
 
 Log in with real tool calls, passing the secret's NAME as the field value:
 
@@ -183,11 +192,10 @@ Log in with real tool calls, passing the secret's NAME as the field value:
 3. `browser_click` on the submit control.
 4. Assert an element that only renders once authenticated.
 
-Step 4 is required, not a nicety. An unmatched secret name is filled in
-literally rather than raising, so a mistyped name types `APP_PASSWORD` into
-the password field and the flow proceeds into a logged-out session. The
-assertion is what turns that into a visible failure before anything is
-captured.
+Step 4 is required, not a nicety: the same unmatched-name behavior means a
+mistyped or misremembered name reaches the submit button and the flow
+proceeds into a logged-out session that looks like it worked. The assertion
+is what turns that into a visible failure before anything is captured.
 
 Never put a credential value in a tool argument, a macro argument, or a flow
 artifact. Only the name.

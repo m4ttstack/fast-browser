@@ -20,8 +20,9 @@ approval below: a mined macro still requires the user's explicit approval
 for that individual macro.
 
 The `## flow-runner` entry in `~/.fast-browser/macros/MACROS.md` documents
-the replay contract itself: the success shape and the `FLOW_RUNNER_FAILURE:
-` error shape.
+the replay contract itself: the success shape, the `FLOW_RUNNER_FAILURE: `
+error shape, and the distinct `SIDECAR_LOST: ` error shape for a lost
+browser connection.
 
 Recording a quirk with `fast-browser sites quirk add` also feeds live
 interrupt recovery: a flow replay tries that recorded click once per step,
