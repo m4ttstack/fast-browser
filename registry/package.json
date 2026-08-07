@@ -1,0 +1,13 @@
+{
+  "name": "@mattstack/fast-browser-registry",
+  "version": "0.1.0",
+  "description": "Personal-cloud flow registry service for Fast Browser (push/pull/search over compiled flow artifacts)",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "pg": "^8.22.0"
+  }
+}

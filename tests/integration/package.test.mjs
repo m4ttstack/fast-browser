@@ -32,6 +32,7 @@ const requiredEntries = [
   'package/lib/commands/doctor.mjs',
   'package/lib/commands/flows.mjs',
   'package/lib/commands/migrate.mjs',
+  'package/lib/commands/registry.mjs',
   'package/lib/commands/setup.mjs',
   'package/lib/commands/sites.mjs',
   'package/lib/commands/stats.mjs',
@@ -54,6 +55,17 @@ const requiredEntries = [
   'package/lib/sites/inventory.mjs',
   'package/lib/sites/patterns.mjs',
   'package/lib/sites/store.mjs',
+  // WS4b Task 7: lib/commands/registry.mjs imports these three
+  // registry/lib modules directly (each is dependency-free -- see their
+  // own doc comments -- so importing them keeps the plugin's own
+  // `dependencies: {}` pin intact). The REST of registry/ (server.mjs,
+  // store.mjs, pg-store.mjs, ...) is deliberately never packaged here --
+  // it's a separate Railway-deployed service, not part of the installed
+  // plugin -- so only these three files are listed in package.json's
+  // `files`, not a blanket `registry/lib/`.
+  'package/registry/lib/pii-lint.mjs',
+  'package/registry/lib/signature-fields.mjs',
+  'package/registry/lib/signing.mjs',
   'package/skills/annotating-screenshots/agents/openai.yaml',
   'package/skills/browser-macros/agents/openai.yaml',
   'package/skills/fast-browsing/agents/openai.yaml',
@@ -129,6 +141,32 @@ async function walk(root, directory = root) {
   }
   return entries;
 }
+
+// WS4b (registry) scope decision: the zero-deps constraint applies
+// per-package. The plugin (this root package.json) MUST stay
+// dependencies: {} forever -- it is the thing installed onto a user's
+// machine and must not pull in a runtime dependency tree. The registry
+// service (registry/package.json, a separate Railway deployable that is
+// never npm-packed from here -- it isn't listed in this package's `files`)
+// gets its own allowance: exactly { pg } as of WS4b Task 4 (the Postgres +
+// pgvector store's only dependency), so a stray dependency added to
+// either package.json fails a test instead of silently drifting.
+test('root package.json declares no runtime dependencies', async () => {
+  const packageJson = JSON.parse(await readFile(path.join(pluginRoot, 'package.json'), 'utf8'));
+  assert.deepEqual(packageJson.dependencies, {});
+});
+
+test('registry/package.json declares exactly pg as a runtime dependency', async () => {
+  const registryPackageJson = JSON.parse(
+    await readFile(path.join(pluginRoot, 'registry/package.json'), 'utf8'),
+  );
+  assert.deepEqual(Object.keys(registryPackageJson.dependencies), ['pg']);
+  assert.match(
+    registryPackageJson.dependencies.pg,
+    /^\^\d+\.\d+\.\d+$/,
+    'pg must be pinned with a caret range',
+  );
+});
 
 test('npm package contains only portable deployable Fast Browser assets', async (t) => {
   const temporary = await mkdtemp(path.join(os.tmpdir(), 'fast-browser-package-'));

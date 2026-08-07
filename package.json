@@ -21,6 +21,9 @@
     "bin/",
     "builtins/",
     "lib/",
+    "registry/lib/pii-lint.mjs",
+    "registry/lib/signature-fields.mjs",
+    "registry/lib/signing.mjs",
     "skills/",
     "templates/",
     "runtime-lock.json",
@@ -33,9 +36,11 @@
     "macro-hashes": "node scripts/generate-macro-hashes.mjs",
     "pin-runtime": "node scripts/pin-runtime.mjs",
     "prepublishOnly": "node scripts/generate-macro-hashes.mjs --check",
-    "test": "node --test tests/unit/*.test.mjs tests/integration/*.test.mjs",
+    "test": "node --test tests/unit/*.test.mjs tests/integration/*.test.mjs registry/tests/*.test.mjs tests/e2e/registry.test.mjs",
     "test:unit": "node --test tests/unit/*.test.mjs",
     "test:integration": "node --test tests/integration/*.test.mjs",
+    "test:registry": "node --test registry/tests/*.test.mjs",
+    "test:registry-e2e": "node --test tests/e2e/registry.test.mjs",
     "test:e2e": "node --test tests/e2e/direct-mcp.test.mjs",
     "test:flows": "node --test tests/e2e/flows.test.mjs",
     "test:sites": "node --test tests/e2e/sites.test.mjs",
@@ -47,6 +52,7 @@
     "test:affordances": "node --test tests/e2e/affordances.test.mjs",
     "test:video": "node --test tests/e2e/video.test.mjs"
   },
+  "dependencies": {},
   "devDependencies": {
     "@modelcontextprotocol/sdk": "1.29.0"
   }

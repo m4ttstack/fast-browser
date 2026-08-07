@@ -34,6 +34,8 @@ test('parses a two-host full setup', () => {
       description: null,
       urlPattern: null,
       ttlHours: null,
+      registryUrl: null,
+      yes: false,
     },
   );
 });
@@ -73,6 +75,8 @@ test('defaults setup to detected hosts and no profile choice', () => {
     description: null,
     urlPattern: null,
     ttlHours: null,
+    registryUrl: null,
+    yes: false,
   });
 });
 
@@ -486,4 +490,60 @@ test('--origin and --url are allowlisted to both flows and sites', () => {
   assert.doesNotThrow(() => parseArgs(['flows', 'find', '--intent', 'x', '--origin', 'https://example.com']));
   assert.doesNotThrow(() => parseArgs(['sites', 'quirk', 'list', '--origin', 'https://example.com']));
   assert.doesNotThrow(() => parseArgs(['sites', 'affordances', '--url', 'https://example.com/x']));
+});
+
+// --- registry (WS4b Task 7) ---
+
+test('registry requires and validates its subcommand', () => {
+  assert.throws(() => parseArgs(['registry']), UsageError);
+  assert.throws(() => parseArgs(['registry', 'bogus']), UsageError);
+  assert.equal(parseArgs(['registry', 'push']).sub, 'push');
+  assert.equal(parseArgs(['registry', 'pull']).sub, 'pull');
+  assert.equal(parseArgs(['registry', 'status']).sub, 'status');
+  assert.equal(parseArgs(['registry', 'search', '--intent', 'log in']).sub, 'search');
+});
+
+test('registry --help is parsed without requiring a subcommand', () => {
+  const parsed = parseArgs(['registry', '--help']);
+  assert.equal(parsed.command, 'registry');
+  assert.equal(parsed.help, true);
+});
+
+test('registry init requires exactly one url positional', () => {
+  assert.throws(() => parseArgs(['registry', 'init']), UsageError);
+  assert.equal(parseArgs(['registry', 'init', 'https://registry.example.com']).registryUrl, 'https://registry.example.com');
+  assert.throws(
+    () => parseArgs(['registry', 'init', 'https://a.example.com', 'https://b.example.com']),
+    UsageError,
+  );
+});
+
+test('a url positional is only accepted for registry init', () => {
+  assert.throws(() => parseArgs(['registry', 'push', 'https://registry.example.com']), UsageError);
+  assert.throws(() => parseArgs(['registry', 'status', 'https://registry.example.com']), UsageError);
+});
+
+test('registry search requires --intent; other subcommands do not', () => {
+  assert.throws(() => parseArgs(['registry', 'search']), UsageError);
+  assert.throws(() => parseArgs(['registry', 'search', '--intent', '   ']), UsageError);
+  const request = parseArgs(['registry', 'search', '--intent', 'log in', '--origin', 'https://example.com']);
+  assert.equal(request.intent, 'log in');
+  assert.equal(request.origin, 'https://example.com');
+  assert.doesNotThrow(() => parseArgs(['registry', 'push']));
+  assert.doesNotThrow(() => parseArgs(['registry', 'pull']));
+  assert.doesNotThrow(() => parseArgs(['registry', 'status']));
+});
+
+test('registry --yes is registry-only and defaults to false', () => {
+  assert.equal(parseArgs(['registry', 'push']).yes, false);
+  assert.equal(parseArgs(['registry', 'push', '--yes']).yes, true);
+  assert.throws(() => parseArgs(['flows', 'find', '--intent', 'x', '--yes']), UsageError);
+  assert.throws(() => parseArgs(['setup', '--yes']), UsageError);
+});
+
+test('registry pull and search accept --origin', () => {
+  assert.doesNotThrow(() => parseArgs(['registry', 'pull', '--origin', 'https://example.com']));
+  assert.doesNotThrow(
+    () => parseArgs(['registry', 'search', '--intent', 'x', '--origin', 'https://example.com']),
+  );
 });

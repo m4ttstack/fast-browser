@@ -118,6 +118,47 @@ it is cited, with its measurements, in `lib/flows/encoder.mjs` right above
 VERDICT"). Read that comment for the full citation, including the
 counterexample below.
 
+## The registry
+
+WS4b added a small personal-cloud service (push/pull/search over compiled
+flow artifacts) with its own client wired into the CLI. Four pieces, each
+with its own place:
+
+- **`registry/`** -- the service itself: an HTTP server (`registry/
+  server.mjs`), a Postgres-backed store with optional pgvector clustering,
+  and its own `package.json`/`node_modules` (dependency: `pg`), separate
+  from the plugin root's own dependency-free `node_modules`. Its unit and
+  integration coverage lives under `registry/tests/*.test.mjs`, run with
+  `npm run test:registry`.
+- **`lib/commands/registry.mjs`** -- the CLI client: `fast-browser registry
+  init|push|pull|search|status`. Reads and writes only through this module;
+  it is the one place data leaves or enters the machine for this feature.
+- **`tests/e2e/registry.test.mjs`** -- the round trip this harness is about:
+  boots the real service in-process against a memory store, spawns the real
+  CLI as a child process, and drives push, dedup, a mutated re-push, pull
+  (merge and verify), and search end to end. No browser involved, so it
+  runs the same way any other suite here does and is wired into the root
+  `npm test` (`package.json`), not gated behind a separate command. Run it
+  alone with:
+
+  ```bash
+  npm run test:registry-e2e
+  ```
+
+- **`registry/scripts/smoke.mjs`** -- a live diagnostic for an already-
+  deployed registry (local boot or a real Railway deployment), not part of
+  any test run. It pushes a fixed, never-deleted canary flow and checks
+  health, push, pull-plus-verify, and search against the real service:
+
+  ```bash
+  REGISTRY_URL="<url>" FAST_BROWSER_REGISTRY_TOKEN="<token>" node registry/scripts/smoke.mjs
+  ```
+
+- **`registry/README.md`** -- the operator's deploy runbook: environment
+  assumptions, keygen, deploy and rollback commands, and how to read a
+  smoke run. Read that file, not this one, before deploying or redeploying
+  the service.
+
 ## Known realities
 
 **The encoder can prefer a semantic sibling over the true target.** The
