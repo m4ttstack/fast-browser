@@ -45,7 +45,9 @@ import { createHash, randomUUID } from 'node:crypto';
 
 import { flowId, parseFlow, serializeFlow } from '../../lib/flows/artifact.mjs';
 import { lintArtifact } from './pii-lint.mjs';
-import { opSequence, stepSignature } from './signature-fields.mjs';
+import {
+  flowsAreAnchored, opSequence, stepSignature,
+} from './signature-fields.mjs';
 import { REGISTRY_CLUSTER_THRESHOLD } from './constants.mjs';
 
 function sha256Hex(bytes) {
@@ -137,88 +139,13 @@ function mergeStep(canonicalStep, incomingStep) {
   return merged;
 }
 
-// --- per-step identity anchor (fix round 1, Critical #2, controller
-// ruling on plan amendment) ---
-//
-// stepSignature equality alone does NOT establish that two steps target
-// the SAME element. Two concrete ways it was proven to fail:
-//   - a target with neither `role` nor `name` set (a raw CSS/text
-//     selector with no accessible-name info) collapses stepSignature's
-//     own (op, role, name, urlPattern) tuple to (op, '', '', urlPattern)
-//     regardless of what its locators actually point at -- `click
-//     #confirm` and `click #delete-account` produce the IDENTICAL
-//     signature tuple.
-//   - `drag`'s `to` (the drop destination) is not part of stepSignature
-//     AT ALL -- two drags with wildly different destinations, same
-//     source, still share stepSignature.
-// Both are reachable with the REAL embedder: the stepSignature gate
-// forces the compared steps to already look identical on paper, leaving
-// cosine to measure only `description`, which says nothing about WHICH
-// element a step's locators resolve to.
-//
-// The fix: an explicit anchor check, run for every step pair BEFORE any
-// candidate is allowed to cluster (findClusterMatch below), independent
-// of and in addition to stepSignature equality. Conservative on purpose,
-// per the controller's ruling -- under-clustering (two flows that stay
-// separate when a human would call them duplicates) is recoverable later;
-// over-clustering (two different actions merged into one canonical's
-// fallback chain) corrupts a canonical irreversibly and gets replayed
-// against production.
-
-// A locator's identity for an anchor comparison -- same (kind, selector)
-// tuple shape as `locatorKey` above, kept as a separate function since
-// the two serve different purposes (set membership vs. a single equality
-// check) even though the underlying identity is the same.
-function primaryLocatorIdentity(target) {
-  const locator = target?.locators?.[0];
-  if (!locator) return null;
-  return JSON.stringify([locator.kind, locator.selector]);
-}
-
-// Anchors ONE target-shaped object pair (a step's own `target`, or a
-// drag's `to`) -- both `a` and `b` may be absent (undefined/null):
-//   - presence must agree (a step with a target must be compared against
-//     a step that also has one);
-//   - if either side carries a non-empty role or name, BOTH role AND name
-//     must be equal (this is already implied by a matching stepSignature
-//     when `a`/`b` are both a step's `target` -- stepSignature encodes
-//     exactly this tuple -- but is NOT implied for `to`, which
-//     stepSignature never sees at all, so it is checked here
-//     unconditionally rather than assumed);
-//   - otherwise (both role and name empty on both sides) -- the shape
-//     stepSignature is structurally blind to -- the PRIMARY (first)
-//     locator's (kind, selector) must be equal instead.
-function targetsAreAnchored(a, b) {
-  const aPresent = Boolean(a);
-  const bPresent = Boolean(b);
-  if (aPresent !== bPresent) return false;
-  if (!aPresent) return true;
-
-  const aRole = a.role ?? '';
-  const aName = a.name ?? '';
-  const bRole = b.role ?? '';
-  const bName = b.name ?? '';
-  if (aRole !== '' || aName !== '' || bRole !== '' || bName !== '') {
-    return aRole === bRole && aName === bName;
-  }
-  return primaryLocatorIdentity(a) === primaryLocatorIdentity(b);
-}
-
-// Anchors a whole step pair: its own `target`, and -- for `drag` -- `to`
-// as well (drag's OWN anchor gap; see this section's top comment).
-function stepsAreAnchored(canonicalStep, incomingStep) {
-  if (!targetsAreAnchored(canonicalStep.target, incomingStep?.target)) return false;
-  if (canonicalStep.op === 'drag' && !targetsAreAnchored(canonicalStep.to, incomingStep?.to)) return false;
-  return true;
-}
-
-// Every step, positionally, must be anchored -- stepSignature equality
-// (checked by the caller before this runs) already guarantees both flows
-// have the same step COUNT and the same op at each index, so a plain
-// positional walk is safe here without a separate length check.
-function flowsAreAnchored(canonicalFlow, incomingFlow) {
-  return canonicalFlow.steps.every((step, index) => stepsAreAnchored(step, incomingFlow.steps[index]));
-}
+// --- per-step identity anchor: moved to registry/lib/signature-fields.mjs
+// (WS4b Task 7 fix round 1, Critical #1) so the plugin's own pull-merge
+// (lib/commands/registry.mjs) shares the EXACT same anchor logic as this
+// module's own cluster-merge below, rather than each side maintaining its
+// own copy that can silently drift out of sync. `flowsAreAnchored` is
+// imported above; see that module's own doc comment for the full
+// #confirm/#delete-account and drag.to rationale this check exists for. ---
 
 // --- the pipeline ---
 

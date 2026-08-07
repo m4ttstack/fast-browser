@@ -2,7 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { parseFlow } from '../../lib/flows/artifact.mjs';
-import { opSequence, stepSignature } from '../lib/signature-fields.mjs';
+import {
+  flowsAreAnchored, opSequence, stepSignature, stepsAreAnchored, targetsAreAnchored,
+} from '../lib/signature-fields.mjs';
 import { baseFlow, target } from './helpers/fixtures.mjs';
 
 test('stepSignature is deterministic for the same flow', () => {
@@ -152,4 +154,84 @@ test('opSequence is a prefix-safe pre-filter: same length, different ops, never 
     ],
   }));
   assert.notEqual(opSequence(flow), opSequence(differentOps));
+});
+
+// --- targetsAreAnchored / stepsAreAnchored / flowsAreAnchored ---
+//
+// Single source of truth (WS4b Task 7 fix round 1, Critical #1): both
+// registry/lib/ingest.mjs's server-side cluster-merge and
+// lib/commands/registry.mjs's client-side pull-merge import these three
+// functions from here rather than each keeping its own copy. These tests
+// pin the exact two bugs the review reproduced against the client's
+// hand-mirrored (pre-fix) copy: a role/name-less CSS target collapsing two
+// different elements onto the same anchor, and a drag's `to` (invisible to
+// stepSignature entirely) never being checked at all.
+
+test('targetsAreAnchored requires matching role+name when either side has one', () => {
+  assert.equal(
+    targetsAreAnchored(target({ role: 'button', name: 'Place order' }), target({ role: 'button', name: 'Place order' })),
+    true,
+  );
+  assert.equal(
+    targetsAreAnchored(target({ role: 'button', name: 'Place order' }), target({ role: 'button', name: 'Cancel order' })),
+    false,
+  );
+});
+
+// The reviewer's exact reproduction: two role/name-less CSS targets whose
+// stepSignature tuple collapses to the identical (op, '', '', '') -- only
+// the PRIMARY locator's (kind, selector) can tell them apart.
+test('targetsAreAnchored falls back to the primary locator identity when role and name are both empty on both sides', () => {
+  const confirm = { locators: [{ kind: 'css', selector: '#confirm' }] };
+  const deleteAccount = { locators: [{ kind: 'css', selector: '#delete-account' }] };
+  assert.equal(targetsAreAnchored(confirm, { locators: [{ kind: 'css', selector: '#confirm' }] }), true);
+  assert.equal(targetsAreAnchored(confirm, deleteAccount), false);
+});
+
+test('targetsAreAnchored requires presence to agree on both sides', () => {
+  assert.equal(targetsAreAnchored(target(), undefined), false);
+  assert.equal(targetsAreAnchored(undefined, target()), false);
+  assert.equal(targetsAreAnchored(undefined, undefined), true);
+});
+
+// stepSignature is structurally blind to `drag`'s `to` -- stepsAreAnchored
+// is the only thing that ever compares it.
+test('stepsAreAnchored checks drag.to even though stepSignature never sees it', () => {
+  const dragStep = (to) => ({
+    op: 'drag',
+    target: { locators: [{ kind: 'css', selector: '#card-1' }] },
+    to: { locators: [{ kind: 'css', selector: to }] },
+  });
+  assert.equal(stepsAreAnchored(dragStep('#slot-a'), dragStep('#slot-a')), true);
+  assert.equal(stepsAreAnchored(dragStep('#slot-a'), dragStep('#slot-b')), false);
+});
+
+test('flowsAreAnchored is true for a flow compared against itself, and survives a locator-alternate append', () => {
+  const flow = parseFlow(baseFlow());
+  const healed = parseFlow(baseFlow({
+    steps: [
+      flow.steps[0],
+      flow.steps[1],
+      {
+        ...flow.steps[2],
+        target: {
+          ...flow.steps[2].target,
+          locators: [...flow.steps[2].target.locators, { kind: 'css', selector: '#place-order-fallback' }],
+        },
+      },
+      flow.steps[3],
+    ],
+  }));
+  assert.equal(flowsAreAnchored(flow, flow), true);
+  assert.equal(flowsAreAnchored(flow, healed), true);
+});
+
+test('flowsAreAnchored is false when a role/name-less step targets a different element despite identical stepSignature', () => {
+  const cssStep = (selector) => ({ op: 'click', target: { locators: [{ kind: 'css', selector }] } });
+  const confirmFlow = parseFlow(baseFlow({ steps: [{ op: 'goto', url: '/checkout/{plan}' }, cssStep('#confirm')] }));
+  const deleteFlow = parseFlow(baseFlow({ steps: [{ op: 'goto', url: '/checkout/{plan}' }, cssStep('#delete-account')] }));
+  // Same stepSignature (op/role/name/urlPattern tuple is identical -- both
+  // targets carry no role/name) but a different element entirely.
+  assert.equal(stepSignature(confirmFlow), stepSignature(deleteFlow));
+  assert.equal(flowsAreAnchored(confirmFlow, deleteFlow), false);
 });

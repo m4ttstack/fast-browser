@@ -4964,3 +4964,57 @@ test('CLI main strips control characters from registry search text before printi
   );
   assert.doesNotMatch(writes.join(''), /\x1b/);
 });
+
+// Review fix round 1, Important #4 (reviewer got live ESC and BEL through
+// the push and search human arms): `report.mode` and `result.score` are
+// both server-supplied (GET /v1/search's own response body) and reached
+// the terminal unstripped. `score` in particular is only EXPECTED to be a
+// number -- this client cannot force the registry to actually send one, so
+// a malicious/buggy server sending a string there must still be stripped
+// rather than trusted to interpolate safely.
+test('CLI main strips control characters from a registry search mode and a non-numeric score', async () => {
+  const writes = [];
+  const report = {
+    command: 'registry',
+    sub: 'search',
+    mode: 'lexical\x07(BEL)',
+    results: [{
+      envelope: { artifact: { name: 'log-in', origin: 'https://example.com', description: 'Logs in.' } },
+      score: '0.9\x1b[31m',
+      args: {},
+    }],
+  };
+  await main(
+    { command: 'registry', sub: 'search', json: false },
+    { commands: { registry: async () => report }, write: (text) => writes.push(text) },
+  );
+  const output = writes.join('');
+  assert.doesNotMatch(output, /[\x07\x1b]/);
+  assert.match(output, /Mode: lexical\(BEL\)/);
+  assert.match(output, /score=0\.9\[31m/);
+});
+
+// Review fix round 1, Important #4: `result.name`/`result.outcome` in
+// push's response come straight from the registry's own POST /v1/push
+// body -- untrusted input from this client's point of view, same as every
+// other registry-supplied field.
+test('CLI main strips control characters from registry push result name and outcome before printing', async () => {
+  const writes = [];
+  const report = {
+    command: 'registry',
+    sub: 'push',
+    manifest: [{ name: 'log-in', origin: 'https://example.com' }],
+    excluded: [],
+    warnings: [],
+    results: [{
+      name: 'log-in\x1b[31m', outcome: 'created\x07(BEL)', canonicalId: 'c1', reasons: [],
+    }],
+  };
+  await main(
+    { command: 'registry', sub: 'push', json: false },
+    { commands: { registry: async () => report }, write: (text) => writes.push(text) },
+  );
+  const output = writes.join('');
+  assert.doesNotMatch(output, /[\x07\x1b]/);
+  assert.match(output, /log-in\[31m - created\(BEL\)/);
+});

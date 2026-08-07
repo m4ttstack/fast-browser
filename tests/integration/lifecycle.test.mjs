@@ -384,7 +384,12 @@ function reinstallDeps({ current, onSave }) {
 // later, which is how sessions, the palette, the connection mode, and the
 // profile itself were each lost in turn.
 test('the reinstall branch rewrites its declared fields and carries everything else', async () => {
-  const REWRITTEN = ['schemaVersion', 'productVersion', 'profile', 'hosts', 'sessions', 'runtime', 'managed'];
+  // `registry` is REWRITTEN, not CARRIED wholesale -- see the dedicated
+  // assertion below this loop: `url`/`publicKey` carry through exactly
+  // like every other CARRIED field, but `assumeYes` is forced back to
+  // `false` every reinstall (WS4b Task 7 review fix round 1 ruling: a
+  // reinstall is a re-consent point for the standing `--yes` bypass bit).
+  const REWRITTEN = ['schemaVersion', 'productVersion', 'profile', 'hosts', 'sessions', 'runtime', 'managed', 'registry'];
   const CARRIED = {
     connection: { mode: 'auto' },
     annotation: { palette: 'crimson' },
@@ -396,13 +401,6 @@ test('the reinstall branch rewrites its declared fields and carries everything e
     // unchanged. A non-default value ('voyage', not 'lexical') proves it
     // was actually carried, not just coincidentally still the default.
     encoder: 'voyage',
-    // WS4b Task 7: config.registry is pinned exclusively by `fast-browser
-    // registry init`'s own TOFU consent gate -- setup has no flag for it
-    // and no claim on it either, so a reinstall must carry it through
-    // unchanged, same reasoning as encoder/trace/annotation/video/
-    // connection above. Non-default values throughout prove it was
-    // actually carried, not coincidentally still the default.
-    registry: { url: 'https://registry.example.com', publicKey: 'a-pinned-key', assumeYes: true },
   };
   assert.deepEqual(
     Object.keys(defaultConfig()).sort(),
@@ -416,6 +414,10 @@ test('the reinstall branch rewrites its declared fields and carries everything e
     hosts: { claude: true, codex: false },
     sessions: { enabled: false, retentionDays: 90 },
     ...CARRIED,
+    // A pinned registry with assumeYes ALREADY true -- proves both halves
+    // of the split behavior below: url/publicKey survive, assumeYes does
+    // not, regardless of what it held going in.
+    registry: { url: 'https://registry.example.com', publicKey: 'a-pinned-key', assumeYes: true },
   };
   let savedConfig;
   await setup(
@@ -426,6 +428,12 @@ test('the reinstall branch rewrites its declared fields and carries everything e
   for (const [key, value] of Object.entries(CARRIED)) {
     assert.deepEqual(savedConfig[key], value, `${key} is a configure choice setup has no claim on`);
   }
+  assert.deepEqual(
+    savedConfig.registry,
+    { url: 'https://registry.example.com', publicKey: 'a-pinned-key', assumeYes: false },
+    'registry.url/registry.publicKey carry through a reinstall, but registry.assumeYes always resets '
+      + '(a reinstall is a re-consent point for the standing --yes bypass bit)',
+  );
   assert.deepEqual(
     savedConfig.sessions,
     { enabled: false, retentionDays: 90 },

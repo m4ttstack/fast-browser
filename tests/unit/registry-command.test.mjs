@@ -8,6 +8,7 @@ import { defaultConfig } from '../../lib/core/config.mjs';
 import {
   flowId, parseFlow, serializeFlow,
 } from '../../lib/flows/artifact.mjs';
+import { stepSignature as stepSignatureOf } from '../../registry/lib/signature-fields.mjs';
 import { sign } from '../../registry/lib/signing.mjs';
 
 // Every test here fetch-stubs the registry HTTP surface -- no real server,
@@ -287,6 +288,7 @@ test('push manifest lists exactly the ready tier minus lint-excluded flows, with
   const dirty = validFlow({ name: 'dirty-flow', description: 'Contact ops@example.com for help.' });
   const { publicKey } = keyPair();
   let pushed;
+  const prints = [];
 
   const report = await registry(
     { sub: 'push', json: false, yes: false },
@@ -301,7 +303,7 @@ test('push manifest lists exactly the ready tier minus lint-excluded flows, with
         filePath.includes('dirty') ? JSON.stringify(dirty) : JSON.stringify(clean)
       ),
       paths: { flowsDir: '/h/flows', flowsPendingDir: '/h/pending' },
-      print: () => {},
+      print: (line) => prints.push(line),
       confirmPush: async () => true,
       fetch: async (url, options) => {
         pushed = JSON.parse(options.body);
@@ -328,6 +330,14 @@ test('push manifest lists exactly the ready tier minus lint-excluded flows, with
   // itself (the email address) must never appear anywhere in the report.
   assert.ok(report.warnings.some((warning) => warning.kind === 'lint-excluded' && warning.name === 'dirty-flow' && warning.rule === 'email'));
   assert.doesNotMatch(JSON.stringify(report), /ops@example\.com/);
+
+  // Review fix round 1, Important #5: the manifest is the consent
+  // artifact -- assert it actually PRINTS (name, origin, count), not just
+  // that the report object carries the data. Deleting the print block
+  // entirely must fail this test.
+  assert.ok(prints.some((line) => /1 flow\(s\)/.test(line)));
+  assert.ok(prints.some((line) => line.includes('clean-flow') && line.includes('https://example.com')));
+  assert.ok(prints.some((line) => line.includes('dirty-flow') && /excluded/i.test(line)));
 });
 
 test('push confirm gate blocks the request without approval, and never calls the registry', async () => {
@@ -388,10 +398,11 @@ test('push --yes without config registry.assumeYes is an error naming the config
   );
 });
 
-test('push --yes with config registry.assumeYes:true skips the confirm prompt entirely', async () => {
+test('push --yes with config registry.assumeYes:true skips the confirm prompt but still records the manifest to stderr', async () => {
   const clean = validFlow({ name: 'clean-flow' });
   const { publicKey } = keyPair();
   let confirmCalled = false;
+  const stderrLines = [];
 
   const report = await registry(
     { sub: 'push', json: true, yes: true },
@@ -404,7 +415,13 @@ test('push --yes with config registry.assumeYes:true skips the confirm prompt en
       readFlowFile: async () => JSON.stringify(clean),
       paths: { flowsDir: '/h/flows', flowsPendingDir: '/h/pending' },
       confirmPush: async () => { confirmCalled = true; return true; },
-      print: () => { throw new Error('the automation bypass must not print interactively'); },
+      // Review fix round 1, Important #5 (ruling): stdout must stay
+      // JSON-pure on the automation bypass path -- `print` (stdout) must
+      // never be called at all; the manifest instead goes to
+      // `printStderr` so the "what left the machine" record still
+      // survives in logs.
+      print: () => { throw new Error('the automation bypass must not print to stdout'); },
+      printStderr: (line) => stderrLines.push(line),
       fetch: async () => jsonResponse(200, {
         results: [{
           name: 'clean-flow', outcome: 'created', canonicalId: 'c1', reasons: [],
@@ -416,6 +433,8 @@ test('push --yes with config registry.assumeYes:true skips the confirm prompt en
 
   assert.equal(confirmCalled, false);
   assert.equal(report.results[0].outcome, 'created');
+  assert.ok(stderrLines.some((line) => /1 flow\(s\)/.test(line)));
+  assert.ok(stderrLines.some((line) => line.includes('clean-flow') && line.includes('https://example.com')));
 });
 
 // --- pull ---
@@ -493,7 +512,7 @@ test('pull lands a verified new-name flow in the ready tier as valid parseFlow b
   );
 
   assert.equal(report.ok, true);
-  assert.deepEqual(report.results, [{ name: 'brand-new', outcome: 'created' }]);
+  assert.deepEqual(report.results, [{ name: 'brand-new', outcome: 'created', tier: 'ready' }]);
   assert.equal(writes.length, 1);
   assert.equal(writes[0].filePath, path.join('/h/flows', 'brand-new.flow.json'));
   const written = parseFlow(JSON.parse(writes[0].text));
@@ -577,7 +596,7 @@ test('pull unions locator alternates append-only for a same-name/same-stepSignat
   );
 
   assert.equal(report.ok, true);
-  assert.deepEqual(report.results, [{ name: 'place-order', outcome: 'merged' }]);
+  assert.deepEqual(report.results, [{ name: 'place-order', outcome: 'merged', tier: 'ready' }]);
   assert.equal(writes.length, 1);
   const merged = parseFlow(JSON.parse(writes[0].text));
   // Append-only union: the local alternate stays first, the incoming one is
@@ -629,6 +648,237 @@ test('pull skips a same-name/different-stepSignature flow, warns naming BOTH flo
   assert.equal(report.warnings.length, 1);
   assert.ok(report.warnings[0].reason.includes(local.id));
   assert.ok(report.warnings[0].reason.includes(incoming.id));
+});
+
+// Review fix round 1, Critical #2: origin equality is a merge precondition,
+// checked before anything content-shaped. A same-named flow pulled from a
+// DIFFERENT origin must never merge into (or overwrite) a local flow just
+// because the name matches.
+test('pull skips a same-name/different-origin flow, warns naming BOTH origins, and never overwrites the local file', async () => {
+  const pinned = keyPair();
+  const local = validFlow({ name: 'place-order', origin: 'https://bank.example.com' });
+  const incoming = validFlow({ name: 'place-order', origin: 'https://evil.example.com' });
+  const envelope = signedEnvelope(incoming, pinned.privateKey);
+  let writeCalled = false;
+
+  const report = await registry(
+    { sub: 'pull', json: false, origin: null },
+    {
+      loadConfig: async () => configuredConfig(pinned.publicKey),
+      fetch: async () => jsonResponse(200, { flows: [envelope] }),
+      listFlowFiles: async () => ['place-order.flow.json'],
+      readFlowFile: async () => JSON.stringify(local),
+      writeFlowFile: async () => { writeCalled = true; },
+      paths: { flowsDir: '/h/flows', flowsPendingDir: '/h/pending' },
+      env: { FAST_BROWSER_REGISTRY_TOKEN: 'tok' },
+    },
+  );
+
+  assert.equal(writeCalled, false);
+  assert.equal(report.ok, true);
+  assert.deepEqual(report.results, [{ name: 'place-order', outcome: 'skipped', reason: 'origin-conflict' }]);
+  assert.equal(report.warnings.length, 1);
+  assert.ok(report.warnings[0].reason.includes('https://bank.example.com'));
+  assert.ok(report.warnings[0].reason.includes('https://evil.example.com'));
+});
+
+// Review fix round 1, Critical #1: stepSignature equality alone is NOT
+// enough to allow a merge -- a role/name-less CSS target collapses two
+// DIFFERENT elements onto the identical signature tuple. The reviewer's
+// exact reproduction: `#confirm` vs `#delete-account`.
+test('pull refuses to merge two role/name-less CSS targets that share a stepSignature but point at different elements', async () => {
+  const pinned = keyPair();
+  const cssStep = (selector) => ({ op: 'click', target: { locators: [{ kind: 'css', selector }] } });
+  const local = validFlow({
+    name: 'place-order',
+    steps: [{ op: 'goto', url: '/checkout/{plan}' }, cssStep('#confirm')],
+  });
+  const incoming = validFlow({
+    name: 'place-order',
+    steps: [{ op: 'goto', url: '/checkout/{plan}' }, cssStep('#delete-account')],
+  });
+  // Same stepSignature (both targets carry no role/name) despite pointing
+  // at completely different elements.
+  assert.equal(stepSignatureOf(local), stepSignatureOf(incoming));
+
+  const envelope = signedEnvelope(incoming, pinned.privateKey);
+  let writeCalled = false;
+
+  const report = await registry(
+    { sub: 'pull', json: false, origin: null },
+    {
+      loadConfig: async () => configuredConfig(pinned.publicKey),
+      fetch: async () => jsonResponse(200, { flows: [envelope] }),
+      listFlowFiles: async () => ['place-order.flow.json'],
+      readFlowFile: async () => JSON.stringify(local),
+      writeFlowFile: async () => { writeCalled = true; },
+      paths: { flowsDir: '/h/flows', flowsPendingDir: '/h/pending' },
+      env: { FAST_BROWSER_REGISTRY_TOKEN: 'tok' },
+    },
+  );
+
+  assert.equal(writeCalled, false);
+  assert.equal(report.ok, true);
+  assert.deepEqual(report.results, [{ name: 'place-order', outcome: 'skipped', reason: 'anchor-conflict' }]);
+  assert.equal(report.warnings.length, 1);
+  assert.ok(report.warnings[0].reason.includes(local.id));
+  assert.ok(report.warnings[0].reason.includes(incoming.id));
+});
+
+// Review fix round 1, Critical #1 (second reproduction): `drag`'s `to` is
+// not part of stepSignature at all -- two drags with the SAME source but a
+// DIFFERENT drop destination still share stepSignature, and must still be
+// refused a merge.
+test('pull refuses to merge two drag steps with the same source but a different drop destination', async () => {
+  const pinned = keyPair();
+  const dragStep = (to) => ({
+    op: 'drag',
+    target: target({ role: 'img', name: 'Card' }),
+    to: { locators: [{ kind: 'css', selector: to }] },
+  });
+  const local = validFlow({
+    name: 'place-order',
+    steps: [{ op: 'goto', url: '/checkout/{plan}' }, dragStep('#slot-a')],
+  });
+  const incoming = validFlow({
+    name: 'place-order',
+    steps: [{ op: 'goto', url: '/checkout/{plan}' }, dragStep('#slot-b')],
+  });
+  assert.equal(stepSignatureOf(local), stepSignatureOf(incoming));
+
+  const envelope = signedEnvelope(incoming, pinned.privateKey);
+  let writeCalled = false;
+
+  const report = await registry(
+    { sub: 'pull', json: false, origin: null },
+    {
+      loadConfig: async () => configuredConfig(pinned.publicKey),
+      fetch: async () => jsonResponse(200, { flows: [envelope] }),
+      listFlowFiles: async () => ['place-order.flow.json'],
+      readFlowFile: async () => JSON.stringify(local),
+      writeFlowFile: async () => { writeCalled = true; },
+      paths: { flowsDir: '/h/flows', flowsPendingDir: '/h/pending' },
+      env: { FAST_BROWSER_REGISTRY_TOKEN: 'tok' },
+    },
+  );
+
+  assert.equal(writeCalled, false);
+  assert.deepEqual(report.results, [{ name: 'place-order', outcome: 'skipped', reason: 'anchor-conflict' }]);
+});
+
+// The positive counterpart to the two anchor-conflict tests above: a
+// SAME-selector role/name-less CSS target (the shape the anchor check must
+// still allow through) merges exactly as before.
+test('pull merges two role/name-less CSS targets that point at the SAME element', async () => {
+  const pinned = keyPair();
+  const cssStep = (selector) => ({ op: 'click', target: { locators: [{ kind: 'css', selector }] } });
+  const local = validFlow({
+    name: 'place-order',
+    steps: [{ op: 'goto', url: '/checkout/{plan}' }, cssStep('#confirm')],
+  });
+  const incoming = validFlow({
+    name: 'place-order',
+    steps: [{ op: 'goto', url: '/checkout/{plan}' }, cssStep('#confirm')],
+  });
+  const envelope = signedEnvelope(incoming, pinned.privateKey);
+  const writes = [];
+
+  const report = await registry(
+    { sub: 'pull', json: false, origin: null },
+    {
+      loadConfig: async () => configuredConfig(pinned.publicKey),
+      fetch: async () => jsonResponse(200, { flows: [envelope] }),
+      listFlowFiles: async () => ['place-order.flow.json'],
+      readFlowFile: async () => JSON.stringify(local),
+      writeFlowFile: async (filePath, text) => writes.push({ filePath, text }),
+      paths: { flowsDir: '/h/flows', flowsPendingDir: '/h/pending' },
+      env: { FAST_BROWSER_REGISTRY_TOKEN: 'tok' },
+    },
+  );
+
+  assert.deepEqual(report.results, [{ name: 'place-order', outcome: 'merged', tier: 'ready' }]);
+  assert.equal(writes.length, 1);
+  parseFlow(JSON.parse(writes[0].text)); // parseFlow-valid bytes
+});
+
+// Review fix round 1, Important #3 (ruling): tier is directory location --
+// a pulled flow whose CONTENT is 'pending' (mutating sideEffects, or a js
+// step) must land in flowsPendingDir, never flowsDir, so it cannot replay
+// without going through `flows approve` on this machine first.
+test('pull routes a mutating-sideEffects flow to the pending tier, not ready, with an approve-needed note', async () => {
+  const pinned = keyPair();
+  const flow = validFlow({ name: 'delete-account', sideEffects: 'mutating' });
+  const envelope = signedEnvelope(flow, pinned.privateKey);
+  const writes = [];
+
+  const report = await registry(
+    { sub: 'pull', json: false, origin: null },
+    {
+      loadConfig: async () => configuredConfig(pinned.publicKey),
+      fetch: async () => jsonResponse(200, { flows: [envelope] }),
+      listFlowFiles: async () => [],
+      writeFlowFile: async (filePath, text) => writes.push({ filePath, text }),
+      paths: { flowsDir: '/h/flows', flowsPendingDir: '/h/pending' },
+      env: { FAST_BROWSER_REGISTRY_TOKEN: 'tok' },
+    },
+  );
+
+  assert.equal(report.ok, true);
+  assert.equal(report.results[0].tier, 'pending');
+  assert.match(report.results[0].note, /flows approve/);
+  assert.equal(writes.length, 1);
+  assert.equal(writes[0].filePath, path.join('/h/pending', 'delete-account.flow.json'));
+  assert.deepEqual(parseFlow(JSON.parse(writes[0].text)), flow); // parseFlow-valid bytes
+});
+
+test('pull routes a js-step flow to the pending tier even when sideEffects is read-only', async () => {
+  const pinned = keyPair();
+  const flow = validFlow({
+    name: 'run-script',
+    steps: [
+      { op: 'goto', url: '/checkout/{plan}' },
+      { op: 'js', sha256: null, args: {} },
+    ],
+  });
+  const envelope = signedEnvelope(flow, pinned.privateKey);
+  const writes = [];
+
+  const report = await registry(
+    { sub: 'pull', json: false, origin: null },
+    {
+      loadConfig: async () => configuredConfig(pinned.publicKey),
+      fetch: async () => jsonResponse(200, { flows: [envelope] }),
+      listFlowFiles: async () => [],
+      writeFlowFile: async (filePath, text) => writes.push({ filePath, text }),
+      paths: { flowsDir: '/h/flows', flowsPendingDir: '/h/pending' },
+      env: { FAST_BROWSER_REGISTRY_TOKEN: 'tok' },
+    },
+  );
+
+  assert.equal(report.results[0].tier, 'pending');
+  assert.equal(writes[0].filePath, path.join('/h/pending', 'run-script.flow.json'));
+});
+
+test('pull still routes a safe (read-only, no js step) flow straight to the ready tier', async () => {
+  const pinned = keyPair();
+  const flow = validFlow({ name: 'view-order' });
+  const envelope = signedEnvelope(flow, pinned.privateKey);
+  const writes = [];
+
+  const report = await registry(
+    { sub: 'pull', json: false, origin: null },
+    {
+      loadConfig: async () => configuredConfig(pinned.publicKey),
+      fetch: async () => jsonResponse(200, { flows: [envelope] }),
+      listFlowFiles: async () => [],
+      writeFlowFile: async (filePath, text) => writes.push({ filePath, text }),
+      paths: { flowsDir: '/h/flows', flowsPendingDir: '/h/pending' },
+      env: { FAST_BROWSER_REGISTRY_TOKEN: 'tok' },
+    },
+  );
+
+  assert.deepEqual(report.results, [{ name: 'view-order', outcome: 'created', tier: 'ready' }]);
+  assert.equal(writes[0].filePath, path.join('/h/flows', 'view-order.flow.json'));
 });
 
 // --- search ---
