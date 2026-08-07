@@ -87,15 +87,36 @@ Rotation steps, in order:
    current key -- safe to interrupt and re-run (a second run against an
    already-re-signed registry reports 0 updated), and it deliberately does
    NOT bump any canonical's `updatedAt`, so a rotation never looks like a
-   content change to `GET /v1/pull?since=`. It prints scan/update counts and
-   a duration only -- never a flow name, never key material.
+   content change to `GET /v1/pull?since=`.
+
+   Before signing anything, each canonical's bytes are re-hashed and
+   checked against its own stored `contentHash` -- the same check ingest
+   itself makes on every push. A record whose content and contentHash have
+   drifted apart (a direct DB edit, a bug, tampering) is **refused, not
+   signed**: it is counted separately (`mismatched`), named by id and name
+   in a warning line, and left exactly as it was -- re-signing is the one
+   moment the trust chain is re-minted, and it must never be the weak link
+   that launders a tampered record under a fresh, validly-verifying
+   signature. A record whose content simply fails to parse is handled the
+   same way under a separate counter (`failed`): named in a warning, left
+   untouched, and never allowed to stop the rest of the pass -- one bad
+   record no longer aborts the whole run. Command output is a per-action
+   summary line (`scanned`/`updated`/`mismatched`/`failed`/duration) plus
+   one warning line per refused or failed record; it never prints a flow's
+   content and never echoes key material. **The process exits non-zero
+   whenever any record was mismatched or failed** -- treat that as "run
+   again after investigating the named records," not as the rotation
+   having silently failed; every OTHER record still got re-signed in the
+   same run.
 4. Every client re-runs `registry init` against the service. A "the
    service's key changed" warning and a new fingerprint at this point are
    EXPECTED and LEGITIMATE -- this is the one case where that warning means
    "you just rotated the key," not "something is wrong." Re-running `init`
    re-pins the client to the new key.
-5. Pulls verify again, against the new key, for every canonical -- including
-   the pre-rotation ones, now re-signed in step 3.
+5. Pulls verify again, against the new key, for every canonical that step 3
+   actually re-signed. A canonical step 3 reported as `mismatched` or
+   `failed` is still on the OLD key and still unpullable until whatever is
+   wrong with its stored content is fixed and `--re-sign` is run again.
 
 `registry/scripts/maintain.mjs` requires `DATABASE_URL` unconditionally (it
 refuses to run against the in-process memory store -- maintenance there
@@ -122,8 +143,10 @@ in cluster-merge dedup. This pass only ever touches null-embedding records
 -- it never re-embeds one that already has a value -- so it is safe to run
 repeatedly; a per-record Voyage failure is counted and skipped (retried on
 the next run) rather than aborting the whole pass, and like `--re-sign`, it
-never bumps `updatedAt`. Both flags can be passed in the same invocation to
-run both passes back to back.
+never bumps `updatedAt`. A record whose content fails to parse is counted
+as `failed`, named in a warning, and left alone -- same containment as
+`--re-sign`, and the process exits non-zero when `failed > 0`. Both flags
+can be passed in the same invocation to run both passes back to back.
 
 ## pgvector requirement
 

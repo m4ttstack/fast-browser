@@ -51,7 +51,7 @@ import { sign, verify } from '../lib/signing.mjs';
 import { baseFlow } from './helpers/fixtures.mjs';
 import { generateSigningKeyPem } from './helpers/server.mjs';
 import {
-  MaintainError, runBackfillPass, runMaintenance, runReSignPass,
+  MaintainError, needsAttention, runBackfillPass, runMaintenance, runReSignPass,
 } from '../scripts/maintain.mjs';
 
 function publicKeyPemFor(privateKeyPem) {
@@ -226,6 +226,145 @@ test('runBackfillPass embeds the same description + stepSignature text ingest.mj
   assert.equal(capturedText, expectedText);
 });
 
+// --- Fix round 1, IMPORTANT #1: re-sign must not be weaker than ingest --
+// a tampered record (content changed, contentHash left stale, exactly what
+// a direct DB edit looks like) must be REFUSED, not signed under the
+// current key. Reproduces the reviewer's exact scenario. ---
+
+test('runReSignPass refuses to re-sign a record whose content no longer matches its stored contentHash (tampered), counts it as mismatched, names it in a warning, and still re-signs the other records', async () => {
+  const store = createMemoryStore();
+  const key = generateSigningKeyPem();
+  const signer = signerFor(key);
+
+  const tamperedId = await pushFlow(store, signer, { name: 'tampered-record' });
+  const otherId = await pushFlow(store, signer, { name: 'clean-record' });
+  const otherBefore = await store.get(otherId);
+
+  const original = await store.get(tamperedId);
+  // Simulates a direct DB edit: `content` changes, `contentHash` is left
+  // stale -- putCanonical is a wholesale upsert, so every other field
+  // (including the now-stale contentHash and the OLD signature) rides
+  // through unchanged, exactly like a hand-edited row would.
+  const tamperedContent = { ...original.content, description: 'TAMPERED description -- contentHash left stale' };
+  await store.putCanonical({ ...original, content: tamperedContent });
+
+  const keyB = generateSigningKeyPem();
+  const result = await runReSignPass({ store, signer: signerFor(keyB) });
+
+  assert.equal(result.scanned, 2);
+  assert.equal(result.mismatched, 1);
+  assert.equal(result.failed, 0);
+  assert.equal(result.updated, 1, 'the untampered record must still be re-signed');
+  assert.equal(result.warnings.length, 1);
+  assert.match(result.warnings[0], new RegExp(tamperedId));
+  assert.match(result.warnings[0], /tampered-record/);
+  assert.match(result.warnings[0], /contentHash mismatch/);
+
+  const stillTampered = await store.get(tamperedId);
+  assert.equal(stillTampered.signature, original.signature, 'a mismatched record must NOT be re-signed -- the old signature is left in place, never signed under the new key');
+
+  const other = await store.get(otherId);
+  assert.notEqual(other.signature, otherBefore.signature, 're-sign for the untampered record must actually have run');
+  assert.equal(verify(serializeFlow(parseFlow(other.content)), other.signature, publicKeyPemFor(keyB)), true, 'the untampered record must verify against the NEW key');
+});
+
+test('runReSignPass is idempotent after a mismatch: a second run still refuses the same tampered record and still reports it as mismatched', async () => {
+  const store = createMemoryStore();
+  const key = generateSigningKeyPem();
+  const id = await pushFlow(store, signerFor(key));
+  const original = await store.get(id);
+  await store.putCanonical({ ...original, content: { ...original.content, description: 'tampered again' } });
+
+  const keyB = generateSigningKeyPem();
+  const first = await runReSignPass({ store, signer: signerFor(keyB) });
+  const second = await runReSignPass({ store, signer: signerFor(keyB) });
+
+  assert.equal(first.mismatched, 1);
+  assert.equal(second.mismatched, 1);
+  assert.equal(second.updated, 0);
+});
+
+// --- Fix round 1, IMPORTANT #2: a per-record error (corrupted content
+// that fails parseFlow) must not stop the rest of the pass. Reproduces the
+// reviewer's exact scenario: a MIDDLE record, so the records after it in
+// scan order are the ones that would previously have been silently
+// dropped by an uncaught throw. ---
+
+test('runReSignPass: a middle record with corrupted content (steps not an array) is counted as failed, named in a warning, and does not stop the other records from being re-signed', async () => {
+  const store = createMemoryStore();
+  const key = generateSigningKeyPem();
+  const signer = signerFor(key);
+
+  const firstId = await pushFlow(store, signer, { name: 'first-record' });
+  const corruptId = await pushFlow(store, signer, { name: 'corrupt-record' });
+  const lastId = await pushFlow(store, signer, { name: 'last-record' });
+
+  const firstBefore = await store.get(firstId);
+  const lastBefore = await store.get(lastId);
+  const corruptBefore = await store.get(corruptId);
+  await store.putCanonical({ ...corruptBefore, content: { ...corruptBefore.content, steps: 'not-an-array' } });
+
+  const keyB = generateSigningKeyPem();
+  const result = await runReSignPass({ store, signer: signerFor(keyB) });
+
+  assert.equal(result.scanned, 3);
+  assert.equal(result.failed, 1);
+  assert.equal(result.mismatched, 0);
+  assert.equal(result.updated, 2, 'the two uncorrupted records must still be re-signed despite the middle record throwing');
+  assert.equal(result.warnings.length, 1);
+  assert.match(result.warnings[0], new RegExp(corruptId));
+  assert.match(result.warnings[0], /corrupt-record/);
+
+  const firstAfter = await store.get(firstId);
+  const lastAfter = await store.get(lastId);
+  assert.notEqual(firstAfter.signature, firstBefore.signature, 'the record before the corrupted one must still be re-signed');
+  assert.notEqual(lastAfter.signature, lastBefore.signature, 'the record after the corrupted one must still be re-signed');
+
+  const corruptAfter = await store.get(corruptId);
+  assert.equal(corruptAfter.signature, corruptBefore.signature, 'the corrupted record itself must be left untouched, not partially written');
+});
+
+test('runBackfillPass: a middle record with corrupted content (steps not an array) is counted as failed, named in a warning, and does not stop the other records from being backfilled', async () => {
+  const store = createMemoryStore();
+  const key = generateSigningKeyPem();
+  const signer = signerFor(key);
+
+  const firstId = await pushFlow(store, signer, { name: 'first-record', description: 'first description' });
+  const corruptId = await pushFlow(store, signer, { name: 'corrupt-record', description: 'corrupt description' });
+  const lastId = await pushFlow(store, signer, { name: 'last-record', description: 'last description' });
+
+  const corruptBefore = await store.get(corruptId);
+  await store.putCanonical({ ...corruptBefore, content: { ...corruptBefore.content, steps: 'not-an-array' } });
+
+  const result = await runBackfillPass({ store, embedder: async () => new Float64Array([1, 0, 0]) });
+
+  assert.equal(result.scanned, 3);
+  assert.equal(result.failed, 1);
+  assert.equal(result.updated, 2, 'the two uncorrupted records must still be backfilled despite the middle record throwing');
+  assert.equal(result.warnings.length, 1);
+  assert.match(result.warnings[0], new RegExp(corruptId));
+  assert.match(result.warnings[0], /corrupt-record/);
+
+  assert.ok((await store.get(firstId)).embedding, 'the record before the corrupted one must still be backfilled');
+  assert.ok((await store.get(lastId)).embedding, 'the record after the corrupted one must still be backfilled');
+  assert.equal((await store.get(corruptId)).embedding, null, 'the corrupted record itself must be left untouched (still null), not partially written');
+});
+
+test('needsAttention is true when any action reports a mismatched or failed record, and false otherwise -- the CLI\'s exit-code signal', () => {
+  assert.equal(needsAttention([{ action: 're-sign', mismatched: 0, failed: 0 }]), false);
+  assert.equal(needsAttention([{ action: 're-sign', mismatched: 1, failed: 0 }]), true);
+  assert.equal(needsAttention([{ action: 're-sign', mismatched: 0, failed: 1 }]), true);
+  assert.equal(needsAttention([{ action: 'backfill-embeddings', skipped: 3, failed: 0 }]), false);
+  assert.equal(needsAttention([{ action: 'backfill-embeddings', skipped: 3, failed: 2 }]), true);
+  assert.equal(
+    needsAttention([
+      { action: 're-sign', mismatched: 0, failed: 0 },
+      { action: 'backfill-embeddings', skipped: 0, failed: 0 },
+    ]),
+    false,
+  );
+});
+
 // --- 2. CLI-level (runMaintenance): env fail-fast + redaction ---
 
 test('runMaintenance rejects when no action flag is given, naming neither env var nor a database', async () => {
@@ -348,6 +487,51 @@ test('maintain.mjs (gated pg): --re-sign rotates every canonical to a new key ag
       argv: ['--re-sign'],
     });
     assert.equal(second.actions[0].updated, 0);
+  } finally {
+    await pool.end();
+    await store.close();
+  }
+});
+
+// Fix round 1, IMPORTANT #1 pg parity: proves the targeted-write refusal
+// (recompute sha256(canonicalBytes), compare to the stored contentHash,
+// refuse the write on mismatch) against a REAL Postgres row, not just the
+// memory-store version above -- the reviewer's tamper reproduction was
+// against a live service, so this closes the loop against the real driver
+// too.
+test('maintain.mjs (gated pg): --re-sign refuses a tampered record (contentHash mismatch), counts and reports it, still re-signs the other record, and needsAttention flags the run', { skip }, async () => {
+  const { store, pool } = await freshPgStore();
+  try {
+    const key = generateSigningKeyPem();
+    const signer = signerFor(key);
+    const tamperedId = await pushFlow(store, signer, { name: 'gated-tampered-record' });
+    const cleanId = await pushFlow(store, signer, { name: 'gated-clean-record' });
+
+    const original = await store.get(tamperedId);
+    await store.putCanonical({
+      ...original,
+      content: { ...original.content, description: 'TAMPERED via gated pg test -- contentHash left stale' },
+    });
+
+    const keyB = generateSigningKeyPem();
+    const result = await runMaintenance({
+      env: { DATABASE_URL, REGISTRY_SIGNING_KEY: keyB },
+      argv: ['--re-sign'],
+    });
+
+    const action = result.actions[0];
+    assert.equal(action.mismatched, 1);
+    assert.equal(action.updated, 1, 'the untampered record must still be re-signed');
+    assert.equal(action.warnings.length, 1);
+    assert.match(action.warnings[0], new RegExp(tamperedId));
+    assert.equal(needsAttention(result.actions), true, 'a mismatched record must make the CLI exit non-zero');
+
+    const stillTampered = await store.get(tamperedId);
+    assert.equal(stillTampered.signature, original.signature, 'the tampered record must not be re-signed');
+
+    const clean = await store.get(cleanId);
+    const publicKeyB = publicKeyPemFor(keyB);
+    assert.equal(verify(serializeFlow(parseFlow(clean.content)), clean.signature, publicKeyB), true);
   } finally {
     await pool.end();
     await store.close();

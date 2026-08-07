@@ -10,10 +10,17 @@
 // Two independent actions, explicit flags, either or both per invocation:
 //   --re-sign               re-signs every canonical under the CURRENT
 //                            REGISTRY_SIGNING_KEY, skipping any whose
-//                            signature already verifies against it.
+//                            signature already verifies against it, and
+//                            REFUSING (never signing) any whose recomputed
+//                            contentHash does not match its stored one --
+//                            see Fix round 1 #1 below.
 //   --backfill-embeddings   embeds every canonical whose embedding is still
 //                            null (keyless-era pushes, or a degraded ingest
 //                            embed) under the CURRENT VOYAGE_API_KEY.
+//
+// Both actions are failure-contained per record (Fix round 1 #2 below) and
+// the CLI exits non-zero whenever any record was refused or failed --
+// counts and warnings are always printed, never just a raw crash.
 //
 // Store access uses the SAME driver-selection seam registry/server.mjs's
 // boot() uses (registry/lib/store.mjs's createStore), but this script
@@ -48,8 +55,40 @@
 // pg-store does this as a real single-column SQL UPDATE; memory-store
 // mutates the stored record in place. See registry/lib/store.mjs's
 // interface doc comment for the full rationale.
+//
+// Fix round 1, IMPORTANT #1 (reviewer-reproduced, live): re-signing is the
+// one moment the trust chain is re-minted, and it must not be WEAKER than
+// ingest -- ingest refuses a contentHash mismatch outright (registry/lib/
+// ingest.mjs step 2). An earlier version of runReSignPass signed whatever
+// bytes were in `content` unconditionally, never checking them against the
+// record's own stored `contentHash`; the reviewer proved live that a
+// record tampered directly in the database (content changed, contentHash
+// left stale) walked out of a re-sign pass validly signed under the
+// CURRENT key, laundering the tamper. Every record's canonical bytes are
+// now re-hashed and compared against the stored contentHash before
+// signing; a mismatch REFUSES the write, is counted separately
+// (`mismatched`, never folded into `failed`), and is named in a warning --
+// this is the one place in this script a record's name/id is deliberately
+// surfaced, because "which record is compromised" is exactly the
+// information an operator needs to act on this. The CLI exits non-zero
+// when `mismatched > 0`.
+//
+// Fix round 1, IMPORTANT #2 (controller ruling): both passes are
+// failure-contained per record, not merely interrupt-safe. Earlier, one
+// record whose content failed parseFlow (or a single failing store write)
+// threw out of the whole loop, leaving every later record unprocessed and
+// the CLI printing only the raw error with no counts at all. Each
+// per-record body is now wrapped in its own try/catch: a throw increments
+// `failed`, logs a warning naming the record (id + name -- both are store
+// COLUMNS, independent of `content`, so they are always available even
+// when `content` itself is what failed to parse), and the pass continues
+// to the next record. Combined with each pass's existing idempotency
+// (already-correct records are never rewritten), a run that hits N failures
+// is safe to re-run after the underlying data problem is fixed -- the
+// stragglers are picked up, nothing already-correct is redone. The CLI
+// exits non-zero when `failed > 0`, same as `mismatched > 0`.
 
-import { createPrivateKey } from 'node:crypto';
+import { createHash, createPrivateKey } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
 
@@ -99,7 +138,20 @@ function assertEd25519SigningKey(signingKeyPem) {
 }
 
 // --- passes (the test-injection seam: {store, signer/embedder} in, a
-// counts-and-duration summary out; no env, no process, no console). ---
+// counts-and-duration summary out; no env, no process, no console). Both
+// are interrupt-safe (already-correct records are never rewritten, so a
+// re-run after a partial run only touches what's left) AND
+// failure-contained (one bad record's error never stops the rest from
+// being processed) -- see this file's Fix round 1 top comment for the
+// reproduced failure both properties fix. ---
+
+function sha256Hex(bytes) {
+  return createHash('sha256').update(bytes).digest('hex');
+}
+
+function warningFor(record, detail) {
+  return `id=${record.id} name=${record.name ?? '(unknown)'} -- ${detail}`;
+}
 
 // Re-signs every canonical under `signer` (registry/lib/signing.mjs's
 // `sign`, bound to a private key, same {sign(bytes) -> base64} shape
@@ -107,24 +159,52 @@ function assertEd25519SigningKey(signingKeyPem) {
 // (registry/lib/ingest.mjs's own top comment, carried forward here
 // unchanged): canonical bytes are ALWAYS recomputed via
 // serializeFlow(parseFlow(record.content)), never a raw JSON.stringify of
-// whatever shape a jsonb round trip left `content` in. Skips (and does not
-// write) any record whose current signature already matches -- the
-// idempotency property a second `--re-sign` run after a successful one
-// depends on, and the property that makes an interrupted/retried run safe.
+// whatever shape a jsonb round trip left `content` in.
+//
+// Before signing anything, this recomputes sha256(canonicalBytes) and
+// compares it against the record's own stored `contentHash` -- exactly
+// ingest's step-2 check, run again here because re-signing is the one
+// moment the trust chain is re-minted (see Fix round 1 #1 above). A
+// mismatch means `content` and `contentHash` have drifted apart (a direct
+// DB edit, a bug, tampering) and is REFUSED, not signed: counted as
+// `mismatched`, named in a warning, and left alone for an operator to
+// investigate -- the OLD (still-valid-under-the-OLD-key) signature is left
+// in place rather than either signing stale/tampered bytes under the new
+// key or silently dropping the record.
+//
+// A record whose signature already verifies against the current key is
+// skipped (not rewritten) -- the idempotency property a second `--re-sign`
+// run after a successful one depends on.
 export async function runReSignPass({ store, signer }) {
   const startedAt = Date.now();
   const records = await store.list({});
   let updated = 0;
+  let mismatched = 0;
+  let failed = 0;
+  const warnings = [];
   for (const record of records) {
-    const flow = parseFlow(record.content);
-    const canonicalBytes = serializeFlow(flow);
-    const newSignature = signer.sign(canonicalBytes);
-    if (newSignature !== record.signature) {
-      await store.updateSignature(record.id, newSignature);
-      updated += 1;
+    try {
+      const flow = parseFlow(record.content);
+      const canonicalBytes = serializeFlow(flow);
+      const computedHash = sha256Hex(canonicalBytes);
+      if (computedHash !== record.contentHash) {
+        mismatched += 1;
+        warnings.push(warningFor(record, `contentHash mismatch (stored ${record.contentHash}, recomputed ${computedHash}) -- refusing to re-sign`));
+        continue;
+      }
+      const newSignature = signer.sign(canonicalBytes);
+      if (newSignature !== record.signature) {
+        await store.updateSignature(record.id, newSignature);
+        updated += 1;
+      }
+    } catch (error) {
+      failed += 1;
+      warnings.push(warningFor(record, `failed to re-sign: ${error.message}`));
     }
   }
-  return { scanned: records.length, updated, durationMs: Date.now() - startedAt };
+  return {
+    scanned: records.length, updated, mismatched, failed, warnings, durationMs: Date.now() - startedAt,
+  };
 }
 
 // Backfills the embedding of every canonical whose stored embedding is
@@ -135,28 +215,40 @@ export async function runReSignPass({ store, signer }) {
 // can never drift apart on the `description + ' | ' + stepSignature`
 // contract. A per-record embedder degrade (the production embedder never
 // throws; see registry/lib/embedder.mjs -- a failure surfaces as a `null`
-// return) is counted as `skipped` and the pass continues; it never aborts
-// the whole run. Only null-embedding records are ever scanned or written,
-// which is what makes a second run idempotent: already-filled records are
-// never touched, and a `skipped` record (still null) is retried, not
-// silently abandoned, on the next run.
+// return) is counted as `skipped` and the pass continues; a per-record
+// EXCEPTION (e.g. parseFlow failing on corrupted content) is counted as
+// `failed`, named in a warning, and the pass also continues (Fix round 1
+// #2) -- neither ever aborts the whole run. Only null-embedding records are
+// ever scanned or written, which is what makes a second run idempotent:
+// already-filled records are never touched, and a `skipped` or `failed`
+// record (still null either way) is retried, not silently abandoned, on
+// the next run.
 export async function runBackfillPass({ store, embedder }) {
   const startedAt = Date.now();
   const records = (await store.list({})).filter((record) => record.embedding === null);
   let updated = 0;
   let skipped = 0;
+  let failed = 0;
+  const warnings = [];
   for (const record of records) {
-    const flow = parseFlow(record.content);
-    const text = embedTextFor(flow);
-    const embedding = await embedder(text);
-    if (!embedding) {
-      skipped += 1;
-      continue;
+    try {
+      const flow = parseFlow(record.content);
+      const text = embedTextFor(flow);
+      const embedding = await embedder(text);
+      if (!embedding) {
+        skipped += 1;
+        continue;
+      }
+      await store.updateEmbedding(record.id, Array.from(embedding));
+      updated += 1;
+    } catch (error) {
+      failed += 1;
+      warnings.push(warningFor(record, `failed to backfill: ${error.message}`));
     }
-    await store.updateEmbedding(record.id, Array.from(embedding));
-    updated += 1;
   }
-  return { scanned: records.length, updated, skipped, durationMs: Date.now() - startedAt };
+  return {
+    scanned: records.length, updated, skipped, failed, warnings, durationMs: Date.now() - startedAt,
+  };
 }
 
 // --- CLI wiring: env validation (fail-fast, named, never echoed) -> store
@@ -174,12 +266,15 @@ function parseFlags(argv) {
 }
 
 // runMaintenance({ env, argv }) -> Promise<{ actions: [{ action, scanned,
-// updated, skipped?, durationMs }] }>
-// Record names are never printed by this script, at any point -- the
-// summaries below are counts and a duration only. DATABASE_URL and
-// REGISTRY_SIGNING_KEY are never echoed; a pg connection/init failure's
-// message is passed through redactConnectionString (registry/server.mjs,
-// the same helper boot() uses) before it can ever reach a caller.
+// updated, mismatched?, skipped?, failed, warnings, durationMs }] }>
+// Every summary is counts, a duration, and (Fix round 1) a `warnings` array
+// naming any record that was refused (`mismatched`, --re-sign only) or
+// threw (`failed`, both actions) -- record names/ids are deliberately
+// surfaced ONLY in those two cases, never for an ordinary successful
+// update. DATABASE_URL and REGISTRY_SIGNING_KEY are never echoed; a pg
+// connection/init failure's message is passed through
+// redactConnectionString (registry/server.mjs, the same helper boot()
+// uses) before it can ever reach a caller.
 export async function runMaintenance({ env = process.env, argv = process.argv.slice(2) } = {}) {
   const { reSign, backfillEmbeddings } = parseFlags(argv);
   if (!reSign && !backfillEmbeddings) {
@@ -239,8 +334,19 @@ export async function runMaintenance({ env = process.env, argv = process.argv.sl
 
 function formatAction(summary) {
   const parts = [`scanned ${summary.scanned}`, `updated ${summary.updated}`];
+  if (summary.action === 're-sign') parts.push(`mismatched ${summary.mismatched}`);
   if (summary.action === 'backfill-embeddings') parts.push(`skipped ${summary.skipped}`);
+  parts.push(`failed ${summary.failed}`);
   return `[${summary.action}] ${parts.join(', ')} (${summary.durationMs}ms)`;
+}
+
+// True when any action reported a refused contentHash mismatch
+// (--re-sign only) or a per-record failure (either action) -- Fix round 1's
+// exit-non-zero signal. Exported so a test can assert this decision
+// directly against a summary, rather than only through a spawned
+// subprocess's numeric exit code.
+export function needsAttention(actions) {
+  return actions.some((action) => (action.mismatched ?? 0) > 0 || (action.failed ?? 0) > 0);
 }
 
 const isMain = process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1]);
@@ -251,9 +357,17 @@ if (isMain) {
       console.log('');
       for (const action of actions) {
         console.log(formatAction(action));
+        for (const warning of action.warnings) {
+          console.log(`  ! ${warning}`);
+        }
       }
       console.log('');
-      console.log('MAINTENANCE COMPLETE');
+      if (needsAttention(actions)) {
+        console.log('MAINTENANCE COMPLETED WITH ISSUES -- mismatched and/or failed records need attention, see warnings above');
+        process.exitCode = 1;
+      } else {
+        console.log('MAINTENANCE COMPLETE');
+      }
     })
     .catch((error) => {
       console.error(`fast-browser-registry maintain: ${error.message}`);
