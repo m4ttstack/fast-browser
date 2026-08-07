@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { copyFile, mkdtemp, rm } from 'node:fs/promises';
+import { copyFile, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import http from 'node:http';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -322,4 +323,123 @@ test('a flow-runner call in flight when chrome dies surfaces SIDECAR_LOST throug
     );
     return true;
   });
+});
+
+// --- MAT-165: the secrets round trip -------------------------------------
+//
+// The design spec promised this and the implementation plan dropped it, so
+// `--secrets` forwarding shipped with only unit-level flag-construction
+// coverage. It is the highest-stakes path in cloud mode: credentials plus the
+// runtime's redaction guarantee.
+//
+// The awkward part is asserting the field received the REAL value. Every
+// route back through a tool result is redacted by design -- that IS the
+// guarantee -- so reading the field back would prove nothing about what was
+// typed. This serves a real form from a local origin and asserts on what the
+// SERVER received, which is the one vantage point outside the agent's view.
+async function startFormServer(t) {
+  const submissions = [];
+  const server = http.createServer((request, response) => {
+    if (request.method === 'POST' && request.url === '/submit') {
+      let body = '';
+      request.on('data', (chunk) => { body += chunk; });
+      request.on('end', () => {
+        submissions.push(Object.fromEntries(new URLSearchParams(body)));
+        response.writeHead(200, { 'content-type': 'text/html' });
+        response.end('<!doctype html><title>signed in</title><body>signed in</body>');
+      });
+      return;
+    }
+    response.writeHead(200, { 'content-type': 'text/html' });
+    response.end(`<!doctype html><title>sign in</title><body>
+      <form method="POST" action="/submit">
+        <label for="u">Username</label><input id="u" name="username">
+        <label for="p">Password</label><input id="p" name="password" type="password">
+        <button type="submit">Sign in</button>
+      </form></body>`);
+  });
+
+  await new Promise((resolve) => { server.listen(0, '127.0.0.1', resolve); });
+  t.after(() => new Promise((resolve) => { server.close(resolve); }));
+  return { submissions, origin: `http://127.0.0.1:${server.address().port}` };
+}
+
+test('a secret fills by name, arrives at the server verbatim, and never appears in tool output', async (t) => {
+  const form = await startFormServer(t);
+  const chrome = await startChrome(t);
+
+  // Unique per run so a stale value from an earlier run cannot satisfy the
+  // assertions, and so the "appears nowhere" scan cannot pass by matching
+  // some unrelated constant.
+  const username = `user-${randomUUID()}`;
+  const password = `pw-${randomUUID()}`;
+
+  const secretsDir = await mkdtemp(path.join(tmpdir(), 'fb-cdp-secrets-'));
+  const secretsFile = path.join(secretsDir, 'app.env');
+  await writeFile(secretsFile, `APP_USERNAME=${username}\nAPP_PASSWORD=${password}\n`, { mode: 0o600 });
+
+  const outputDir = await mkdtemp(path.join(tmpdir(), 'fb-cdp-out-'));
+  const client = await startEntrypointClient({
+    outputDir,
+    env: {
+      ...process.env,
+      FAST_BROWSER_ENGINE: 'cdp',
+      FAST_BROWSER_CDP_ENDPOINT: chrome.endpoint,
+      FAST_BROWSER_OUTPUT_DIR: outputDir,
+      FAST_BROWSER_SECRETS: secretsFile,
+    },
+  });
+  t.after(() => client.close());
+  t.after(() => rm(outputDir, { recursive: true, force: true }));
+  t.after(() => rm(secretsDir, { recursive: true, force: true }));
+
+  // Every tool result this test provokes, kept for the redaction scan below.
+  const outputs = [];
+  const call = async (name, args) => {
+    const result = String(await client.callTool(name, args));
+    outputs.push(result);
+    return result;
+  };
+
+  await call('browser_navigate', { url: form.origin });
+
+  // The secret NAMES are the field values. This is the whole contract: only
+  // browser_fill_form and browser_type resolve them, and the model never
+  // holds the value.
+  await call('browser_fill_form', {
+    fields: [
+      { name: 'Username', type: 'textbox', target: '#u', value: 'APP_USERNAME' },
+      { name: 'Password', type: 'textbox', target: '#p', value: 'APP_PASSWORD' },
+    ],
+  });
+  await call('browser_click', { element: 'Sign in', target: 'button[type=submit]' });
+
+  const deadline = Date.now() + 10_000;
+  while (form.submissions.length === 0 && Date.now() < deadline) await delay(100);
+
+  assert.equal(form.submissions.length, 1, 'the form never reached the server');
+  const [submitted] = form.submissions;
+
+  // The real value arrived. Had resolution not happened, the server would
+  // have received the literal name instead, which is the exact failure the
+  // "never guess a secret name" guidance warns about.
+  assert.equal(submitted.password, password, 'the password field did not receive the resolved secret');
+  assert.equal(submitted.username, username, 'the username field did not receive the resolved secret');
+  assert.notEqual(submitted.password, 'APP_PASSWORD', 'the secret name was typed in literally');
+
+  // ...and it never passed through anything the model can see. Scanning every
+  // captured result, not just the fill's, because a later snapshot or
+  // console read is just as capable of leaking the field's contents.
+  for (const output of outputs) {
+    assert.ok(!output.includes(password), `a tool result leaked the secret value: ${output.slice(0, 200)}`);
+    assert.ok(!output.includes(username), `a tool result leaked the secret value: ${output.slice(0, 200)}`);
+  }
+
+  // The positive half of the same guarantee: redaction rewrote it rather than
+  // the value simply never being echoed anywhere.
+  assert.ok(
+    outputs.some((output) => output.includes('<secret>APP_PASSWORD</secret>')
+      || output.includes("process.env['APP_PASSWORD']")),
+    'no tool result showed the redacted placeholder, so redaction was never exercised',
+  );
 });
