@@ -604,6 +604,79 @@ test('a plain timeout whose call log happens to render "WebSocket API" page cont
   assert.doesNotMatch(message, /SIDECAR_LOST/);
 });
 
+// Mirrors runWithFailingAction above, but the failure is raised by
+// `waitFor` itself (target RESOLUTION) rather than by `click`/`fill` (the
+// step's ACT) -- the exact distinction fix round 1's probeCandidates change
+// exists to preserve. `click`/`fill` on the stub throw a message that could
+// never pass as either contract, so if resolution's failure were ever
+// masked and the walk pressed on into an ACT call that never should have
+// happened, the assertions below would catch it via the wrong message
+// rather than by accident going green.
+async function runWithFailingResolution(message) {
+  const source = await readSource();
+  const macro = new Function(`"use strict"; return (${source});`)();
+  let actCalls = 0;
+  const page = {
+    url: () => 'https://example.test/start',
+    on: () => {},
+    off: () => {},
+    goto: async () => {},
+    locator: () => ({
+      waitFor: async () => { throw new Error(message); },
+      click: async () => { actCalls += 1; throw new Error('act must never run: resolution already failed'); },
+      fill: async () => { actCalls += 1; throw new Error('act must never run: resolution already failed'); },
+      frames: () => [],
+    }),
+    waitForLoadState: async () => {},
+  };
+  const flow = {
+    schemaVersion: 1,
+    name: 'resolution-probe',
+    origin: 'https://example.test',
+    steps: [
+      { op: 'goto', url: 'https://example.test/start' },
+      { op: 'click', target: { locators: [{ kind: 'css', selector: '#missing' }] } },
+    ],
+  };
+
+  try {
+    await macro(page, { flow });
+  } catch (error) {
+    return { message: error.message, actCalls };
+  }
+  throw new Error('expected the macro to throw');
+}
+
+test('a cdp disconnect raised during target resolution is classified as SIDECAR_LOST (fix round 1, Finding 3)', async () => {
+  // Before fix round 1, probeCandidates' bare `catch { continue; }`
+  // discarded this exact signature and resolveTarget could only ever throw
+  // the fixed literal 'no locator candidate matched' -- a resolution-phase
+  // disconnect was structurally incapable of reaching isSidecarLost at all.
+  const { message, actCalls } = await runWithFailingResolution(
+    'locator.waitFor: Target page, context or browser has been closed',
+  );
+  assert.match(message, /^SIDECAR_LOST: /);
+  const shape = JSON.parse(message.slice('SIDECAR_LOST: '.length));
+  assert.match(shape.error, /Target page, context or browser has been closed/);
+  assert.match(shape.recovery, /restart the flow from navigation/i);
+  assert.equal(actCalls, 0, 'a resolution-phase loss must never reach the step\'s own action');
+});
+
+test('an ordinary resolution miss still reports FLOW_RUNNER_FAILURE with "no locator candidate matched" (fix round 1 regression guard)', async () => {
+  // Same shape of failure (waitFor rejects on every candidate, every rung)
+  // as the SIDECAR_LOST case above, but with a message matching no lost-
+  // sidecar signature -- proving the fix is a re-throw gated on the actual
+  // rejection text, not a re-throw of every resolution failure regardless
+  // of cause. The byte-identical contract (including candidate enrichment
+  // eligibility, gated on this exact literal) has to survive unchanged.
+  const { message, actCalls } = await runWithFailingResolution('element not found');
+  assert.match(message, /^FLOW_RUNNER_FAILURE: /);
+  assert.doesNotMatch(message, /SIDECAR_LOST/);
+  const payload = JSON.parse(message.slice('FLOW_RUNNER_FAILURE: '.length));
+  assert.equal(payload.error, 'no locator candidate matched');
+  assert.equal(actCalls, 0);
+});
+
 test('flow-runner.js never says "retry", including in comments', async () => {
   // Duplicated deliberately from the existing canary above: the recovery
   // wording added for SIDECAR_LOST is the most likely accidental

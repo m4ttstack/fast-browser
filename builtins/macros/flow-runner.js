@@ -240,12 +240,39 @@ async (page, args) => {
   // `locatorFallbacks` itself -- that stays the caller's job, since WS3a
   // Task 3's quirk walk below also calls this for a quirk's OWN target,
   // which must never be recorded as a step fallback.
+  //
+  // Fix round 1 (Task 7 e2e finding, controller-ruled): a plain ordinary
+  // miss (the target genuinely is not there yet) and a lost sidecar
+  // connection used to look identical here -- both just made `waitFor`
+  // reject, and the old bare `catch { continue; }` discarded the rejection
+  // reason either way, so every caller downstream (`resolveTarget`,
+  // `resolveEscalated`) could only ever report the fixed literal `'no
+  // locator candidate matched'`, and a genuine disconnect during RESOLUTION
+  // was structurally incapable of ever producing `SIDECAR_LOST` -- it read
+  // as an ordinary miss, complete with the candidate-enrichment scan
+  // (below) scraping a page that no longer has a browser behind it. Now the
+  // rejection reason is inspected with the SAME `isSidecarLost` predicate
+  // this file already uses for an ACT-phase failure (declared once, above,
+  // for both uses) before being discarded: a genuine sidecar-loss signature
+  // is re-thrown immediately -- stopping this candidate walk rather than
+  // moving on to probe a browser that is not going to answer -- and
+  // propagates unmodified through `resolveTarget`/`resolveEscalated` (which
+  // add no catch of their own around this call) into the step's own catch
+  // below, so it reaches `fail()` with the real Playwright/relay text still
+  // attached and classifies exactly as an ACT-phase loss already does. Any
+  // OTHER rejection (the ordinary "not there yet" case) is still discarded
+  // and this candidate is still skipped in favor of the next one, so the
+  // byte-identical `'no locator candidate matched'` contract -- enrichment
+  // included -- is unchanged for every failure that is not a real sidecar
+  // loss.
   const probeCandidates = async (target, deduped, timeout, probe) => {
     for (const candidateEntry of deduped) {
       const located = candidateLocator(target, candidateEntry.candidate);
       try {
         await located.waitFor({ timeout, ...probe });
-      } catch {
+      } catch (error) {
+        const text = String(error && error.message ? error.message : error);
+        if (isSidecarLost(text)) throw error;
         continue;
       }
       return { located, candidateEntry };
@@ -261,6 +288,12 @@ async (page, args) => {
   // candidate index won -- needing the slower timeout at all is the
   // fallback being recorded. Throws the same rung-2 miss message on a
   // miss that `resolveTarget` always has.
+  //
+  // No separate sidecar-loss handling needed here (fix round 1): this
+  // function adds no catch of its own around the `probeCandidates` call
+  // below, so a re-thrown sidecar-loss error already passes straight
+  // through unmodified -- only a genuine `null` (every candidate an
+  // ordinary miss) reaches the `'no locator candidate matched'` throw.
   const resolveEscalated = async (target, stepIndex, timeout, probe, part) => {
     const deduped = dedupeLocators(target);
     if (deduped.length === 0) {
