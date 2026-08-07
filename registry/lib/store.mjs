@@ -48,6 +48,28 @@
 //   get(id)
 //     -> Promise<Record|null>
 //
+//   updateSignature(id, signature)
+//     -> Promise<Record|null>
+//     MAT-160 Task 2 (registry maintenance script) addition: a TARGETED
+//     write of exactly the `signature` column/field, for id -- returns the
+//     updated record, or null if id is unknown. Deliberately narrower than
+//     putCanonical's wholesale upsert-and-replace: a key-rotation re-sign
+//     pass (registry/scripts/maintain.mjs) must refresh a canonical's
+//     signature WITHOUT bumping `updatedAt`, since bumping it would make
+//     every client's next GET /v1/pull?since= re-emit the entire registry
+//     on the next rotation for no content reason. Every other field
+//     (content, contentHash, embedding, mergedCount, createdAt, updatedAt)
+//     is left untouched.
+//
+//   updateEmbedding(id, embedding)
+//     -> Promise<Record|null>
+//     MAT-160 Task 2 addition, same rationale as updateSignature above: a
+//     TARGETED write of exactly the `embedding` column/field (Float64Array
+//     | array | null), for id -- returns the updated record, or null if id
+//     is unknown, and never bumps `updatedAt`. Used by the embedding
+//     backfill pass (registry/scripts/maintain.mjs) to fill a previously-
+//     null embedding without touching sync-pull ordering.
+//
 //   list({ since, origin })
 //     -> Promise<Record[]>
 //     `since` filters on updatedAt (inclusive) -- the sync-pull semantics
@@ -113,6 +135,8 @@ export const STORE_METHODS = Object.freeze([
   'findByContentHash',
   'findClusterCandidates',
   'get',
+  'updateSignature',
+  'updateEmbedding',
   'list',
   'search',
   'health',

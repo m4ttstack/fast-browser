@@ -188,6 +188,30 @@ test('targetsAreAnchored falls back to the primary locator identity when role an
   assert.equal(targetsAreAnchored(confirm, deleteAccount), false);
 });
 
+// MAT-160 Task 4 (determinism sweep): both-null tightening. Before this
+// fix, two role/name-less targets that ALSO both carry no locators at all
+// collapsed `primaryLocatorIdentity(a) === primaryLocatorIdentity(b)` to
+// `null === null` -- trivially true, anchoring two targets that carry
+// literally zero identifying information about what either one points at.
+// Conservative direction only: this can only turn a prior `true` into
+// `false`.
+test('targetsAreAnchored refuses two locator-less, role/name-less targets even though both sides are null (MAT-160 Task 4 tightening)', () => {
+  const locatorLess = { locators: [] };
+  assert.equal(targetsAreAnchored(locatorLess, { locators: [] }), false);
+  assert.equal(targetsAreAnchored(locatorLess, locatorLess), false, 'even compared against itself');
+});
+
+// The asymmetric case (one side null, one side a real identity) was
+// ALREADY false before this tightening -- `null === 'some-identity'` was
+// never true -- pinned here so a future change to this function cannot
+// silently reintroduce it while only looking at the both-null case.
+test('targetsAreAnchored refuses an asymmetric locator-less-vs-locator-present pair (already false pre-tightening; kept pinned)', () => {
+  const locatorLess = { locators: [] };
+  const withLocator = { locators: [{ kind: 'css', selector: '#confirm' }] };
+  assert.equal(targetsAreAnchored(locatorLess, withLocator), false);
+  assert.equal(targetsAreAnchored(withLocator, locatorLess), false);
+});
+
 test('targetsAreAnchored requires presence to agree on both sides', () => {
   assert.equal(targetsAreAnchored(target(), undefined), false);
   assert.equal(targetsAreAnchored(undefined, target()), false);

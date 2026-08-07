@@ -8,6 +8,7 @@ import { defaultConfig } from '../../lib/core/config.mjs';
 import {
   flowId, parseFlow, serializeFlow,
 } from '../../lib/flows/artifact.mjs';
+import { PUSH_MAX_FLOWS } from '../../registry/lib/constants.mjs';
 import { stepSignature as stepSignatureOf } from '../../registry/lib/signature-fields.mjs';
 import { sign } from '../../registry/lib/signing.mjs';
 
@@ -109,6 +110,66 @@ function baseFlow(overrides = {}) {
 function validFlow(overrides = {}) {
   const draft = baseFlow({ ...overrides, id: 'a'.repeat(64) });
   return { ...draft, id: flowId(draft) };
+}
+
+// --- push chunking fixtures (MAT-160) ---
+
+// `count` distinct, lint-clean, ready-tier flows, each with its own unique
+// name so batch membership and input-order can both be asserted on by name
+// alone. Zero-padded so a lexical sort of the generated names -- which
+// `defaultListFlowFiles` would apply in real use -- matches creation
+// order; these tests inject their own `listFlowFiles`/`readFlowFile`
+// directly, so the padding is a convenience for readable assertions, not
+// something the code under test depends on.
+function manyFlows(count) {
+  const flows = [];
+  for (let index = 0; index < count; index += 1) {
+    flows.push(validFlow({ name: `flow-${String(index).padStart(4, '0')}` }));
+  }
+  return flows;
+}
+
+// `listFlowFiles`/`readFlowFile` doubles over a fixed, ordered set of
+// flows -- the ready-tier directory listing this task's chunking logic
+// reads before it ever splits anything into batches.
+function readyTierFixture(flows) {
+  const fileNames = flows.map((flow) => `${flow.name}.flow.json`);
+  const byFileName = new Map(flows.map((flow) => [`${flow.name}.flow.json`, flow]));
+  return {
+    listFlowFiles: async () => fileNames,
+    readFlowFile: async (filePath) => {
+      const flow = byFileName.get(path.basename(filePath));
+      if (!flow) throw new Error(`readyTierFixture: unexpected file ${filePath}`);
+      return JSON.stringify(flow);
+    },
+  };
+}
+
+// Records every POST /v1/push call this test's `push` makes, as the list of
+// flow names each request body carried, in the order the requests were
+// sent -- exactly what the chunking tests need to assert batch sizes and
+// membership without depending on the client's own internal batching code
+// to check itself. `onBatch(batchNumber, body)` -- 1-indexed -- may return
+// a response object (a successful `jsonResponse(...)`) or throw, to model
+// a specific batch behaving differently (a mid-sequence transport
+// failure); when it returns nothing, the batch succeeds with each flow
+// reported `created`.
+function batchRecordingFetch(onBatch) {
+  const calls = [];
+  const fetchDouble = async (url, options) => {
+    assert.equal(url, 'https://registry.example.com/v1/push');
+    const body = JSON.parse(options.body);
+    const names = body.flows.map((entry) => entry.artifact.name);
+    calls.push(names);
+    const override = onBatch ? onBatch(calls.length, body) : undefined;
+    if (override) return override;
+    return jsonResponse(200, {
+      results: names.map((name) => ({
+        name, outcome: 'created', canonicalId: `canonical-${name}`, reasons: [],
+      })),
+    });
+  };
+  return { calls, fetch: fetchDouble };
 }
 
 function signedEnvelope(flow, privateKey) {
@@ -428,6 +489,12 @@ test('push manifest lists exactly the ready tier minus lint-excluded flows, with
   assert.ok(prints.some((line) => /1 flow\(s\)/.test(line)));
   assert.ok(prints.some((line) => line.includes('clean-flow') && line.includes('https://example.com')));
   assert.ok(prints.some((line) => line.includes('dirty-flow') && /excluded/i.test(line)));
+
+  // MAT-160: push ships each flow's full signed artifact including
+  // `provenance` (never stripped) -- the manifest must disclose that up
+  // front, not just list names/origins/count. Deleting the disclosure
+  // line must fail this test.
+  assert.ok(prints.some((line) => /provenance/i.test(line)));
 });
 
 test('push confirm gate blocks the request without approval, and never calls the registry', async () => {
@@ -525,6 +592,232 @@ test('push --yes with config registry.assumeYes:true skips the confirm prompt bu
   assert.equal(report.results[0].outcome, 'created');
   assert.ok(stderrLines.some((line) => /1 flow\(s\)/.test(line)));
   assert.ok(stderrLines.some((line) => line.includes('clean-flow') && line.includes('https://example.com')));
+
+  // MAT-160: the disclosure line belongs on the bypass arm too -- this is
+  // exactly the automation path that ships flows unattended, so the
+  // durable stderr log must record that provenance leaves with them.
+  assert.ok(stderrLines.some((line) => /provenance/i.test(line)));
+});
+
+// --- push chunking (MAT-160) ---
+
+test('push over PUSH_MAX_FLOWS: one manifest, one confirm, sequential batched POSTs, aggregated results in input order', async () => {
+  const total = PUSH_MAX_FLOWS * 2 + 20; // 120 at PUSH_MAX_FLOWS=50
+  const flows = manyFlows(total);
+  const { publicKey } = keyPair();
+  const prints = [];
+  let confirmCalls = 0;
+  const { calls, fetch } = batchRecordingFetch();
+
+  const report = await registry(
+    { sub: 'push', json: false, yes: false },
+    {
+      interactive: true,
+      loadConfig: async () => configuredConfig(publicKey),
+      ...readyTierFixture(flows),
+      paths: { flowsDir: '/h/flows', flowsPendingDir: '/h/pending' },
+      print: (line) => prints.push(line),
+      confirmPush: async () => { confirmCalls += 1; return true; },
+      fetch,
+      env: { FAST_BROWSER_REGISTRY_TOKEN: 'tok' },
+    },
+  );
+
+  // ONE manifest (total + batch count), ONE confirm, for the WHOLE set --
+  // chunking only changes what happens after consent, never how many times
+  // consent is asked.
+  assert.equal(confirmCalls, 1);
+  assert.ok(prints.some((line) => /120 flow\(s\)/.test(line)));
+  assert.ok(prints.some((line) => /120 flow\(s\) in 3 batch\(es\)/.test(line)));
+
+  // Three sequential POSTs of 50/50/20.
+  assert.equal(calls.length, 3);
+  assert.deepEqual(calls.map((batch) => batch.length), [50, 50, 20]);
+
+  // Every flow appears exactly once across the batches, in input order.
+  const flattened = calls.flat();
+  assert.deepEqual(flattened, flows.map((flow) => flow.name));
+  const seen = new Set(flattened);
+  assert.equal(seen.size, total);
+
+  // Aggregated per-flow outcomes, also in input order.
+  assert.equal(report.results.length, total);
+  assert.deepEqual(report.results.map((result) => result.name), flows.map((flow) => flow.name));
+  assert.ok(report.results.every((result) => result.outcome === 'created'));
+  assert.deepEqual(report.batches, { count: 3, size: PUSH_MAX_FLOWS });
+  assert.deepEqual(report.unknown, []);
+  assert.deepEqual(report.notAttempted, []);
+});
+
+test('push with exactly PUSH_MAX_FLOWS flows is a single POST with no batch line in the manifest', async () => {
+  const flows = manyFlows(PUSH_MAX_FLOWS);
+  const { publicKey } = keyPair();
+  const prints = [];
+  const { calls, fetch } = batchRecordingFetch();
+
+  const report = await registry(
+    { sub: 'push', json: false, yes: false },
+    {
+      interactive: true,
+      loadConfig: async () => configuredConfig(publicKey),
+      ...readyTierFixture(flows),
+      paths: { flowsDir: '/h/flows', flowsPendingDir: '/h/pending' },
+      print: (line) => prints.push(line),
+      confirmPush: async () => true,
+      fetch,
+      env: { FAST_BROWSER_REGISTRY_TOKEN: 'tok' },
+    },
+  );
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].length, PUSH_MAX_FLOWS);
+  assert.ok(!prints.some((line) => /batch/i.test(line)), 'the boundary case (exactly PUSH_MAX_FLOWS) must not print a batch line');
+  assert.deepEqual(report.batches, { count: 1, size: PUSH_MAX_FLOWS });
+});
+
+test('push with PUSH_MAX_FLOWS + 1 flows splits into two POSTs (PUSH_MAX_FLOWS, 1) and prints the batch line', async () => {
+  const total = PUSH_MAX_FLOWS + 1;
+  const flows = manyFlows(total);
+  const { publicKey } = keyPair();
+  const prints = [];
+  const { calls, fetch } = batchRecordingFetch();
+
+  const report = await registry(
+    { sub: 'push', json: false, yes: false },
+    {
+      interactive: true,
+      loadConfig: async () => configuredConfig(publicKey),
+      ...readyTierFixture(flows),
+      paths: { flowsDir: '/h/flows', flowsPendingDir: '/h/pending' },
+      print: (line) => prints.push(line),
+      confirmPush: async () => true,
+      fetch,
+      env: { FAST_BROWSER_REGISTRY_TOKEN: 'tok' },
+    },
+  );
+
+  assert.equal(calls.length, 2);
+  assert.deepEqual(calls.map((batch) => batch.length), [PUSH_MAX_FLOWS, 1]);
+  assert.ok(prints.some((line) => new RegExp(`${total} flow\\(s\\) in 2 batch\\(es\\)`).test(line)));
+  assert.deepEqual(report.batches, { count: 2, size: PUSH_MAX_FLOWS });
+});
+
+// Fix round 1, Important #3: the batch whose OWN request threw (batch 2
+// here) is `unknown`, not `not-attempted` -- the client cannot tell
+// whether that POST reached the registry before the transport fault hit
+// (a timeout or reset after transmit is indistinguishable, from here, from
+// one before transmit). Only STRICTLY LATER batches (batch 3), which this
+// sequential loop never even calls `fetch` for, are `not-attempted`.
+test('a mid-sequence transport failure reports batch 1 outcomes, marks the failing batch unknown and later batches not-attempted, exits non-zero, and its guidance says re-pushing is safe', async () => {
+  const total = PUSH_MAX_FLOWS * 2 + 20; // 3 batches: 50/50/20
+  const flows = manyFlows(total);
+  const { publicKey } = keyPair();
+  const { calls, fetch } = batchRecordingFetch((batchNumber) => {
+    if (batchNumber === 2) throw new Error('ECONNRESET');
+    if (batchNumber === 3) throw new Error('must not attempt batch 3 after batch 2 failed');
+    return undefined;
+  });
+
+  await assert.rejects(
+    registry(
+      { sub: 'push', json: false, yes: false },
+      {
+        interactive: true,
+        loadConfig: async () => configuredConfig(publicKey),
+        ...readyTierFixture(flows),
+        paths: { flowsDir: '/h/flows', flowsPendingDir: '/h/pending' },
+        print: () => {},
+        confirmPush: async () => true,
+        fetch,
+        env: { FAST_BROWSER_REGISTRY_TOKEN: 'tok' },
+      },
+    ),
+    (error) => {
+      // Exit non-zero (the `main` arm this client uses for a genuine
+      // transport failure, distinct from a --yes/assumeYes bypass path).
+      assert.equal(error.name, 'LifecycleError');
+      assert.notEqual(error.exitCode, 0);
+      // Guidance: re-pushing is safe because identical bytes dedupe, and
+      // (fix round 1, Important #3) the message counts all three groups
+      // separately -- confirmed pushed, unknown, and not attempted.
+      assert.match(error.message, /re-run/i);
+      assert.match(error.message, /safe/i);
+      assert.match(error.message, /dedupe/i);
+      assert.match(error.message, new RegExp(`${PUSH_MAX_FLOWS} flow\\(s\\) confirmed pushed`));
+      assert.match(error.message, new RegExp(`${PUSH_MAX_FLOWS} flow\\(s\\) unknown`));
+      assert.match(error.message, /unknown \(the failed request may have reached the registry\)/);
+      assert.match(error.message, /20 flow\(s\) not attempted/);
+      // Deferred minor #6: the failure's own message and the accounting
+      // sentence that follows it are properly separated (never run
+      // together like "...: ECONNRESET 0 flow(s)...").
+      assert.match(error.message, /ECONNRESET\. \d+ flow\(s\)/);
+
+      const { partialState } = error;
+      // Batch 1's outcomes are reported.
+      assert.equal(partialState.results.length, PUSH_MAX_FLOWS);
+      assert.deepEqual(
+        partialState.results.map((result) => result.name),
+        flows.slice(0, PUSH_MAX_FLOWS).map((flow) => flow.name),
+      );
+      // Batch 2 (the failing batch) is unknown, in order.
+      assert.equal(partialState.unknown.length, PUSH_MAX_FLOWS);
+      assert.deepEqual(
+        partialState.unknown.map((entry) => entry.name),
+        flows.slice(PUSH_MAX_FLOWS, PUSH_MAX_FLOWS * 2).map((flow) => flow.name),
+      );
+      assert.ok(partialState.unknown.every((entry) => entry.outcome === 'unknown'));
+      // Batch 3 is not-attempted, in order.
+      assert.equal(partialState.notAttempted.length, 20);
+      assert.deepEqual(
+        partialState.notAttempted.map((entry) => entry.name),
+        flows.slice(PUSH_MAX_FLOWS * 2).map((flow) => flow.name),
+      );
+      assert.ok(partialState.notAttempted.every((entry) => entry.outcome === 'not-attempted'));
+      assert.deepEqual(partialState.batches, { count: 3, size: PUSH_MAX_FLOWS });
+      return true;
+    },
+  );
+
+  // Batch 3 is never attempted -- only batches 1 and 2 were sent.
+  assert.equal(calls.length, 2);
+});
+
+// Fix round 1, Important #2: a failure that hits on the FIRST batch, before
+// any batch has returned real outcomes, must surface as the underlying
+// error UNCHANGED -- same stage, same message, same exitCode -- not
+// re-wrapped in batch-accounting language. A missing bearer token is the
+// canonical case: it is not a transport failure at all (no `fetch` call is
+// ever made -- `callRegistry` refuses before that), and it must still read
+// exactly as it did before chunking existed.
+test('a missing FAST_BROWSER_REGISTRY_TOKEN on push fails with the identical stage/message/exitCode as before chunking, never wrapped in batch language', async () => {
+  const flows = manyFlows(5);
+  const { publicKey } = keyPair();
+
+  await assert.rejects(
+    registry(
+      { sub: 'push', json: false, yes: false },
+      {
+        interactive: true,
+        loadConfig: async () => configuredConfig(publicKey),
+        ...readyTierFixture(flows),
+        paths: { flowsDir: '/h/flows', flowsPendingDir: '/h/pending' },
+        print: () => {},
+        confirmPush: async () => true,
+        fetch: async () => { throw new Error('must not fetch when the token is missing'); },
+        env: {}, // no FAST_BROWSER_REGISTRY_TOKEN
+      },
+    ),
+    (error) => {
+      assert.equal(error.name, 'LifecycleError');
+      assert.equal(error.stage, 'registry-auth');
+      assert.match(error.message, /FAST_BROWSER_REGISTRY_TOKEN/);
+      assert.equal(error.exitCode, 2);
+      // Never re-wrapped: no batch-accounting or dedupe/re-run language.
+      assert.doesNotMatch(error.message, /batch/i);
+      assert.doesNotMatch(error.message, /dedupe/i);
+      return true;
+    },
+  );
 });
 
 // --- pull ---
@@ -854,6 +1147,52 @@ test('pull refuses to merge two drag steps with the same source but a different 
 
   assert.equal(writeCalled, false);
   assert.deepEqual(report.results, [{ name: 'place-order', outcome: 'skipped', reason: 'anchor-conflict' }]);
+});
+
+// MAT-160 Task 4 (determinism sweep): both-null anchor tightening,
+// consumer pin. Two flows whose only difference is a locator-less,
+// role/name-less step (no locators AT ALL, not merely a matching-but-empty
+// role/name) share the collapsed (op, '', '', '') stepSignature tuple but
+// must NOT merge -- before this fix, `targetsAreAnchored`'s primary-locator
+// fallback collapsed to `null === null`, trivially anchoring two targets
+// with zero identifying information. Same shared function
+// (registry/lib/signature-fields.mjs's `flowsAreAnchored`) the server's
+// own ingest() consumer pin (registry/tests/ingest.test.mjs) exercises.
+test('pull refuses to merge two flows whose only difference is a locator-less, role/name-less step (both-null anchor tightening)', async () => {
+  const pinned = keyPair();
+  const locatorLessClickStep = () => ({ op: 'click', target: { locators: [] } });
+  const local = validFlow({
+    name: 'place-order',
+    steps: [{ op: 'goto', url: '/checkout/{plan}' }, locatorLessClickStep()],
+  });
+  const incoming = validFlow({
+    name: 'place-order',
+    steps: [{ op: 'goto', url: '/checkout/{plan}' }, locatorLessClickStep()],
+  });
+  assert.equal(stepSignatureOf(local), stepSignatureOf(incoming));
+
+  const envelope = signedEnvelope(incoming, pinned.privateKey);
+  let writeCalled = false;
+
+  const report = await registry(
+    { sub: 'pull', json: false, origin: null },
+    {
+      loadConfig: async () => configuredConfig(pinned.publicKey),
+      fetch: async () => jsonResponse(200, { flows: [envelope] }),
+      listFlowFiles: async () => ['place-order.flow.json'],
+      readFlowFile: async () => JSON.stringify(local),
+      writeFlowFile: async () => { writeCalled = true; },
+      paths: { flowsDir: '/h/flows', flowsPendingDir: '/h/pending' },
+      env: { FAST_BROWSER_REGISTRY_TOKEN: 'tok' },
+    },
+  );
+
+  assert.equal(writeCalled, false);
+  assert.equal(report.ok, true);
+  assert.deepEqual(report.results, [{ name: 'place-order', outcome: 'skipped', reason: 'anchor-conflict' }]);
+  assert.equal(report.warnings.length, 1);
+  assert.ok(report.warnings[0].reason.includes(local.id));
+  assert.ok(report.warnings[0].reason.includes(incoming.id));
 });
 
 // The positive counterpart to the two anchor-conflict tests above: a

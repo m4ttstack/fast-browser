@@ -547,3 +547,92 @@ test('registry pull and search accept --origin', () => {
     () => parseArgs(['registry', 'search', '--intent', 'x', '--origin', 'https://example.com']),
   );
 });
+
+// --- registry subcommand flag strictness (MAT-160) ---
+//
+// `--origin`, `--intent`, `--yes`, and `--json` are all registered at the
+// COMMAND level for `registry` (shared with other command families), so
+// without subcommand-level scoping every one of the inert-flag cases below
+// would parse clean and silently do nothing with the value. Each rejection
+// must name both the flag and the subcommand, per this file's existing
+// UsageError convention (see `requireCommand`'s own message shape).
+
+test('registry push rejects --origin, naming the flag and the subcommand', () => {
+  assert.throws(
+    () => parseArgs(['registry', 'push', '--origin', 'https://example.com']),
+    (error) => error instanceof UsageError && /--origin/.test(error.message) && /push/.test(error.message),
+  );
+});
+
+test('registry status rejects --yes, naming the flag and the subcommand', () => {
+  assert.throws(
+    () => parseArgs(['registry', 'status', '--yes']),
+    (error) => error instanceof UsageError && /--yes/.test(error.message) && /status/.test(error.message),
+  );
+});
+
+test('registry pull rejects --intent, naming the flag and the subcommand', () => {
+  assert.throws(
+    () => parseArgs(['registry', 'pull', '--intent', 'log in']),
+    (error) => error instanceof UsageError && /--intent/.test(error.message) && /pull/.test(error.message),
+  );
+});
+
+test('registry search rejects --yes, naming the flag and the subcommand', () => {
+  assert.throws(
+    () => parseArgs(['registry', 'search', '--intent', 'x', '--yes']),
+    (error) => error instanceof UsageError && /--yes/.test(error.message) && /search/.test(error.message),
+  );
+});
+
+test('registry init rejects --json outright at parse time, before the runtime TTY gate is ever reached', () => {
+  assert.throws(
+    () => parseArgs(['registry', 'init', 'https://registry.example.com', '--json']),
+    (error) => error instanceof UsageError && /--json/.test(error.message) && /init/.test(error.message),
+  );
+});
+
+test('registry subcommand flag strictness still allows each subcommand its own accepted flags', () => {
+  assert.doesNotThrow(() => parseArgs(['registry', 'push', '--yes']));
+  assert.doesNotThrow(() => parseArgs(['registry', 'push', '--json']));
+  assert.doesNotThrow(() => parseArgs(['registry', 'pull', '--origin', 'https://example.com', '--json']));
+  assert.doesNotThrow(() => parseArgs(['registry', 'search', '--intent', 'x', '--origin', 'https://example.com', '--json']));
+  assert.doesNotThrow(() => parseArgs(['registry', 'status', '--json']));
+  assert.equal(parseArgs(['registry', 'pull', '--json']).json, true);
+  assert.equal(parseArgs(['registry', 'status', '--json']).json, true);
+});
+
+// Fix round 1, Important #1: `request.sub` is only resolved once its own
+// positional token has been consumed, so a flag legitimately accepted by a
+// subcommand must parse identically whether it appears BEFORE or AFTER
+// that subcommand's positional -- validation is deferred to the end of the
+// whole parse specifically so position can never matter.
+test('a flag valid for its subcommand parses identically whether placed before or after the subcommand positional', () => {
+  const prefixStatus = parseArgs(['registry', '--json', 'status']);
+  const postfixStatus = parseArgs(['registry', 'status', '--json']);
+  assert.equal(prefixStatus.sub, 'status');
+  assert.equal(prefixStatus.json, true);
+  assert.deepEqual(prefixStatus, postfixStatus);
+
+  const prefixPush = parseArgs(['registry', '--yes', 'push']);
+  const postfixPush = parseArgs(['registry', 'push', '--yes']);
+  assert.equal(prefixPush.sub, 'push');
+  assert.equal(prefixPush.yes, true);
+  assert.deepEqual(prefixPush, postfixPush);
+});
+
+// Fix round 1, Important #1 (the negative counterpart): a flag placed
+// BEFORE the subcommand positional that the eventually-resolved subcommand
+// still does not accept must still be rejected, naming that real
+// subcommand -- not silently accepted just because `request.sub` was not
+// yet set when the flag token was read.
+test('an invalid flag placed before the subcommand positional is still rejected, naming the real subcommand', () => {
+  assert.throws(
+    () => parseArgs(['registry', '--origin', 'https://example.com', 'push']),
+    (error) => error instanceof UsageError && /--origin/.test(error.message) && /push/.test(error.message),
+  );
+  assert.throws(
+    () => parseArgs(['registry', '--json', 'init', 'https://registry.example.com']),
+    (error) => error instanceof UsageError && /--json/.test(error.message) && /init/.test(error.message),
+  );
+});

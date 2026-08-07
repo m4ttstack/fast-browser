@@ -253,6 +253,59 @@ export function registerStoreSuite(label, createFreshStore, { skip = false } = {
     assert.equal(Math.round(result.results[0].score * 1000) / 1000, 1);
   });
 
+  // MAT-160 Task 4 (determinism sweep): score DESC, name ASC is still not
+  // a total order -- two records can legitimately share BOTH the exact
+  // same score AND the exact same name (e.g. the same flow name pushed
+  // from two different origins). id ASC is the final tie-break, added
+  // identically to both stores' search() -- this FORCES the tie (same
+  // name, same cosine-1.0 embedding) rather than relying on a coincidence,
+  // and inserts in the REVERSE of id-ascending order so a passing result
+  // cannot be mistaken for "insertion order happened to match" luck (same
+  // discipline as the `list ties` test above).
+  test(`${label}: search: semantic mode score+name ties are broken deterministically by id ascending`, { skip }, async () => {
+    const store = await createFreshStore();
+    const tiedName = 'tied-flow-name';
+    const records = ['sem-tie-b', 'sem-tie-a'].map((idSeed) => makeRecord({
+      idSeed,
+      flowOverrides: { name: tiedName, origin: `http://${idSeed}.example` },
+      embedding: unitEmbedding(0),
+    }));
+    const expectedIds = records.map((record) => record.id).slice().sort((a, b) => a.localeCompare(b));
+    const insertOrder = records.slice().sort((a, b) => b.id.localeCompare(a.id));
+    for (const record of insertOrder) {
+      await store.putCanonical(record);
+    }
+
+    const result = await store.search({ embedding: unitEmbedding(0), intentText: tiedName });
+    assert.equal(result.mode, 'semantic');
+    assert.equal(result.results.length, 2);
+    assert.ok(result.results[0].score === result.results[1].score, 'the fixture must actually force a real score tie');
+    assert.deepEqual(result.results.map((r) => r.record.id), expectedIds);
+  });
+
+  // Same forced tie, lexical mode -- proves the id tie-break independently
+  // of the semantic branch's SQL ORDER BY (pg-store.mjs) vs. the lexical
+  // branch's own JS sort (both stores), which are two separate code paths.
+  test(`${label}: search: lexical mode score+name ties are broken deterministically by id ascending`, { skip }, async () => {
+    const store = await createFreshStore();
+    const tiedName = 'checkout-flow';
+    const records = ['lex-tie-b', 'lex-tie-a'].map((idSeed) => makeRecord({
+      idSeed,
+      flowOverrides: { name: tiedName, description: 'checkout order flow', origin: `http://${idSeed}.example` },
+    }));
+    const expectedIds = records.map((record) => record.id).slice().sort((a, b) => a.localeCompare(b));
+    const insertOrder = records.slice().sort((a, b) => b.id.localeCompare(a.id));
+    for (const record of insertOrder) {
+      await store.putCanonical(record);
+    }
+
+    const result = await store.search({ intentText: 'checkout order flow' });
+    assert.equal(result.mode, 'lexical');
+    assert.equal(result.results.length, 2);
+    assert.ok(result.results[0].score === result.results[1].score, 'the fixture must actually force a real score tie');
+    assert.deepEqual(result.results.map((r) => r.record.id), expectedIds);
+  });
+
   test(`${label}: search: semantic mode skips records with no stored embedding`, { skip }, async () => {
     const store = await createFreshStore();
     const embedded = makeRecord({ idSeed: 'embedded', flowOverrides: { name: 'flow-embedded' }, embedding: unitEmbedding(0) });
@@ -390,6 +443,58 @@ export function registerStoreSuite(label, createFreshStore, { skip = false } = {
   // promises init() is idempotent and safe to call repeatedly -- pg-store's
   // init() runs migrations (never a destructive reset), and every store
   // implementation must honor that same contract.
+  // MAT-160 Task 2 (registry maintenance script): updateSignature is a
+  // targeted write of exactly the signature field -- every other field,
+  // including updatedAt, must be untouched. This is the property the
+  // key-rotation re-sign pass depends on (registry/scripts/maintain.mjs):
+  // re-signing every canonical after a rotation must never look like "every
+  // canonical changed" to GET /v1/pull?since=.
+  test(`${label}: updateSignature writes only signature, leaving every other field (including updatedAt) untouched`, { skip }, async () => {
+    const store = await createFreshStore();
+    const record = makeRecord({ idSeed: 'update-signature', signature: 'original-signature' });
+    await store.putCanonical(record);
+
+    const updated = await store.updateSignature(record.id, 'rotated-signature');
+    assert.equal(updated.signature, 'rotated-signature');
+    assert.equal(updated.updatedAt, record.updatedAt);
+    assert.equal(updated.contentHash, record.contentHash);
+    assert.deepEqual(updated.content, record.content);
+
+    const fetched = await store.get(record.id);
+    assert.equal(fetched.signature, 'rotated-signature');
+    assert.equal(fetched.updatedAt, record.updatedAt);
+  });
+
+  test(`${label}: updateSignature returns null for an unknown id`, { skip }, async () => {
+    const store = await createFreshStore();
+    assert.equal(await store.updateSignature('f'.repeat(64), 'sig'), null);
+  });
+
+  // Same targeted-write contract as updateSignature, for the embedding
+  // backfill pass.
+  test(`${label}: updateEmbedding writes only embedding, leaving every other field (including updatedAt) untouched`, { skip }, async () => {
+    const store = await createFreshStore();
+    const record = makeRecord({ idSeed: 'update-embedding' });
+    await store.putCanonical(record);
+    assert.equal(record.embedding, null);
+
+    const embedding = unitEmbedding(0);
+    const updated = await store.updateEmbedding(record.id, embedding);
+    assert.ok(updated.embedding);
+    assert.equal(updated.embedding.length, 1024);
+    assert.equal(updated.updatedAt, record.updatedAt);
+    assert.equal(updated.signature, record.signature);
+
+    const fetched = await store.get(record.id);
+    assert.ok(fetched.embedding);
+    assert.equal(fetched.updatedAt, record.updatedAt);
+  });
+
+  test(`${label}: updateEmbedding returns null for an unknown id`, { skip }, async () => {
+    const store = await createFreshStore();
+    assert.equal(await store.updateEmbedding('f'.repeat(64), unitEmbedding(0)), null);
+  });
+
   test(`${label}: init() is idempotent: calling it again does not wipe existing records`, { skip }, async () => {
     const store = await createFreshStore();
     const record = makeRecord({ idSeed: 'survives-reinit' });

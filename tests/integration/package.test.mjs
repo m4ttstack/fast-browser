@@ -55,14 +55,21 @@ const requiredEntries = [
   'package/lib/sites/inventory.mjs',
   'package/lib/sites/patterns.mjs',
   'package/lib/sites/store.mjs',
-  // WS4b Task 7: lib/commands/registry.mjs imports these three
-  // registry/lib modules directly (each is dependency-free -- see their
-  // own doc comments -- so importing them keeps the plugin's own
+  // WS4b Task 7: lib/commands/registry.mjs imports these registry/lib
+  // modules directly (each is dependency-free -- see their own doc
+  // comments -- so importing them keeps the plugin's own
   // `dependencies: {}` pin intact). The REST of registry/ (server.mjs,
   // store.mjs, pg-store.mjs, ...) is deliberately never packaged here --
   // it's a separate Railway-deployed service, not part of the installed
-  // plugin -- so only these three files are listed in package.json's
-  // `files`, not a blanket `registry/lib/`.
+  // plugin -- so only these files are listed in package.json's `files`,
+  // not a blanket `registry/lib/`.
+  // MAT-160: registry/lib/constants.mjs joined this set when
+  // PUSH_MAX_FLOWS moved there -- the client's own push-chunking logic
+  // needs the identical, single-source-of-truth number the service
+  // enforces, and constants.mjs (pure, no imports of its own) is safe to
+  // pull across the plugin/service boundary the same way the other three
+  // already are.
+  'package/registry/lib/constants.mjs',
   'package/registry/lib/pii-lint.mjs',
   'package/registry/lib/signature-fields.mjs',
   'package/registry/lib/signing.mjs',

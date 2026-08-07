@@ -10,7 +10,7 @@ import { parseFlow, serializeFlow } from '../../lib/flows/artifact.mjs';
 import { BODY_LIMIT_BYTES, PUSH_MAX_FLOWS } from '../lib/http.mjs';
 import { verify } from '../lib/signing.mjs';
 import { baseFlow } from './helpers/fixtures.mjs';
-import { generateSigningKeyPem, startTestServer, TEST_TOKEN } from './helpers/server.mjs';
+import { generateSigningKeyPem, startTestServer } from './helpers/server.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REGISTRY_ROOT = path.dirname(HERE);
@@ -1005,6 +1005,54 @@ test('GET /v1/search without an intent query param is rejected 422; an empty int
 
     const empty = await fetch(`${baseUrl}/v1/search?intent=`, { headers: { Authorization: `Bearer ${token}` } });
     assert.equal(empty.status, 422);
+  } finally {
+    await close();
+  }
+});
+
+// MAT-160 Task 4 (determinism sweep): a whitespace-only intent (spaces,
+// tabs, newlines -- no real query content) gets the SAME 422 an empty
+// intent gets, not a 200 with a degenerate/effectively-blank search.
+test('GET /v1/search with a whitespace-only intent is rejected 422 like an empty intent', async () => {
+  const { close, baseUrl, token } = await startTestServer();
+  try {
+    const spaces = await fetch(`${baseUrl}/v1/search?intent=${encodeURIComponent('   ')}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    assert.equal(spaces.status, 422);
+    assert.equal((await spaces.json()).error.code, 'invalid_search_request');
+
+    const tabsAndNewlines = await fetch(`${baseUrl}/v1/search?intent=${encodeURIComponent('\t\n \t')}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    assert.equal(tabsAndNewlines.status, 422);
+  } finally {
+    await close();
+  }
+});
+
+// MAT-160 Task 4: the trimmed value, not the raw one, is what actually
+// gets embedded and searched -- proven through the real HTTP layer with a
+// recording embedder stub, so a future regression that trims only for the
+// required-check (and still embeds/searches the untrimmed text) fails
+// this test even though the 422 tests above would keep passing.
+test('GET /v1/search with leading/trailing whitespace around a real intent embeds and searches the TRIMMED text', async () => {
+  const seenTexts = [];
+  const queryVector = [0, 1];
+  const stubEmbedder = async (text) => {
+    seenTexts.push(text);
+    return Float64Array.from(queryVector);
+  };
+  const { close, baseUrl, token } = await startTestServer({}, { embedder: stubEmbedder });
+  try {
+    const response = await fetch(`${baseUrl}/v1/search?intent=${encodeURIComponent('  place an order  ')}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    assert.equal(response.status, 200);
+    assert.equal(await response.json().then((p) => p.mode), 'semantic');
+
+    assert.equal(seenTexts.length, 1);
+    assert.equal(seenTexts[0], 'place an order', 'the embedder must see the TRIMMED intent, never the raw whitespace-padded one');
   } finally {
     await close();
   }

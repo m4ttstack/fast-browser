@@ -272,6 +272,33 @@ export function createPgStore(options = {}) {
       return rows[0] ? rowToRecord(rows[0]) : null;
     },
 
+    // MAT-160 Task 2 (registry maintenance script): a targeted UPDATE of
+    // exactly the `signature` column -- deliberately NOT routed through
+    // putCanonical's wholesale upsert (which sets every column, including
+    // updated_at from the caller-supplied record). A key-rotation re-sign
+    // pass must refresh every canonical's signature without bumping
+    // updated_at, since GET /v1/pull?since= exists on the wire and a
+    // rotation-wide updated_at bump would make every client re-pull the
+    // entire registry for a rotation that changed no content. See
+    // registry/lib/store.mjs's interface doc for the full rationale.
+    async updateSignature(id, signature) {
+      const { rows } = await pool.query(
+        'UPDATE canonical_flows SET signature = $1 WHERE id = $2 RETURNING *',
+        [signature, id],
+      );
+      return rows[0] ? rowToRecord(rows[0]) : null;
+    },
+
+    // Same targeted-write, no-updated_at-bump reasoning as updateSignature
+    // above, for the embedding backfill pass.
+    async updateEmbedding(id, embedding) {
+      const { rows } = await pool.query(
+        'UPDATE canonical_flows SET embedding = $1::vector WHERE id = $2 RETURNING *',
+        [embeddingLiteral(embedding), id],
+      );
+      return rows[0] ? rowToRecord(rows[0]) : null;
+    },
+
     async list({ since, origin } = {}) {
       const conditions = [];
       const params = [];
@@ -330,11 +357,19 @@ export function createPgStore(options = {}) {
           params.push(origin);
           conditions.push(`origin = $${params.length}`);
         }
+        // MAT-160 Task 4 (determinism sweep): `name ASC` alone is still
+        // not a total order -- two rows can share both the exact same
+        // cosine distance AND the exact same name (a shared flow name
+        // pushed from two different origins). `id ASC` is the final
+        // tie-break, matching memory-store.mjs's identical addition (both
+        // stores must agree on tie-break order, not just each
+        // independently be deterministic) and the same discipline
+        // list()'s own updated_at/id tie-break already uses above.
         const { rows } = await pool.query(
           `SELECT *, 1 - (embedding <=> $1::vector) AS score
            FROM canonical_flows
            WHERE ${conditions.join(' AND ')}
-           ORDER BY embedding <=> $1::vector ASC, name ASC
+           ORDER BY embedding <=> $1::vector ASC, name ASC, id ASC
            LIMIT ${TOP_RESULTS}`,
           params,
         );
@@ -372,7 +407,12 @@ export function createPgStore(options = {}) {
         .map(rowToRecord)
         .map((record) => ({ record, score: lexicalScore(record, queryTerms) }))
         .filter(({ score }) => score > 0);
-      scored.sort((a, b) => b.score - a.score || a.record.name.localeCompare(b.record.name));
+      // MAT-160 Task 4 (determinism sweep): same id ASC final tie-break as
+      // the semantic branch above and memory-store.mjs's identical
+      // addition -- score+name alone can still tie.
+      scored.sort((a, b) => b.score - a.score
+        || a.record.name.localeCompare(b.record.name)
+        || a.record.id.localeCompare(b.record.id));
       return { mode: 'lexical', results: scored.slice(0, TOP_RESULTS) };
     },
 

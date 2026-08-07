@@ -696,3 +696,94 @@ test('a key-shaped string in a nested js-step arg value rejects at its exact pat
     (reason) => reason.rule === 'secret-pattern' && reason.path === 'steps[3].args.config.apiKey',
   ));
 });
+
+// --- MAT-160: provenance is a tamper channel too (traceDir/compiledAt/
+// productVersion/lastHealed are all plain strings that travel inside the
+// signed artifact), so pass 2's secret scan covers them -- pass 1's
+// literal-survived check does NOT, since provenance is compile-generated
+// metadata, never step/value-bearing content. See pii-lint.mjs's top
+// comment and `collectFields` comment for the full rationale.
+
+test('an email in provenance.traceDir rejects with rule "email" at path "provenance.traceDir"', () => {
+  const flow = parseFlow(baseFlow({
+    provenance: {
+      compiledAt: '2026-08-05T00:00:00.000Z',
+      traceDir: 'trace-jane.doe@example.com',
+      seqRange: [3, 9],
+      productVersion: '0.1.0-alpha.10',
+      successRuns: 0,
+      failStreak: 0,
+      lastHealed: null,
+    },
+  }));
+  const result = lintArtifact(flow);
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.reasons, [{ path: 'provenance.traceDir', rule: 'email' }]);
+});
+
+test('a key-shaped string in provenance.productVersion rejects with rule "secret-pattern" at path "provenance.productVersion"', () => {
+  const flow = parseFlow(baseFlow({
+    provenance: {
+      compiledAt: '2026-08-05T00:00:00.000Z',
+      traceDir: 'trace-1754350000000',
+      seqRange: [3, 9],
+      productVersion: 'sk-AbCdEfGh12345678ijklMNOP',
+      successRuns: 0,
+      failStreak: 0,
+      lastHealed: null,
+    },
+  }));
+  const result = lintArtifact(flow);
+  assert.equal(result.ok, false);
+  // Same as the plain 'secret-pattern' test above: a real key-shaped value
+  // is also long/mixed-alphabet/letter+digit, so it legitimately trips
+  // 'entropy' too -- this only pins that 'secret-pattern' is among the
+  // reasons, at provenance's own path.
+  assert.ok(result.reasons.some(
+    (reason) => reason.rule === 'secret-pattern' && reason.path === 'provenance.productVersion',
+  ));
+});
+
+test('a normal basename traceDir and a real version string in provenance both pass', () => {
+  const flow = parseFlow(baseFlow({
+    provenance: {
+      compiledAt: '2026-08-05T00:00:00.000Z',
+      traceDir: 'trace-1754350000000',
+      seqRange: [3, 9],
+      productVersion: '0.1.0-alpha.10',
+      successRuns: 3,
+      failStreak: 0,
+      lastHealed: '2026-08-04T12:00:00.000Z',
+    },
+  }));
+  const result = lintArtifact(flow);
+  assert.deepEqual(result, { ok: true, reasons: [] });
+});
+
+test('an absolute-path traceDir carrying a username segment passes clean -- OUT OF SCOPE for the secret scan on purpose', () => {
+  // A path segment like "someone" alone is not email-shaped, not
+  // key-shaped, and (at 7 chars) far short of the entropy floor -- the
+  // scan's four rules genuinely have nothing to catch here. This is a
+  // known, accepted gap: the decision behind MAT-160 was secret-scan
+  // COVERAGE over provenance's existing rules, not a new path-shape rule.
+  // The structural defense against this is upstream, not in this lint --
+  // compile.mjs's compileSession always writes traceDir as a bare trace
+  // folder BASENAME (see the repo's real fixtures, e.g.
+  // "trace-1754350000000"), never an absolute path, so this shape should
+  // never occur in a legitimately compiled artifact; it would only appear
+  // via direct tampering with a compiled flow file, which pass 1 style
+  // guards exist for elsewhere, not here.
+  const flow = parseFlow(baseFlow({
+    provenance: {
+      compiledAt: '2026-08-05T00:00:00.000Z',
+      traceDir: '/Users/someone/traces/trace-123',
+      seqRange: [3, 9],
+      productVersion: '0.1.0-alpha.10',
+      successRuns: 0,
+      failStreak: 0,
+      lastHealed: null,
+    },
+  }));
+  const result = lintArtifact(flow);
+  assert.deepEqual(result, { ok: true, reasons: [] });
+});
