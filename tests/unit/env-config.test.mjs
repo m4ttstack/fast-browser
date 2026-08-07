@@ -67,6 +67,62 @@ test('FAST_BROWSER_DEBUG_CAPTURE turns traces and sessions on together', async (
   assert.equal(config.sessions.enabled, true);
 });
 
+test('FAST_BROWSER_DEBUG_CAPTURE is recognized regardless of case or spelling', async () => {
+  for (const value of ['1', 'true', 'TRUE', 'True', 'yes', 'YES', ' true ']) {
+    const config = await cloudConfig({ ...MINIMAL, FAST_BROWSER_DEBUG_CAPTURE: value }, fakeFs());
+    assert.equal(config.debugCapture, true, `expected ${JSON.stringify(value)} to enable capture`);
+    assert.equal(config.trace, true);
+    assert.equal(config.sessions.enabled, true);
+  }
+
+  // Anything else stays off, which is the safe direction: a pod that records
+  // nothing beats a pod that writes customer data to disk unasked.
+  for (const value of ['0', 'false', 'no', '']) {
+    const config = await cloudConfig({ ...MINIMAL, FAST_BROWSER_DEBUG_CAPTURE: value }, fakeFs());
+    assert.equal(config.debugCapture, false, `expected ${JSON.stringify(value)} to leave capture off`);
+  }
+});
+
+test('a stale FAST_BROWSER_FLOWS_DIR exits 78 instead of being silently ignored', async () => {
+  // The variable was carried by an early draft and removed before
+  // implementation, so a manifest written against that draft would otherwise
+  // run with a flow set nobody chose, silently.
+  for (const value of ['/flows', '']) {
+    await assert.rejects(
+      () => cloudConfig({ ...MINIMAL, FAST_BROWSER_FLOWS_DIR: value }, fakeFs()),
+      (error) => {
+        assert.ok(error instanceof EnvContractError);
+        assert.equal(error.exitCode, 78);
+        assert.match(error.message, /FAST_BROWSER_FLOWS_DIR/);
+        // The message has to say where flows actually come from, or the
+        // operator just sets it somewhere else.
+        assert.match(error.message, /macros/);
+        return true;
+      },
+      `expected rejection for flows dir ${JSON.stringify(value)}`,
+    );
+  }
+});
+
+test('an empty FAST_BROWSER_SECRETS exits 78 rather than reading as no secrets', async () => {
+  // Presence is presence, exactly as for FAST_BROWSER_ENGINE. Treating it as
+  // absence is the dangerous reading: with no secrets file resolved, a login
+  // sequence fills the secret NAME into the password field literally.
+  await assert.rejects(
+    () => cloudConfig({ ...MINIMAL, FAST_BROWSER_SECRETS: '' }, fakeFs()),
+    (error) => {
+      assert.ok(error instanceof EnvContractError);
+      assert.equal(error.exitCode, 78);
+      assert.match(error.message, /FAST_BROWSER_SECRETS/);
+      return true;
+    },
+  );
+
+  // Unset still means no secrets, which is a legitimate configuration.
+  const config = await cloudConfig(MINIMAL, fakeFs());
+  assert.equal(config.secretsFile, null);
+});
+
 test('an unknown or empty engine value exits 78 rather than falling back to local', async () => {
   for (const engine of ['headless', '']) {
     await assert.rejects(
