@@ -1,7 +1,7 @@
 async (page, args) => {
   // Replay engine for a compiled flow artifact (WS2a flywheel plan, Task 8).
   // Interprets the wire format lib/flows/artifact.mjs defines and produces
-  // exactly one of the two contracts documented in
+  // exactly one of the three contracts documented in
   // skills/browser-macros/MACROS.md's `## flow-runner` entry. This file has
   // no imports and no Node host globals in scope -- only `page` and `args`
   // exist, same as every other built-in here -- so the artifact shape is
@@ -18,11 +18,31 @@ async (page, args) => {
   // returned `{ failedStep, ... }` reads as a success to anything scoring
   // replay health -- Task 9's sweep, in particular, counts `successRuns`
   // off the call completing at all, never off inspecting what it returned.
-  // Every failure path below therefore calls `fail(shape)`, which throws
-  // `new Error('FLOW_RUNNER_FAILURE: ' + JSON.stringify(shape))` -- the
-  // tool call itself fails, and a caller recovers the exact same `{
-  // failedStep, error, url, stepsCompleted, locatorFallbacks }` shape by
-  // parsing the JSON out of the error message after that fixed prefix.
+  // Every failure path below therefore calls `fail(shape)`, which throws one
+  // of two prefixed errors depending on classification (SIDECAR_LOST fix
+  // round: see `SIDECAR_SIGNATURES` below). Ordinarily it throws
+  // `new Error('FLOW_RUNNER_FAILURE: ' + JSON.stringify(shape))` -- the tool
+  // call itself fails, and a caller recovers the exact same `{ failedStep,
+  // error, url, stepsCompleted, locatorFallbacks }` shape by parsing the
+  // JSON out of the error message after that fixed prefix. When
+  // `shape.error` instead carries a lost-cdp-connection signature, it throws
+  // `new Error('SIDECAR_LOST: ' + JSON.stringify({ ...shape, recovery }))`
+  // instead -- a distinct third contract for a distinct failure class: a
+  // reconnected or replaced browser has no page state left, so a caller
+  // that parsed FLOW_RUNNER_FAILURE's `stepsCompleted` and re-ran from there
+  // would be running against a blank browser. `recovery` makes the right
+  // instruction explicit rather than leaving it to the caller to infer --
+  // and that instruction is qualified, not one fixed string (fix round,
+  // review finding): a GENUINE disconnect carries the identical double-mutate
+  // risk a false-positive classification does whenever a mutating step
+  // already completed, because an unconditional "restart from navigation"
+  // is itself an instruction to re-run every step, mutating ones included.
+  // `hasCompletedMutatingStep` below checks `stepsCompleted` against the
+  // compiled flow's own per-step `mutating` flag (see rule 5's replay-loop
+  // comment above for what that flag guarantees) and `fail` picks between
+  // two fixed strings on that basis, so a caller reading `recovery` is told
+  // exactly what this file already knows about the run, not left to assume
+  // a bare restart is always safe.
   //
   // Every step below runs at most once. A step that throws is reported as
   // a structured failure immediately -- nothing here loops back to run the
@@ -70,7 +90,92 @@ async (page, args) => {
   const onFileChooser = (chooser) => { latestChooser = chooser; };
   page.on('filechooser', onFileChooser);
 
+  // A lost cdp connection is a different failure class from a step that did
+  // not work. A replaced or reconnected browser has no page state left, so
+  // repeating the call that failed would run against a blank browser and
+  // produce confidently wrong output. Callers get a distinct prefix and an
+  // explicit recovery instruction so that path is never taken.
+  //
+  // Verified against the fork this plugin pins (fix round 1, review finding
+  // 2): on connection loss the client sets `_closedError = new
+  // TargetClosedError(cause)` and every in-flight/subsequent call rejects
+  // with it; with no cause its message is exactly `Target page, context or
+  // browser has been closed`, prefixed by whichever API call was in flight
+  // (e.g. `locator.click: Target page, context or browser has been
+  // closed`). That unprefixed phrase is the signature that actually
+  // matters -- a literal `browserContext.newPage:` prefix is never the call
+  // in flight here, so pinning it exactly the way the original list did was
+  // inert. `Browser has been disconnected` is included too: the same real
+  // failure surfaces with that text from the extension relay side of the
+  // sidecar, not just from playwright-core's own TargetClosedError.
+  const SIDECAR_SIGNATURES = [
+    'Target closed',
+    'Target crashed',
+    'Target page, context or browser has been closed',
+    'Browser has been closed',
+    'Browser closed',
+    'Browser has been disconnected',
+    'WebSocket is not open',
+    'WebSocket error',
+    'Connection closed',
+  ];
+  // Anchored to the message's FIRST LINE only -- the identical discipline
+  // `INTERCEPTION_SIGNATURE` below already applies, and for the identical
+  // reason: `formatCallLog` (see the doc comment above `INTERCEPTION_SIGNATURE`)
+  // appends a `locator resolved to <previewNode>` line to EVERY channel
+  // error, and `previewNode` renders the target element's own attributes
+  // and text verbatim. A page authoring a button labelled "Reconnect
+  // WebSocket" or a link reading "Connection closed" would otherwise turn
+  // an ordinary selector timeout into a false SIDECAR_LOST -- and even with
+  // `recovery` qualified (see the header comment and `fail` below), a false
+  // positive over a flow with no completed mutating step still wrongly
+  // discards the caller's ordinary FLOW_RUNNER_FAILURE options in favor of
+  // an unconditional restart, and one over a flow that DID already mutate
+  // something still needs the qualification to fire correctly rather than
+  // being masked by a misclassification. Anchoring to the first line only
+  // is what keeps this misclassification rare in the first place.
+  // Playwright's own thrown text is always the first line; nothing
+  // page-authored can appear before the first `\n`.
+  const isSidecarLost = (text) => {
+    const firstLine = text.split('\n', 1)[0];
+    return SIDECAR_SIGNATURES.some((signature) => firstLine.includes(signature));
+  };
+  // A completed step is "safe to have happened again" only when it was
+  // never mutating: a step this walk never reached (index >= stepsCompleted)
+  // cannot have run at all, and every reached index below that is exactly
+  // one of the compiled flow's own steps -- `flow.steps[i].mutating` is set
+  // by `flows compile` (see artifact.mjs), not derived here, so this reads
+  // it rather than re-inferring it. Guarded against a malformed/absent
+  // `flow.steps` (the same shape this file's own top-of-try validation can
+  // reject) since a caller building a SIDECAR_LOST payload for an invalid
+  // flow must never throw a SECOND error out of failure-shape construction.
+  const hasCompletedMutatingStep = (stepsCompleted) => {
+    const flowSteps = flow && Array.isArray(flow.steps) ? flow.steps : [];
+    for (let i = 0; i < stepsCompleted && i < flowSteps.length; i += 1) {
+      if (flowSteps[i] && flowSteps[i].mutating === true) return true;
+    }
+    return false;
+  };
+
   const fail = (shape) => {
+    const text = typeof shape.error === 'string' ? shape.error : '';
+    if (isSidecarLost(text)) {
+      // Two fixed strings, chosen once per throw -- never assembled from
+      // caller-influenced text, so this stays exactly as auditable as the
+      // single fixed string it replaces. When no completed step was
+      // mutating, an unconditional restart is genuinely safe (rule 5's
+      // replay-loop comment above: every step ran at most once, so nothing
+      // downstream of `stepsCompleted` has mutated anything yet). When one
+      // was, telling the caller to restart anyway is the double-mutate this
+      // whole fix round exists to prevent, so the instruction shifts to
+      // verify-before-acting instead.
+      const recovery = hasCompletedMutatingStep(shape.stepsCompleted)
+        ? 'do not repeat this call; a completed step was mutating -- verify '
+          + 'its effect on the site before deciding whether to continue; '
+          + 'when in doubt, stop and report instead of re-running the flow'
+        : 'restart the flow from navigation; do not repeat this call';
+      throw new Error(`SIDECAR_LOST: ${JSON.stringify({ ...shape, recovery })}`);
+    }
     throw new Error(`FLOW_RUNNER_FAILURE: ${JSON.stringify(shape)}`);
   };
   const failArgs = (message) => fail({
@@ -176,12 +281,39 @@ async (page, args) => {
   // `locatorFallbacks` itself -- that stays the caller's job, since WS3a
   // Task 3's quirk walk below also calls this for a quirk's OWN target,
   // which must never be recorded as a step fallback.
+  //
+  // Fix round 1 (Task 7 e2e finding, controller-ruled): a plain ordinary
+  // miss (the target genuinely is not there yet) and a lost sidecar
+  // connection used to look identical here -- both just made `waitFor`
+  // reject, and the old bare `catch { continue; }` discarded the rejection
+  // reason either way, so every caller downstream (`resolveTarget`,
+  // `resolveEscalated`) could only ever report the fixed literal `'no
+  // locator candidate matched'`, and a genuine disconnect during RESOLUTION
+  // was structurally incapable of ever producing `SIDECAR_LOST` -- it read
+  // as an ordinary miss, complete with the candidate-enrichment scan
+  // (below) scraping a page that no longer has a browser behind it. Now the
+  // rejection reason is inspected with the SAME `isSidecarLost` predicate
+  // this file already uses for an ACT-phase failure (declared once, above,
+  // for both uses) before being discarded: a genuine sidecar-loss signature
+  // is re-thrown immediately -- stopping this candidate walk rather than
+  // moving on to probe a browser that is not going to answer -- and
+  // propagates unmodified through `resolveTarget`/`resolveEscalated` (which
+  // add no catch of their own around this call) into the step's own catch
+  // below, so it reaches `fail()` with the real Playwright/relay text still
+  // attached and classifies exactly as an ACT-phase loss already does. Any
+  // OTHER rejection (the ordinary "not there yet" case) is still discarded
+  // and this candidate is still skipped in favor of the next one, so the
+  // byte-identical `'no locator candidate matched'` contract -- enrichment
+  // included -- is unchanged for every failure that is not a real sidecar
+  // loss.
   const probeCandidates = async (target, deduped, timeout, probe) => {
     for (const candidateEntry of deduped) {
       const located = candidateLocator(target, candidateEntry.candidate);
       try {
         await located.waitFor({ timeout, ...probe });
-      } catch {
+      } catch (error) {
+        const text = String(error && error.message ? error.message : error);
+        if (isSidecarLost(text)) throw error;
         continue;
       }
       return { located, candidateEntry };
@@ -197,6 +329,12 @@ async (page, args) => {
   // candidate index won -- needing the slower timeout at all is the
   // fallback being recorded. Throws the same rung-2 miss message on a
   // miss that `resolveTarget` always has.
+  //
+  // No separate sidecar-loss handling needed here (fix round 1): this
+  // function adds no catch of its own around the `probeCandidates` call
+  // below, so a re-thrown sidecar-loss error already passes straight
+  // through unmodified -- only a genuine `null` (every candidate an
+  // ordinary miss) reaches the `'no locator candidate matched'` throw.
   const resolveEscalated = async (target, stepIndex, timeout, probe, part) => {
     const deduped = dedupeLocators(target);
     if (deduped.length === 0) {

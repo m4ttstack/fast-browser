@@ -28,6 +28,8 @@ test('rendered agent encodes the complete delegated browser-driving contract', (
   assert.match(rendered, /fails twice/i);
   assert.match(rendered, /real Chrome/i);
   assert.match(rendered, /Never log in on the user's behalf/i);
+  assert.match(rendered, /SIDECAR_LOST error instead, do not fall through to affordances or macros/i);
+  assert.match(rendered, /restart the flow from its first navigation step/i);
   assert.match(rendered, /at most one sentence of caveat/i);
 });
 

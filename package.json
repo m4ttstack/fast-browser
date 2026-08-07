@@ -51,7 +51,8 @@
     "test:simultaneous": "node --test tests/e2e/simultaneous.test.mjs",
     "test:annotate": "node --test tests/e2e/annotate.test.mjs",
     "test:affordances": "node --test tests/e2e/affordances.test.mjs",
-    "test:video": "node --test tests/e2e/video.test.mjs"
+    "test:video": "node --test tests/e2e/video.test.mjs",
+    "test:cdp": "node --test tests/e2e/cdp-engine.test.mjs"
   },
   "dependencies": {},
   "devDependencies": {

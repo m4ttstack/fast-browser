@@ -184,3 +184,35 @@ export async function startMcpClient({ outputDir, releaseDir, extraArgs = [] } =
     close: () => client.close(),
   };
 }
+
+// Sibling of startMcpClient that drives bin/fast-browser-mcp.mjs through the
+// environment rather than spawning the runtime CLI with flags. This is the
+// only way to exercise the env contract (lib/core/env-config.mjs) and the
+// single fork point (lib/runtime/entry.mjs) the way a baked MCP config in a
+// sandbox pod does: startMcpClient below skips both entirely by launching
+// runtimeCliFor's cli.cjs directly with a fixed, always-local flag list.
+export async function startEntrypointClient({ outputDir, env }) {
+  if (!outputDir) throw new Error('outputDir is required');
+  const entrypoint = fileURLToPath(new URL('../../../bin/fast-browser-mcp.mjs', import.meta.url));
+  const client = new Client(
+    { name: 'fast-browser-cdp-engine', version: '1.0.0' },
+    { capabilities: { roots: {} } },
+  );
+  client.setRequestHandler(ListRootsRequestSchema, async () => ({
+    roots: [{ uri: pathToFileURL(outputDir).href, name: 'fast-browser-e2e-output' }],
+  }));
+  const transport = new StdioClientTransport({
+    command: process.execPath,
+    args: [entrypoint],
+    cwd: outputDir,
+    env,
+    stderr: 'pipe',
+  });
+  transport.stderr?.resume();
+  await client.connect(transport);
+
+  return {
+    callTool: async (name, args) => textResult(await client.callTool({ name, arguments: args })),
+    close: () => client.close(),
+  };
+}

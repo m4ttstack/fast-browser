@@ -301,6 +301,35 @@ test('builds exact safe and full runtime argument snapshots', () => {
   ]);
 });
 
+// The cloud path keeps `profile: 'safe'` even when FAST_BROWSER_DEBUG_CAPTURE
+// asks for session recording (cloudConfig sets `sessions.enabled` instead of
+// flipping the profile), so --save-session must gate on either signal, not
+// profile alone.
+test('runtimeArgs emits --save-session on sessions.enabled alone, off the full profile', () => {
+  const paths = launcherPaths('/synthetic-home');
+  const lock = fixtureLock();
+
+  const debugCaptureOn = {
+    profile: 'safe',
+    connection: { mode: 'manual' },
+    sessions: { enabled: true },
+  };
+  assert.ok(
+    runtimeArgs({ config: debugCaptureOn, paths, lock }).includes('--save-session'),
+    'sessions.enabled must turn on --save-session even under the safe profile',
+  );
+
+  const debugCaptureOff = {
+    profile: 'safe',
+    connection: { mode: 'manual' },
+    sessions: { enabled: false },
+  };
+  assert.ok(
+    !runtimeArgs({ config: debugCaptureOff, paths, lock }).includes('--save-session'),
+    'neither signal set must never emit --save-session',
+  );
+});
+
 // Trace is orthogonal to the profile, same as video below: it rides on
 // either arg set, and disabling it removes exactly the one flag.
 test('runtimeArgs omits --save-trace exactly when config.trace is false', () => {

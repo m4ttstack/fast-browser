@@ -23,6 +23,9 @@ Never run a candidate with `runnable: false`. Its `reasons` say why:
 run that command; `contains js step: not replayable in v1` means the flow
 needs re-recording. Do not attempt either yourself.
 
+A failed `flow-runner` call errors with one of two distinct prefixes; check
+which one fired before deciding what to do next.
+
 If the call errors with a message starting `FLOW_RUNNER_FAILURE: `, parse
 the JSON payload after that prefix (`failedStep`, `error`, `url`,
 `stepsCompleted`, `locatorFallbacks`, and on a locator-miss failure,
@@ -32,6 +35,11 @@ hand-edit the flow artifact to fix a failure: the next `flows compile`
 sweep reads this same evidence and heals the artifact automatically when
 it is unambiguous. If the flow keeps failing, it quarantines on its own;
 re-record it instead.
+
+If the call errors with a message starting `SIDECAR_LOST: ` instead, do not
+treat it like the case above: it is not a step failure and does not fall
+through to macros. See "When a tool call fails with SIDECAR_LOST" below
+before doing anything else.
 
 ## Scripts vs. discrete steps
 
@@ -140,4 +148,63 @@ ask the user to complete it in the real Chrome window, then continue.
 | Predictable multi-step flow | Batch it |
 | Known text or region | Read it narrowly |
 | Same step failed twice | Change to single-step recovery |
+| `SIDECAR_LOST` from flow-runner | Follow its `recovery` field; never repeat the call |
 | Task complete | Return only the distilled result |
+
+## When a tool call fails with SIDECAR_LOST
+
+`SIDECAR_LOST` means the browser connection dropped mid-flow. It is not an
+ordinary step failure.
+
+Do not repeat the call that failed. The browser has no page state left, so
+repeating it produces output that looks successful and is wrong.
+
+Whether it is then safe to resume from the start depends on whether a
+completed step already mutated something -- a flow that submitted an order
+at step 2 and lost the sidecar at step 4, restarted blindly, submits the
+order again. Parse `stepsCompleted` and `recovery` out of the error payload
+and follow `recovery` exactly as written: it reads `restart the flow from
+navigation; do not repeat this call` when no completed step was mutating,
+and instead reads a verify-first instruction ("a completed step was
+mutating -- verify its effect on the site before deciding whether to
+continue; when in doubt, stop and report instead of re-running the flow")
+when one was. Never assume the restart form applies without checking.
+
+When `recovery` calls for a restart and the second attempt also raises
+`SIDECAR_LOST`, stop and report it: the sidecar is restarting or gone, and
+that is the pod's problem to fix, not something more attempts will resolve.
+
+## Logging in with credentials
+
+This section applies only when the runtime was started with a secrets file
+(`FAST_BROWSER_SECRETS`, forwarded as `--secrets=`) -- in practice, cloud or
+sandbox mode. A normal local install has no secrets file and no secret name
+ever resolves; there, the boundary above governs and logging in is never
+yours to perform.
+
+Secrets resolve inside the runtime, and only in `browser_fill_form` (textbox
+and slider fields) and `browser_type`. Nothing else reaches them. That means
+login cannot be a macro and cannot be a replayed flow: `flow-runner` fills
+through the page directly, so a placeholder would be typed in literally.
+
+The secret's NAME comes from the user or the sandbox operator for that
+specific site. Never guess it: an unmatched name is filled in literally
+rather than raising, so a guessed `APP_PASSWORD` types that literal string
+into the password field and submits it -- a failed, possibly
+lockout-triggering, login attempt instead of a caught error.
+
+Log in with real tool calls, passing the secret's NAME as the field value:
+
+1. `browser_navigate` to the login URL.
+2. `browser_fill_form` with the secret names as values, for example
+   `APP_USERNAME` and `APP_PASSWORD`. Never the values themselves.
+3. `browser_click` on the submit control.
+4. Assert an element that only renders once authenticated.
+
+Step 4 is required, not a nicety: the same unmatched-name behavior means a
+mistyped or misremembered name reaches the submit button and the flow
+proceeds into a logged-out session that looks like it worked. The assertion
+is what turns that into a visible failure before anything is captured.
+
+Never put a credential value in a tool argument, a macro argument, or a flow
+artifact. Only the name.

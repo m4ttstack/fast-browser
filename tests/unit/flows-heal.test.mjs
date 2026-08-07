@@ -194,6 +194,45 @@ test('parseFailurePayload returns null for a string with no FLOW_RUNNER_FAILURE 
   assert.equal(parseFailurePayload('TypeError: Cannot read properties of null'), null);
 });
 
+// Task 6 (additional scope): a lost CDP connection is a distinct failure
+// class from a step that failed to resolve -- flow-runner.js's `fail()`
+// throws `SIDECAR_LOST: ` instead of `FLOW_RUNNER_FAILURE: ` for it (Task
+// 5). There is nothing to heal from a lost connection: any `candidates`
+// evidence in the payload was collected against a page that no longer
+// exists once the browser reconnects or gets replaced, so treating this
+// like an ordinary locator-miss and proposing a heal from it would be
+// wrong. This module's `FAILURE_PREFIX` match already keeps that from
+// happening -- a SIDECAR_LOST string simply never contains the
+// `FLOW_RUNNER_FAILURE: ` marker, so `parseFailurePayload` returns null for
+// it (same as any other unrecognized-prefix string) and sweep.mjs's
+// `applyReplayRecords` never calls `proposeHeal` for the record at all
+// (it only parses+proposes when `parseFailurePayload` returns non-null).
+// Pinned here, rather than assumed, with a payload shaped exactly like a
+// real healable locator-miss (same `candidates`, same `failedStep`) so a
+// future change to the prefix-matching logic can't accidentally start
+// treating SIDECAR_LOST as heal-worthy just because the JSON shape looks
+// identical.
+test('parseFailurePayload returns null for a SIDECAR_LOST message, even one shaped exactly like a healable locator-miss (a lost connection is never a heal candidate)', () => {
+  const shape = {
+    failedStep: 1,
+    error: 'Target page, context or browser has been closed',
+    url: 'http://localhost:4823/checkout',
+    stepsCompleted: 1,
+    locatorFallbacks: [],
+    candidates: [candidate({ role: 'button', name: 'Submit', testid: 'submit-v2', text: 'Submit order' })],
+  };
+  const sidecarLost = `SIDECAR_LOST: ${JSON.stringify({
+    ...shape,
+    recovery: 'restart the flow from navigation; do not repeat this call',
+  })}`;
+
+  assert.equal(parseFailurePayload(sidecarLost), null);
+  // The real trace-capture runtime wraps every error's message with
+  // `String(error)` before recording it (Task 9 finding, above) -- confirm
+  // the wrapped SIDECAR_LOST form is equally unparsed as a heal payload.
+  assert.equal(parseFailurePayload(`Error: ${sidecarLost}`), null);
+});
+
 // ============================================================
 // Step 2: rankCandidates determinism + pinned weights
 // ============================================================
