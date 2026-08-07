@@ -565,6 +565,45 @@ test('an ordinary step failure keeps the FLOW_RUNNER_FAILURE contract', async ()
   assert.doesNotMatch(message, /SIDECAR_LOST/);
 });
 
+test('the real prefixed cdp-disconnect message classifies as SIDECAR_LOST (fix round 1, review finding 2)', async () => {
+  // Verified against the fork this plugin pins: on connection loss every
+  // in-flight call rejects with `TargetClosedError`, whose message is
+  // exactly `Target page, context or browser has been closed`, prefixed by
+  // whichever API call was in flight -- never the `browserContext.newPage:`
+  // -prefixed variant the original signature list pinned by mistake (a
+  // prefix flow-runner never calls). This is the realistic message shape a
+  // genuine disconnect actually produces; the bare 'Target closed' case in
+  // the table above only proves the signature list contains that
+  // substring, not that a real disconnect message is caught.
+  const message = await runWithFailingAction(
+    'locator.click: Target page, context or browser has been closed',
+  );
+  assert.match(message, /^SIDECAR_LOST: /);
+});
+
+test('a plain timeout whose call log happens to render "WebSocket API" page content stays FLOW_RUNNER_FAILURE (fix round 1, review finding 1)', async () => {
+  // `formatCallLog` (see the doc comment above `isSidecarLost` in the
+  // source, and `INTERCEPTION_SIGNATURE` further below) appends a `locator
+  // resolved to <previewNode>` line to every channel error, and
+  // `previewNode` renders the target element's own attributes/text
+  // verbatim -- so a page with a link reading "WebSocket API" would, under
+  // a whole-message substring match, turn an ordinary selector timeout into
+  // a false SIDECAR_LOST. Anchoring classification to the message's FIRST
+  // line only (Playwright's own thrown text, never page content) is what
+  // keeps this negative; this call log is built the same way the
+  // pre-existing previewNode-forgery tests below construct one.
+  const callLogMessage = [
+    'locator.click: Timeout 5000ms exceeded.',
+    'Call log:',
+    '  - waiting for locator(\'role=link[name="WebSocket API"]\')',
+    '  -   locator resolved to <a href="/docs/ws">WebSocket API</a>',
+    '  -   attempting click action',
+  ].join('\n');
+  const message = await runWithFailingAction(callLogMessage);
+  assert.match(message, /^FLOW_RUNNER_FAILURE: /);
+  assert.doesNotMatch(message, /SIDECAR_LOST/);
+});
+
 test('flow-runner.js never says "retry", including in comments', async () => {
   // Duplicated deliberately from the existing canary above: the recovery
   // wording added for SIDECAR_LOST is the most likely accidental
@@ -614,7 +653,24 @@ test('flow-runner.js throws FLOW_RUNNER_FAILURE on every failure path rather tha
   // throws first when the failure's error text matches a lost-connection
   // signature, and every other case falls through to this exact
   // FLOW_RUNNER_FAILURE throw as `fail`'s last statement -- never a return.
-  assert.match(source, /const fail = \(shape\) => \{[\s\S]*\n\s*throw new Error\(`FLOW_RUNNER_FAILURE: \$\{JSON\.stringify\(shape\)\}`\);\s*\n\s*\};/);
+  //
+  // Sliced to `fail`'s own block (from its opening line up to the first
+  // `\n  };` after it, i.e. a closing brace back at `fail`'s own 2-space
+  // indent) before asserting, rather than a greedy `[\s\S]*` scan across the
+  // rest of the file (fix round 1, review finding 3): a greedy scan stays
+  // green even if the FLOW_RUNNER_FAILURE throw moved into an unrelated
+  // LATER helper while `fail` itself regressed to `return shape;` -- exactly
+  // the regression this test's own header above says it exists to catch.
+  // The nested `if (isSidecarLost(text)) { ... }` block inside `fail` closes
+  // at 4-space indent (`\n    }`), never 2-space, so the first `\n  };` this
+  // finds is genuinely `fail`'s own close.
+  const failStart = source.indexOf('const fail = (shape) => {');
+  assert.ok(failStart >= 0, '`fail` must be defined');
+  const failEnd = source.indexOf('\n  };', failStart);
+  assert.ok(failEnd >= 0, "`fail`'s block must close with `\\n  };`");
+  const failBody = source.slice(failStart, failEnd);
+  assert.doesNotMatch(failBody, /return\s+shape/);
+  assert.match(failBody, /throw new Error\(`FLOW_RUNNER_FAILURE: \$\{JSON\.stringify\(shape\)\}`\);\s*$/);
   // No failure path returns its shape as a value: every one of the four
   // documented failure conditions (bad/missing args, a refused js step, a
   // precondition-navigation failure, a per-step action failure) calls

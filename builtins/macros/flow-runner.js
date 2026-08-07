@@ -1,7 +1,7 @@
 async (page, args) => {
   // Replay engine for a compiled flow artifact (WS2a flywheel plan, Task 8).
   // Interprets the wire format lib/flows/artifact.mjs defines and produces
-  // exactly one of the two contracts documented in
+  // exactly one of the three contracts documented in
   // skills/browser-macros/MACROS.md's `## flow-runner` entry. This file has
   // no imports and no Node host globals in scope -- only `page` and `args`
   // exist, same as every other built-in here -- so the artifact shape is
@@ -18,11 +18,20 @@ async (page, args) => {
   // returned `{ failedStep, ... }` reads as a success to anything scoring
   // replay health -- Task 9's sweep, in particular, counts `successRuns`
   // off the call completing at all, never off inspecting what it returned.
-  // Every failure path below therefore calls `fail(shape)`, which throws
-  // `new Error('FLOW_RUNNER_FAILURE: ' + JSON.stringify(shape))` -- the
-  // tool call itself fails, and a caller recovers the exact same `{
-  // failedStep, error, url, stepsCompleted, locatorFallbacks }` shape by
-  // parsing the JSON out of the error message after that fixed prefix.
+  // Every failure path below therefore calls `fail(shape)`, which throws one
+  // of two prefixed errors depending on classification (SIDECAR_LOST fix
+  // round: see `SIDECAR_SIGNATURES` below). Ordinarily it throws
+  // `new Error('FLOW_RUNNER_FAILURE: ' + JSON.stringify(shape))` -- the tool
+  // call itself fails, and a caller recovers the exact same `{ failedStep,
+  // error, url, stepsCompleted, locatorFallbacks }` shape by parsing the
+  // JSON out of the error message after that fixed prefix. When
+  // `shape.error` instead carries a lost-cdp-connection signature, it throws
+  // `new Error('SIDECAR_LOST: ' + JSON.stringify({ ...shape, recovery }))`
+  // instead -- a distinct third contract for a distinct failure class: a
+  // reconnected or replaced browser has no page state left, so a caller
+  // that parsed FLOW_RUNNER_FAILURE's `stepsCompleted` and re-ran from there
+  // would be running against a blank browser. The `recovery` field makes
+  // that instruction explicit rather than leaving it to the caller to infer.
   //
   // Every step below runs at most once. A step that throws is reported as
   // a structured failure immediately -- nothing here loops back to run the
@@ -75,16 +84,49 @@ async (page, args) => {
   // repeating the call that failed would run against a blank browser and
   // produce confidently wrong output. Callers get a distinct prefix and an
   // explicit recovery instruction so that path is never taken.
+  //
+  // Verified against the fork this plugin pins (fix round 1, review finding
+  // 2): on connection loss the client sets `_closedError = new
+  // TargetClosedError(cause)` and every in-flight/subsequent call rejects
+  // with it; with no cause its message is exactly `Target page, context or
+  // browser has been closed`, prefixed by whichever API call was in flight
+  // (e.g. `locator.click: Target page, context or browser has been
+  // closed`). That unprefixed phrase is the signature that actually
+  // matters -- a literal `browserContext.newPage:` prefix is never the call
+  // in flight here, so pinning it exactly the way the original list did was
+  // inert. `Browser has been disconnected` is included too: the same real
+  // failure surfaces with that text from the extension relay side of the
+  // sidecar, not just from playwright-core's own TargetClosedError.
   const SIDECAR_SIGNATURES = [
     'Target closed',
     'Target crashed',
+    'Target page, context or browser has been closed',
     'Browser has been closed',
     'Browser closed',
-    'WebSocket',
+    'Browser has been disconnected',
+    'WebSocket is not open',
+    'WebSocket error',
     'Connection closed',
-    'browserContext.newPage: Target page, context or browser has been closed',
   ];
-  const isSidecarLost = (text) => SIDECAR_SIGNATURES.some((signature) => text.includes(signature));
+  // Anchored to the message's FIRST LINE only -- the identical discipline
+  // `INTERCEPTION_SIGNATURE` below already applies, and for the identical
+  // reason: `formatCallLog` (see the doc comment above `INTERCEPTION_SIGNATURE`)
+  // appends a `locator resolved to <previewNode>` line to EVERY channel
+  // error, and `previewNode` renders the target element's own attributes
+  // and text verbatim. A page authoring a button labelled "Reconnect
+  // WebSocket" or a link reading "Connection closed" would otherwise turn
+  // an ordinary selector timeout into a false SIDECAR_LOST -- and unlike an
+  // ordinary FLOW_RUNNER_FAILURE, SIDECAR_LOST carries an explicit
+  // instruction to restart the flow from navigation, so a false positive
+  // here does not just misreport a failure, it actively tells the caller to
+  // re-run already-completed mutating steps: the exact double-mutate this
+  // file's header and the interception-recovery code below both exist to
+  // prevent. Playwright's own thrown text is always the first line; nothing
+  // page-authored can appear before the first `\n`.
+  const isSidecarLost = (text) => {
+    const firstLine = text.split('\n', 1)[0];
+    return SIDECAR_SIGNATURES.some((signature) => firstLine.includes(signature));
+  };
   const fail = (shape) => {
     const text = typeof shape.error === 'string' ? shape.error : '';
     if (isSidecarLost(text)) {
