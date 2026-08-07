@@ -162,7 +162,7 @@ async function stepPush(baseUrl) {
     const reasons = Array.isArray(result.reasons) ? JSON.stringify(result.reasons) : '(no reasons)';
     fail(`canary push outcome was '${result.outcome}' (expected one of ${[...ACCEPTABLE_PUSH_OUTCOMES].join(', ')}); reasons: ${reasons}`);
   }
-  return { detail: `outcome '${result.outcome}'`, outcome: result.outcome };
+  return { detail: `outcome '${result.outcome}'`, outcome: result.outcome, contentHash };
 }
 
 // TOFU-for-diagnostics: this script trusts whatever public key THIS SAME
@@ -180,7 +180,7 @@ async function stepPush(baseUrl) {
 // current key, over the same canonical bytes the client would recompute.
 // It is not, and is not meant to be, proof of the registry's long-term
 // identity.
-async function stepPullAndVerify(baseUrl, publicKeyPem) {
+async function stepPullAndVerify(baseUrl, publicKeyPem, expectedContentHash) {
   const payload = await registryRequest(baseUrl, {
     path: '/v1/pull',
     query: { origin: CANARY_ORIGIN },
@@ -188,6 +188,10 @@ async function stepPullAndVerify(baseUrl, publicKeyPem) {
   const envelopes = Array.isArray(payload?.flows) ? payload.flows : [];
   const envelope = envelopes.find((entry) => entry?.artifact?.name === CANARY_NAME);
   if (!envelope) fail('GET /v1/pull did not return the canary flow');
+  // Matching by name alone would also accept a same-named flow with
+  // unrelated content; comparing against the contentHash computed at push
+  // time (above) confirms this is genuinely the same canonical.
+  if (envelope.contentHash !== expectedContentHash) fail(`pulled canary contentHash did not match the hash computed at push time (pulled ${envelope.contentHash}, expected ${expectedContentHash})`);
 
   let flow;
   try {
@@ -233,7 +237,7 @@ async function main() {
   const steps = [
     { name: 'GET /health', run: () => stepHealth(baseUrl) },
     { name: 'POST /v1/push (canary)', run: () => stepPush(baseUrl) },
-    { name: 'GET /v1/pull + verify signature', run: (ctx) => stepPullAndVerify(baseUrl, ctx.publicKeyPem) },
+    { name: 'GET /v1/pull + verify signature', run: (ctx) => stepPullAndVerify(baseUrl, ctx.publicKeyPem, ctx.canaryContentHash) },
     { name: 'GET /v1/search', run: () => stepSearch(baseUrl) },
   ];
 
@@ -249,6 +253,7 @@ async function main() {
     try {
       const outcome = await step.run(ctx);
       if (outcome?.publicKeyPem) ctx.publicKeyPem = outcome.publicKeyPem;
+      if (outcome?.contentHash) ctx.canaryContentHash = outcome.contentHash;
       results.push({ name: step.name, status: 'PASS', detail: outcome?.detail ?? '' });
     } catch (error) {
       allPassed = false;

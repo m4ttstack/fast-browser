@@ -95,6 +95,41 @@ should need to change by hand; if it does, edit `railway.json`, not a
 Railway dashboard setting that this file would otherwise silently disagree
 with.
 
+## Deploy gotchas
+
+- **`.railwayignore`.** Railway's upload step indexes the whole working
+  tree before it ever reaches build or deploy, and that indexer does not
+  tolerate a dangling symlink. `tests/fixtures/legacy-home/.claude/skills/*`
+  contains symlinks that are INTENTIONALLY dangling (they point at a
+  fixture-only home directory path that only exists inside a test's
+  synthetic HOME, never on real disk), and the first real deploy of this
+  service failed indexing on exactly that. The committed `.railwayignore` at the
+  repo root excludes `tests/`, `.superpowers/`, `.github/`, `skills/`, and
+  `docs/` from the upload, both to fix the dangling-symlink failure and as
+  general upload hygiene (none of those directories carry runtime code).
+  This is safe: the deployed service's own import graph lives entirely in
+  `registry/` plus the two `lib/flows/*` leaf modules it imports
+  (`artifact.mjs`, which itself imports nothing else in the repo) --
+  nothing under `tests/`, `.superpowers/`, `.github/`, `skills/`, or
+  `docs/` is ever imported at runtime, so excluding all of them from the
+  upload cannot break the build or the running service.
+- If `railway up` ever fails again on an upload/indexing error (as
+  distinct from a build or boot error, which show up differently in the
+  CLI's own output), check `.railwayignore` first for a newly-added
+  directory with the same dangling-symlink or non-runtime-bulk shape,
+  before assuming a Railway-side outage.
+
+Confirmed working (this deployment has gone live): project
+`fast-browser-registry`, service `registry`, reachable at
+`https://registry-production-bea1.up.railway.app` (an example domain
+Railway assigned; a domain isn't required for the service to run, only for
+external callers to reach it), Node 20.20.2 selected via `engines`, build
+`npm ci --prefix registry` per `railway.json`. `registry/scripts/smoke.mjs`
+passed twice against it: first push `created`, second `deduped`, mode
+`semantic` (`VOYAGE_API_KEY` set, clustering on) -- the same acceptance
+shape documented in Smoke usage below, now confirmed against a real
+deployment rather than only a local boot.
+
 ## Deploy commands
 
 These are described at the verb level, since exact Railway CLI flags can
