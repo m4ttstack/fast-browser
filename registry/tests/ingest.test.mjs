@@ -687,6 +687,50 @@ test('ingest() does NOT cluster two clicks on different CSS-selector targets (#c
   assert.equal(stored.mergedCount, 0, 'the canonical\'s fallback chain must never gain #delete-account');
 });
 
+// MAT-160 Task 4 (determinism sweep): both-null anchor tightening. Two
+// flows whose only difference is a locator-less, role/name-less step
+// (neither carries ANY locator at all -- not merely a matching-but-empty
+// role/name, but zero locators to fall back on either) must NOT cluster,
+// even at cosine 1.0 -- before this fix, `primaryLocatorIdentity(a) ===
+// primaryLocatorIdentity(b)` collapsed to `null === null`, anchoring two
+// steps that carry no identifying information about what either one
+// targets at all.
+test('ingest() does NOT cluster two flows whose only difference is a locator-less, role/name-less step (both-null anchor tightening)', async () => {
+  const store = createMemoryStore();
+  await store.init();
+  const { signer } = testSigner();
+
+  function locatorLessClickFlow(name) {
+    return baseFlow({
+      name,
+      steps: [
+        { op: 'goto', url: '/checkout/{plan}' },
+        { op: 'click', target: { locators: [] } },
+      ],
+    });
+  }
+
+  const canonicalFlowInput = locatorLessClickFlow('ingest-anchor-bothnull-canonical');
+  const incomingFlowInput = locatorLessClickFlow('ingest-anchor-bothnull-incoming');
+  assert.equal(
+    stepSignature(parseFlow(incomingFlowInput)),
+    stepSignature(parseFlow(canonicalFlowInput)),
+    'both targets have no role/name AND no locators -- the fixture must share the collapsed (op, "", "", "") stepSignature tuple',
+  );
+
+  const embedder = async () => REFERENCE_VECTOR; // cosine 1.0, the most generous possible score
+
+  const created = await ingest({ envelope: envelopeFor(canonicalFlowInput), store, signer, embedder });
+  assert.equal(created.outcome, 'created');
+
+  const result = await ingest({ envelope: envelopeFor(incomingFlowInput), store, signer, embedder });
+  assert.equal(result.outcome, 'created', 'two locator-less, role/name-less steps must never be treated as anchored to the same element');
+  assert.notEqual(result.canonicalId, created.canonicalId);
+
+  const stored = await store.get(created.canonicalId);
+  assert.equal(stored.mergedCount, 0);
+});
+
 test('ingest() still clusters when role+name are identical and only the alternates differ (the anchor check does not over-block)', async () => {
   const store = createMemoryStore();
   await store.init();
@@ -716,6 +760,60 @@ test('ingest() still clusters when role+name are identical and only the alternat
   assert.deepEqual(
     stored.content.steps[2].target.locators,
     [...canonicalFlowInput.steps[2].target.locators, incomingLocator],
+  );
+});
+
+// --- MAT-160 Task 4 (merge re-embed elimination) ---
+
+// embedTextFor is `description | stepSignature` (this module's own
+// contract), and a cluster-merge only ever unions target.locators
+// (mergeStep, above) -- stepSignature is structurally blind to locators
+// (registry/lib/signature-fields.mjs's own doc comment), and description
+// is untouched by a merge -- so embedTextFor(mergedFlow) is PROVABLY the
+// same text the canonical was already embedded under. This pins the
+// resulting call-count contract directly: clustering an unchanged-text
+// flow must perform ZERO additional embedder calls beyond the incoming
+// envelope's own embed (needed to find the cluster match at all).
+test('ingest() cluster-merge reuses the canonical\'s existing embedding, performing ZERO embedder calls beyond the incoming envelope\'s own embed', async () => {
+  const store = createMemoryStore();
+  await store.init();
+  const { signer } = testSigner();
+
+  const canonicalFlowInput = baseFlow({ name: 'ingest-reembed-canonical' });
+  const incomingLocator = { kind: 'testid', selector: 'place-order-button' };
+  const incomingFlowInput = baseFlow({
+    name: 'ingest-reembed-incoming',
+    steps: canonicalFlowInput.steps.map((step, index) => {
+      if (index !== 2) return step; // the click step
+      return { ...step, target: { ...step.target, locators: [...step.target.locators, incomingLocator] } };
+    }),
+  });
+
+  let calls = 0;
+  const underlyingEmbedder = queueEmbedder([REFERENCE_VECTOR, unitVectorAtCosine(0.99)]);
+  const countingEmbedder = async (text) => {
+    calls += 1;
+    return underlyingEmbedder(text);
+  };
+
+  const created = await ingest({ envelope: envelopeFor(canonicalFlowInput), store, signer, embedder: countingEmbedder });
+  assert.equal(created.outcome, 'created');
+  assert.equal(calls, 1, 'the canonical\'s own creation calls the embedder exactly once');
+
+  const result = await ingest({ envelope: envelopeFor(incomingFlowInput), store, signer, embedder: countingEmbedder });
+  assert.equal(result.outcome, 'clustered');
+  assert.equal(result.canonicalId, created.canonicalId);
+
+  // Call #2 is the incoming envelope's OWN embed (needed to even find a
+  // cluster candidate to compare against) -- the merge path itself must
+  // add ZERO further calls on top of that.
+  assert.equal(calls, 2, 'the merge path must never call the embedder again beyond the incoming envelope\'s own embed');
+
+  const stored = await store.get(created.canonicalId);
+  assert.deepEqual(
+    Array.from(stored.embedding),
+    Array.from(REFERENCE_VECTOR),
+    'the canonical keeps its ORIGINAL (creation-time) embedding across the merge, unchanged',
   );
 });
 

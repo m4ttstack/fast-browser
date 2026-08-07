@@ -107,7 +107,17 @@ function primaryLocatorIdentity(target) {
 //     unconditionally rather than assumed);
 //   - otherwise (both role and name empty on both sides) -- the shape
 //     stepSignature is structurally blind to -- the PRIMARY (first)
-//     locator's (kind, selector) must be equal instead.
+//     locator's (kind, selector) must be equal instead, AND both sides
+//     must actually HAVE a primary locator identity to compare (MAT-160
+//     Task 4 tightening, conservative-only direction): a target with no
+//     locators at all makes `primaryLocatorIdentity` return `null`, and
+//     `null === null` would otherwise trivially "anchor" two targets that
+//     carry no identifying information whatsoever about what they point
+//     at -- exactly the case an anchor check exists to catch, not wave
+//     through. Either side being locator-less refuses the anchor. This
+//     can only turn a prior `true` into `false`; a pair where both sides
+//     already had a real, non-null primary locator identity is completely
+//     unaffected (see the positive-case test pinning that below).
 export function targetsAreAnchored(a, b) {
   const aPresent = Boolean(a);
   const bPresent = Boolean(b);
@@ -121,7 +131,10 @@ export function targetsAreAnchored(a, b) {
   if (aRole !== '' || aName !== '' || bRole !== '' || bName !== '') {
     return aRole === bRole && aName === bName;
   }
-  return primaryLocatorIdentity(a) === primaryLocatorIdentity(b);
+  const aIdentity = primaryLocatorIdentity(a);
+  const bIdentity = primaryLocatorIdentity(b);
+  if (aIdentity === null || bIdentity === null) return false;
+  return aIdentity === bIdentity;
 }
 
 // Anchors a whole step pair: its own `target`, and -- for `drag` -- `to`

@@ -269,14 +269,15 @@ function pull({ store }) {
 }
 
 // GET /v1/search?intent=...&origin=... (WS4b plan Task 6): `intent` is
-// REQUIRED (missing or empty -> 422); `origin` is optional. `embedder` is
-// the same seam POST /v1/push's ingest() calls use (registry/server.mjs's
-// boot() derives it from VOYAGE_API_KEY, or a test stub with the same
-// `async (text) -> Float64Array | null` shape) -- this handler calls it
-// directly with the raw intent text (no helper needed: embedding an
-// arbitrary text string is already exactly what that function signature
-// does; ingest.mjs's own embedTextFor exists only to build ITS specific
-// `description | stepSignature` text and has nothing to add here).
+// REQUIRED (missing, empty, or whitespace-only -> 422); `origin` is
+// optional. `embedder` is the same seam POST /v1/push's ingest() calls
+// use (registry/server.mjs's boot() derives it from VOYAGE_API_KEY, or a
+// test stub with the same `async (text) -> Float64Array | null` shape) --
+// this handler calls it directly with the (trimmed) intent text (no
+// helper needed: embedding an arbitrary text string is already exactly
+// what that function signature does; ingest.mjs's own embedTextFor exists
+// only to build ITS specific `description | stepSignature` text and has
+// nothing to add here).
 //
 // Mode is decided per-request, honestly: `embedder` absent (keyless
 // service) -> lexical; `embedder` present but this one call degrades to
@@ -287,7 +288,17 @@ function pull({ store }) {
 // handler never claims a mode the store didn't actually run.
 function search({ store, embedder }) {
   return async function handler(_req, res, { url }) {
-    const intent = url.searchParams.get('intent');
+    const rawIntent = url.searchParams.get('intent');
+    // MAT-160 Task 4 (determinism sweep): trim BEFORE the required check,
+    // not after -- a whitespace-only intent (e.g. ' ', '\t\n') carries no
+    // more real query content than an empty one and must be rejected the
+    // same 422 way, rather than sailing through to an effectively-blank
+    // embed/search. The trimmed value (not the raw one) is also what gets
+    // embedded and lexically searched below, so incidental
+    // leading/trailing whitespace on an otherwise-real intent never
+    // changes embedding text or lexical tokenization from its trimmed
+    // equivalent.
+    const intent = rawIntent === null ? null : rawIntent.trim();
     if (!intent) {
       sendError(res, 422, 'invalid_search_request', 'intent is required');
       return;
@@ -391,14 +402,20 @@ function health({ publicKeyPem, version, clustering }) {
 // Builds the request listener node:http.createServer() takes. `token` is
 // the configured REGISTRY_TOKEN; `publicKeyPem`/`version`/`clustering` feed
 // GET /health verbatim (registry/server.mjs computes all three at boot).
-// `store` is threaded through to every route handler's context. `signer`
-// (registry/lib/signing.mjs's sign, bound to the boot private key) and
-// `embedder` (registry/lib/embedder.mjs's createEmbedder output, or a test
-// stub with the same `async (text) -> Float64Array | null` shape, or
-// `null` when keyless) is threaded to POST /v1/push's ingest() calls AND
-// (Task 6) GET /v1/search's own direct embed-intent call; `store` is
-// threaded to all three real routes' handlers; `signer` remains push-only
-// (neither GET route re-signs -- see toEnvelope's doc comment above).
+// `store` is closed over by each route's own builder call below (push({
+// store, ... }), pull({ store }), search({ store, ... })) -- each
+// handler already has its own `store` reference from that closure, so
+// the per-request context object passed to `route.handler` (below) never
+// needs to carry `store` itself (MAT-160 Task 4: a `store` key used to
+// ride along in that object anyway; removed as dead weight once
+// confirmed no handler ever destructured it). `signer` (registry/lib/
+// signing.mjs's sign, bound to the boot private key) and `embedder`
+// (registry/lib/embedder.mjs's createEmbedder output, or a test stub with
+// the same `async (text) -> Float64Array | null` shape, or `null` when
+// keyless) is threaded to POST /v1/push's ingest() calls AND (Task 6)
+// GET /v1/search's own direct embed-intent call; `signer` remains
+// push-only (neither GET route re-signs -- see toEnvelope's doc comment
+// above).
 export function createRequestListener({ token, store, signer, embedder, publicKeyPem, version, clustering }) {
   const routes = [
     { method: 'GET', path: '/health', auth: false, hasBody: false, handler: health({ publicKeyPem, version, clustering }) },
@@ -485,7 +502,7 @@ export function createRequestListener({ token, store, signer, embedder, publicKe
     }
 
     try {
-      await route.handler(req, res, { url, body, store });
+      await route.handler(req, res, { url, body });
     } catch (error) {
       // Never echo the error's own message back to the client -- it may
       // embed request data (e.g. a future store error quoting part of the

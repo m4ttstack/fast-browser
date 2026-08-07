@@ -200,7 +200,7 @@ with.
   `docs/` from the upload, both to fix the dangling-symlink failure and as
   general upload hygiene (none of those directories carry runtime code).
   This is safe: the deployed service's own import graph lives entirely in
-  `registry/` plus the two `lib/flows/*` leaf modules it imports
+  `registry/` plus the one `lib/flows/*` leaf module it imports
   (`artifact.mjs`, which itself imports nothing else in the repo) --
   nothing under `tests/`, `.superpowers/`, `.github/`, `skills/`, or
   `docs/` is ever imported at runtime, so excluding all of them from the

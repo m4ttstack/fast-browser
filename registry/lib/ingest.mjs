@@ -244,13 +244,38 @@ async function createCanonical({ flow, canonicalBytes, contentHash, store, signe
 // alternates into the canonical per step (append-only), recomputes the
 // canonical's own content id (mirrors lib/flows/heal.mjs's applyHeal
 // precedent -- "a heal recomputes id from the appended locator"), re-signs
-// the refreshed canonical bytes, refreshes the embedding from the
-// (unchanged) canonical description + stepSignature when an embedder is
-// active, and re-puts the SAME store id with mergedCount incremented.
-// `name`/`origin`/`description`/`stepSignature`/`opSequence` never change
-// across a merge -- only step-level locator lists and the derived id/
-// contentHash/signature/embedding/mergedCount/updatedAt do.
-async function mergeIntoCanonical({ canonicalRecord, incomingFlow, store, signer, embedder }) {
+// the refreshed canonical bytes, REUSES the canonical's already-stored
+// embedding unchanged (see MAT-160 Task 4 note below -- never calls the
+// embedder here), and re-puts the SAME store id with mergedCount
+// incremented. `name`/`origin`/`description`/`stepSignature`/`opSequence`
+// never change across a merge -- only step-level locator lists and the
+// derived id/contentHash/signature/mergedCount/updatedAt do.
+//
+// MAT-160 Task 4 (determinism sweep, merge re-embed elimination): an
+// earlier version of this function called `embedder(embedTextFor(
+// mergedFlow))` again on every merge, "refreshed anyway ... rather than
+// assumed identical". That refresh is provably unnecessary, not merely
+// probably unnecessary: `embedTextFor` is `description + ' | ' +
+// stepSignature` (this module's own contract, above), a merge here only
+// ever unions `target.locators` (`mergeStep` above never touches anything
+// else), `stepSignature` is BY CONSTRUCTION blind to `target.locators`
+// (registry/lib/signature-fields.mjs's own doc comment -- appending a
+// locator alternate must never change a flow's cluster identity), and
+// `description` is never touched by a merge at all (only `steps` is
+// rewritten, above). So `embedTextFor(mergedFlow) ===
+// embedTextFor(canonicalFlow)` always holds on this path, meaning the
+// canonical's OWN stored embedding -- computed from that exact text when
+// it was created or last merged -- is still exactly the value a fresh
+// embed call would produce. Calling the embedder again here was therefore
+// pure waste on every merge (an extra network round trip per push that
+// clusters), and worse than merely wasteful against a NONDETERMINISTIC
+// embedder: re-deriving "the same" text could silently drift the
+// canonical's embedding away from what it was created under, for a
+// content change (a locator alternate) that never touched the text being
+// embedded at all. Reusing the canonical's own embedding outright is
+// therefore strictly more correct, not just faster -- `embedder` is no
+// longer a parameter this function needs.
+async function mergeIntoCanonical({ canonicalRecord, incomingFlow, store, signer }) {
   // CRITICAL serialization rule: re-parse the canonical's stored content
   // rather than trusting its object shape as-is -- a jsonb round trip may
   // have reordered its keys (Task 4 ledger finding).
@@ -277,14 +302,11 @@ async function mergeIntoCanonical({ canonicalRecord, incomingFlow, store, signer
 
   const signature = signer.sign(canonicalBytes);
 
-  let embedding = canonicalRecord.embedding ?? null;
-  if (embedder) {
-    // description/stepSignature are unchanged by the merge, so this is
-    // the same text the canonical was already embedded under -- refreshed
-    // anyway, per the plan, rather than assumed identical.
-    const refreshed = await embedder(embedTextFor(mergedFlow));
-    if (refreshed) embedding = Array.from(refreshed);
-  }
+  // MAT-160 Task 4: reuse the canonical's own already-stored embedding
+  // outright -- see this function's top comment for why that is provably
+  // still valid (embedTextFor is unchanged by a locator-only merge) and
+  // why the embedder is never called on this path at all.
+  const embedding = canonicalRecord.embedding ?? null;
 
   const now = new Date().toISOString();
   const updatedRecord = {
@@ -357,7 +379,7 @@ export async function ingest({ envelope, store, signer, embedder }) {
     });
     const clusterTarget = findClusterMatch(candidates, flow, incomingEmbedding);
     if (clusterTarget) {
-      return mergeIntoCanonical({ canonicalRecord: clusterTarget, incomingFlow: flow, store, signer, embedder });
+      return mergeIntoCanonical({ canonicalRecord: clusterTarget, incomingFlow: flow, store, signer });
     }
   }
 

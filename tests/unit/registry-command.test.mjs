@@ -1149,6 +1149,52 @@ test('pull refuses to merge two drag steps with the same source but a different 
   assert.deepEqual(report.results, [{ name: 'place-order', outcome: 'skipped', reason: 'anchor-conflict' }]);
 });
 
+// MAT-160 Task 4 (determinism sweep): both-null anchor tightening,
+// consumer pin. Two flows whose only difference is a locator-less,
+// role/name-less step (no locators AT ALL, not merely a matching-but-empty
+// role/name) share the collapsed (op, '', '', '') stepSignature tuple but
+// must NOT merge -- before this fix, `targetsAreAnchored`'s primary-locator
+// fallback collapsed to `null === null`, trivially anchoring two targets
+// with zero identifying information. Same shared function
+// (registry/lib/signature-fields.mjs's `flowsAreAnchored`) the server's
+// own ingest() consumer pin (registry/tests/ingest.test.mjs) exercises.
+test('pull refuses to merge two flows whose only difference is a locator-less, role/name-less step (both-null anchor tightening)', async () => {
+  const pinned = keyPair();
+  const locatorLessClickStep = () => ({ op: 'click', target: { locators: [] } });
+  const local = validFlow({
+    name: 'place-order',
+    steps: [{ op: 'goto', url: '/checkout/{plan}' }, locatorLessClickStep()],
+  });
+  const incoming = validFlow({
+    name: 'place-order',
+    steps: [{ op: 'goto', url: '/checkout/{plan}' }, locatorLessClickStep()],
+  });
+  assert.equal(stepSignatureOf(local), stepSignatureOf(incoming));
+
+  const envelope = signedEnvelope(incoming, pinned.privateKey);
+  let writeCalled = false;
+
+  const report = await registry(
+    { sub: 'pull', json: false, origin: null },
+    {
+      loadConfig: async () => configuredConfig(pinned.publicKey),
+      fetch: async () => jsonResponse(200, { flows: [envelope] }),
+      listFlowFiles: async () => ['place-order.flow.json'],
+      readFlowFile: async () => JSON.stringify(local),
+      writeFlowFile: async () => { writeCalled = true; },
+      paths: { flowsDir: '/h/flows', flowsPendingDir: '/h/pending' },
+      env: { FAST_BROWSER_REGISTRY_TOKEN: 'tok' },
+    },
+  );
+
+  assert.equal(writeCalled, false);
+  assert.equal(report.ok, true);
+  assert.deepEqual(report.results, [{ name: 'place-order', outcome: 'skipped', reason: 'anchor-conflict' }]);
+  assert.equal(report.warnings.length, 1);
+  assert.ok(report.warnings[0].reason.includes(local.id));
+  assert.ok(report.warnings[0].reason.includes(incoming.id));
+});
+
 // The positive counterpart to the two anchor-conflict tests above: a
 // SAME-selector role/name-less CSS target (the shape the anchor check must
 // still allow through) merges exactly as before.

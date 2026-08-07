@@ -144,7 +144,17 @@ export function createMemoryStore() {
           .filter((record) => record.embedding)
           .map((record) => ({ record: structuredClone(record), score: cosineSimilarity(query, record.embedding) }))
           .filter(({ score }) => score > 0);
-        scored.sort((a, b) => b.score - a.score || a.record.name.localeCompare(b.record.name));
+        // MAT-160 Task 4 (determinism sweep): score DESC, name ASC is
+        // still not a TOTAL order -- two records can share both the exact
+        // same score AND the exact same name (the same flow name pushed
+        // from two different origins, or two fixtures with a forced tie
+        // in tests). id ASC is the final tie-break, matching the SAME
+        // discipline list()'s own updatedAt/id tie-break already applies,
+        // and pg-store.mjs's identical addition (both stores must agree,
+        // not just each independently be deterministic).
+        scored.sort((a, b) => b.score - a.score
+          || a.record.name.localeCompare(b.record.name)
+          || a.record.id.localeCompare(b.record.id));
         return { mode: 'semantic', results: scored.slice(0, TOP_RESULTS) };
       }
 
@@ -152,7 +162,10 @@ export function createMemoryStore() {
       const scored = scoped
         .map((record) => ({ record: structuredClone(record), score: lexicalScore(record, queryTerms) }))
         .filter(({ score }) => score > 0);
-      scored.sort((a, b) => b.score - a.score || a.record.name.localeCompare(b.record.name));
+      // Same id ASC final tie-break as the semantic branch above.
+      scored.sort((a, b) => b.score - a.score
+        || a.record.name.localeCompare(b.record.name)
+        || a.record.id.localeCompare(b.record.id));
       return { mode: 'lexical', results: scored.slice(0, TOP_RESULTS) };
     },
 
