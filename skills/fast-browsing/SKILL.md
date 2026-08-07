@@ -148,7 +148,7 @@ ask the user to complete it in the real Chrome window, then continue.
 | Predictable multi-step flow | Batch it |
 | Known text or region | Read it narrowly |
 | Same step failed twice | Change to single-step recovery |
-| `SIDECAR_LOST` from flow-runner | Restart the flow from navigation; never repeat the call |
+| `SIDECAR_LOST` from flow-runner | Follow its `recovery` field; never repeat the call |
 | Task complete | Return only the distilled result |
 
 ## When a tool call fails with SIDECAR_LOST
@@ -156,14 +156,23 @@ ask the user to complete it in the real Chrome window, then continue.
 `SIDECAR_LOST` means the browser connection dropped mid-flow. It is not an
 ordinary step failure.
 
-Do not repeat the call that failed, and do not resume the flow partway. The
-browser has no page state left, so continuing produces output that looks
-successful and is wrong.
+Do not repeat the call that failed. The browser has no page state left, so
+repeating it produces output that looks successful and is wrong.
 
-Re-run the flow from its first navigation step. If the second attempt raises
-`SIDECAR_LOST` again, stop and report it: the sidecar is restarting or gone,
-and that is the pod's problem to fix, not something more attempts will
-resolve.
+Whether it is then safe to resume from the start depends on whether a
+completed step already mutated something -- a flow that submitted an order
+at step 2 and lost the sidecar at step 4, restarted blindly, submits the
+order again. Parse `stepsCompleted` and `recovery` out of the error payload
+and follow `recovery` exactly as written: it reads `restart the flow from
+navigation; do not repeat this call` when no completed step was mutating,
+and instead reads a verify-first instruction ("a completed step was
+mutating -- verify its effect on the site before deciding whether to
+continue; when in doubt, stop and report instead of re-running the flow")
+when one was. Never assume the restart form applies without checking.
+
+When `recovery` calls for a restart and the second attempt also raises
+`SIDECAR_LOST`, stop and report it: the sidecar is restarting or gone, and
+that is the pod's problem to fix, not something more attempts will resolve.
 
 ## Logging in with credentials
 

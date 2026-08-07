@@ -181,21 +181,30 @@ check (`ENOENT` or "outside allowed roots").
   JSON-serialized shape `{ failedStep, error, url, stepsCompleted,
   locatorFallbacks, quirkAttempted?, candidates?, recovery }` -- the same
   fields FLOW_RUNNER_FAILURE carries, plus one additive field, `recovery`,
-  always the fixed string `restart the flow from navigation; do not repeat
-  this call`. Classification runs off the underlying Playwright/relay error
-  text (`Target closed`, `Target crashed`, `Browser has been disconnected`,
-  `WebSocket is not open`, and similar connection-loss signatures on the
-  message's first line), not off which step failed, so any step -- including
-  one that would otherwise report an ordinary locator-miss -- can produce
-  SIDECAR_LOST instead. A caller must not parse `stepsCompleted` from this
-  shape and resume the flow partway, and must not repeat the call that
-  failed: the browser behind a lost connection has been reconnected or
-  replaced by the time the error surfaces and has no page state left, so
-  either would run against a blank browser and produce output that looks
-  successful and is wrong -- and on a flow whose earlier steps already
-  mutated something, resuming from the start would repeat those mutations.
-  `recovery` exists to make that instruction explicit in the payload itself
-  rather than leaving a caller to infer it from the prefix alone.
+  one of two fixed strings depending on whether any step that already
+  completed (`stepsCompleted`, checked against the compiled flow's own
+  per-step `mutating` flag) was mutating. Classification runs off the
+  underlying Playwright/relay error text (`Target closed`, `Target crashed`,
+  `Browser has been disconnected`, `WebSocket is not open`, and similar
+  connection-loss signatures on the message's first line), not off which
+  step failed, so any step -- including one that would otherwise report an
+  ordinary locator-miss -- can produce SIDECAR_LOST instead. A caller must
+  not parse `stepsCompleted` from this shape and resume the flow partway on
+  its own judgment, and must not repeat the call that failed: the browser
+  behind a lost connection has been reconnected or replaced by the time the
+  error surfaces and has no page state left, so repeating the call would run
+  against a blank browser and produce output that looks successful and is
+  wrong. Whether it is then safe to just restart from navigation depends on
+  whether an earlier step already mutated something -- blindly restarting a
+  flow that submitted an order at step 2 and lost the sidecar at step 4
+  submits the order again -- which is exactly why `recovery` is qualified
+  instead of a single instruction: when no completed step was mutating it
+  reads `restart the flow from navigation; do not repeat this call`; when one
+  was, it instead reads `do not repeat this call; a completed step was
+  mutating -- verify its effect on the site before deciding whether to
+  continue; when in doubt, stop and report instead of re-running the flow`.
+  Always follow whichever string is actually present rather than assuming
+  the first form.
 - Target: Any page; site-specific per invocation, driven entirely by
   `flow.origin`
 - Script: `~/.fast-browser/macros/flow-runner.js`

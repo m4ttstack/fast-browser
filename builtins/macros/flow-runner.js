@@ -30,8 +30,19 @@ async (page, args) => {
   // instead -- a distinct third contract for a distinct failure class: a
   // reconnected or replaced browser has no page state left, so a caller
   // that parsed FLOW_RUNNER_FAILURE's `stepsCompleted` and re-ran from there
-  // would be running against a blank browser. The `recovery` field makes
-  // that instruction explicit rather than leaving it to the caller to infer.
+  // would be running against a blank browser. `recovery` makes the right
+  // instruction explicit rather than leaving it to the caller to infer --
+  // and that instruction is qualified, not one fixed string (fix round,
+  // review finding): a GENUINE disconnect carries the identical double-mutate
+  // risk a false-positive classification does whenever a mutating step
+  // already completed, because an unconditional "restart from navigation"
+  // is itself an instruction to re-run every step, mutating ones included.
+  // `hasCompletedMutatingStep` below checks `stepsCompleted` against the
+  // compiled flow's own per-step `mutating` flag (see rule 5's replay-loop
+  // comment above for what that flag guarantees) and `fail` picks between
+  // two fixed strings on that basis, so a caller reading `recovery` is told
+  // exactly what this file already knows about the run, not left to assume
+  // a bare restart is always safe.
   //
   // Every step below runs at most once. A step that throws is reported as
   // a structured failure immediately -- nothing here loops back to run the
@@ -115,25 +126,55 @@ async (page, args) => {
   // error, and `previewNode` renders the target element's own attributes
   // and text verbatim. A page authoring a button labelled "Reconnect
   // WebSocket" or a link reading "Connection closed" would otherwise turn
-  // an ordinary selector timeout into a false SIDECAR_LOST -- and unlike an
-  // ordinary FLOW_RUNNER_FAILURE, SIDECAR_LOST carries an explicit
-  // instruction to restart the flow from navigation, so a false positive
-  // here does not just misreport a failure, it actively tells the caller to
-  // re-run already-completed mutating steps: the exact double-mutate this
-  // file's header and the interception-recovery code below both exist to
-  // prevent. Playwright's own thrown text is always the first line; nothing
+  // an ordinary selector timeout into a false SIDECAR_LOST -- and even with
+  // `recovery` qualified (see the header comment and `fail` below), a false
+  // positive over a flow with no completed mutating step still wrongly
+  // discards the caller's ordinary FLOW_RUNNER_FAILURE options in favor of
+  // an unconditional restart, and one over a flow that DID already mutate
+  // something still needs the qualification to fire correctly rather than
+  // being masked by a misclassification. Anchoring to the first line only
+  // is what keeps this misclassification rare in the first place.
+  // Playwright's own thrown text is always the first line; nothing
   // page-authored can appear before the first `\n`.
   const isSidecarLost = (text) => {
     const firstLine = text.split('\n', 1)[0];
     return SIDECAR_SIGNATURES.some((signature) => firstLine.includes(signature));
   };
+  // A completed step is "safe to have happened again" only when it was
+  // never mutating: a step this walk never reached (index >= stepsCompleted)
+  // cannot have run at all, and every reached index below that is exactly
+  // one of the compiled flow's own steps -- `flow.steps[i].mutating` is set
+  // by `flows compile` (see artifact.mjs), not derived here, so this reads
+  // it rather than re-inferring it. Guarded against a malformed/absent
+  // `flow.steps` (the same shape this file's own top-of-try validation can
+  // reject) since a caller building a SIDECAR_LOST payload for an invalid
+  // flow must never throw a SECOND error out of failure-shape construction.
+  const hasCompletedMutatingStep = (stepsCompleted) => {
+    const flowSteps = flow && Array.isArray(flow.steps) ? flow.steps : [];
+    for (let i = 0; i < stepsCompleted && i < flowSteps.length; i += 1) {
+      if (flowSteps[i] && flowSteps[i].mutating === true) return true;
+    }
+    return false;
+  };
+
   const fail = (shape) => {
     const text = typeof shape.error === 'string' ? shape.error : '';
     if (isSidecarLost(text)) {
-      throw new Error(`SIDECAR_LOST: ${JSON.stringify({
-        ...shape,
-        recovery: 'restart the flow from navigation; do not repeat this call',
-      })}`);
+      // Two fixed strings, chosen once per throw -- never assembled from
+      // caller-influenced text, so this stays exactly as auditable as the
+      // single fixed string it replaces. When no completed step was
+      // mutating, an unconditional restart is genuinely safe (rule 5's
+      // replay-loop comment above: every step ran at most once, so nothing
+      // downstream of `stepsCompleted` has mutated anything yet). When one
+      // was, telling the caller to restart anyway is the double-mutate this
+      // whole fix round exists to prevent, so the instruction shifts to
+      // verify-before-acting instead.
+      const recovery = hasCompletedMutatingStep(shape.stepsCompleted)
+        ? 'do not repeat this call; a completed step was mutating -- verify '
+          + 'its effect on the site before deciding whether to continue; '
+          + 'when in doubt, stop and report instead of re-running the flow'
+        : 'restart the flow from navigation; do not repeat this call';
+      throw new Error(`SIDECAR_LOST: ${JSON.stringify({ ...shape, recovery })}`);
     }
     throw new Error(`FLOW_RUNNER_FAILURE: ${JSON.stringify(shape)}`);
   };
