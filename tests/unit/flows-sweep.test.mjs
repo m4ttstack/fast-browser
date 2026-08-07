@@ -431,6 +431,53 @@ test('a failing replay record increments failStreak and does not touch successRu
   assert.equal(updatedOnDisk.provenance.failStreak, 1);
 });
 
+test('a SIDECAR_LOST replay record leaves both counters alone: infrastructure loss is not flow health', async (t) => {
+  const paths = await tempPaths(t);
+  await writeSession(paths, 5100, {
+    meta: baseMeta(),
+    records: [
+      record({ seq: 1, tool: 'browser_navigate', params: { url: 'https://shop.example/cart' } }),
+      record({ seq: 2, targets: [traceTarget({ name: 'View details' })], mutating: false }),
+    ],
+  });
+  const first = await sweep({ paths });
+  const [{ name }] = first.compiled;
+
+  // Build a real failStreak of 1 with an ordinary failure, so the assertion
+  // below distinguishes "left alone" from "reset to zero".
+  await appendRecords(paths, 5100, [
+    record({
+      seq: 3,
+      tool: 'browser_run_code_unsafe',
+      params: { filename: 'flow-runner.js', args: { flow: { name } } },
+      error: 'FLOW_RUNNER_FAILURE: {"failedStep":1,"error":"no locator candidate matched"}',
+    }),
+  ]);
+  const second = await sweep({ paths });
+  assert.deepEqual(second.updated, [{ name, successRuns: 0, failStreak: 1 }]);
+
+  // The sidecar dies. failStreak must not advance: the skill guidance
+  // instructs one re-run on SIDECAR_LOST, so counting both attempts would
+  // spend two of the three strikes toward quarantine on a browser that went
+  // away, which says nothing about whether this flow's locators still work.
+  await appendRecords(paths, 5100, [
+    record({
+      seq: 4,
+      tool: 'browser_run_code_unsafe',
+      params: { filename: 'flow-runner.js', args: { flow: { name } } },
+      error: 'Error: SIDECAR_LOST: {"failedStep":1,"error":"locator.click: Target page, context or browser has been closed","stepsCompleted":1,"recovery":"restart the flow from navigation"}',
+    }),
+  ]);
+  const third = await sweep({ paths });
+
+  assert.equal(third.replaysSeen, 1, 'the replay is still seen and ledgered');
+  assert.deepEqual(third.updated, [{ name, successRuns: 0, failStreak: 1 }]);
+
+  const onDisk = await readFlow(paths.flowsDir, 'view-details.flow.json');
+  assert.equal(onDisk.provenance.failStreak, 1, 'a lost sidecar must not advance the streak');
+  assert.equal(onDisk.provenance.successRuns, 0, 'nor may it count as a success');
+});
+
 // --- F3: replays never reach the compiler, tested directly (not via an
 // accidental too-short pass) ---
 
