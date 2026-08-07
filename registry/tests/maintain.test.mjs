@@ -543,13 +543,24 @@ test('maintain.mjs (gated pg): --backfill-embeddings fills null embeddings again
   try {
     const key = generateSigningKeyPem();
     const signer = signerFor(key);
-    const willFillId = await pushFlow(store, signer, { name: 'gated-will-fill' });
-    const willDegradeId = await pushFlow(store, signer, { name: 'gated-will-degrade' });
+    const willFillId = await pushFlow(store, signer, { name: 'gated-will-fill', description: 'gated will fill description' });
+    const willDegradeId = await pushFlow(store, signer, { name: 'gated-will-degrade', description: 'gated will degrade description' });
 
-    let calls = 0;
-    stubFetch(t, async () => {
-      calls += 1;
-      if (calls === 2) return jsonResponse({}, { ok: false, status: 500 });
+    // Keyed off the embed TEXT (the Voyage request body's `input[0]`), not
+    // call order: same flake class already fixed in this file's memory-store
+    // twin above (`runBackfillPass fills only null-embedding records...`) --
+    // runBackfillPass's scan order ties on updatedAt (both records above can
+    // share the exact same millisecond timestamp against a real Postgres
+    // clock too) and breaks ties by id, a fresh randomUUID(), so which of
+    // will-fill/will-degrade is embedded first (and therefore which is
+    // "call 2") is not deterministic. Degrading by content, not by "the Nth
+    // call", is what makes this test's outcome deterministic regardless of
+    // scan order.
+    stubFetch(t, async (url, options) => {
+      const { input } = JSON.parse(options.body);
+      if (input[0].startsWith('gated will degrade description')) {
+        return jsonResponse({}, { ok: false, status: 500 });
+      }
       return jsonResponse({ data: [{ embedding: validEmbedding() }] });
     });
 
