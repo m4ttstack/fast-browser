@@ -89,6 +89,28 @@ export function createMemoryStore() {
       return found ? structuredClone(found) : null;
     },
 
+    // MAT-160 Task 2: targeted write of exactly `signature`, never
+    // `updatedAt` (registry/lib/store.mjs's interface doc explains why).
+    // Mutates the same stored object both byId and byContentHash point at
+    // -- since a signature change never changes contentHash, the
+    // byContentHash entry stays valid with no separate bookkeeping needed.
+    async updateSignature(id, signature) {
+      const found = byId.get(id);
+      if (!found) return null;
+      found.signature = signature;
+      return structuredClone(found);
+    },
+
+    // MAT-160 Task 2: targeted write of exactly `embedding`, never
+    // `updatedAt`. Same in-place-mutation reasoning as updateSignature
+    // above.
+    async updateEmbedding(id, embedding) {
+      const found = byId.get(id);
+      if (!found) return null;
+      found.embedding = toEmbedding(embedding);
+      return structuredClone(found);
+    },
+
     async list({ since, origin } = {}) {
       let records = [...byId.values()];
       if (origin) records = records.filter((record) => record.origin === origin);

@@ -390,6 +390,58 @@ export function registerStoreSuite(label, createFreshStore, { skip = false } = {
   // promises init() is idempotent and safe to call repeatedly -- pg-store's
   // init() runs migrations (never a destructive reset), and every store
   // implementation must honor that same contract.
+  // MAT-160 Task 2 (registry maintenance script): updateSignature is a
+  // targeted write of exactly the signature field -- every other field,
+  // including updatedAt, must be untouched. This is the property the
+  // key-rotation re-sign pass depends on (registry/scripts/maintain.mjs):
+  // re-signing every canonical after a rotation must never look like "every
+  // canonical changed" to GET /v1/pull?since=.
+  test(`${label}: updateSignature writes only signature, leaving every other field (including updatedAt) untouched`, { skip }, async () => {
+    const store = await createFreshStore();
+    const record = makeRecord({ idSeed: 'update-signature', signature: 'original-signature' });
+    await store.putCanonical(record);
+
+    const updated = await store.updateSignature(record.id, 'rotated-signature');
+    assert.equal(updated.signature, 'rotated-signature');
+    assert.equal(updated.updatedAt, record.updatedAt);
+    assert.equal(updated.contentHash, record.contentHash);
+    assert.deepEqual(updated.content, record.content);
+
+    const fetched = await store.get(record.id);
+    assert.equal(fetched.signature, 'rotated-signature');
+    assert.equal(fetched.updatedAt, record.updatedAt);
+  });
+
+  test(`${label}: updateSignature returns null for an unknown id`, { skip }, async () => {
+    const store = await createFreshStore();
+    assert.equal(await store.updateSignature('f'.repeat(64), 'sig'), null);
+  });
+
+  // Same targeted-write contract as updateSignature, for the embedding
+  // backfill pass.
+  test(`${label}: updateEmbedding writes only embedding, leaving every other field (including updatedAt) untouched`, { skip }, async () => {
+    const store = await createFreshStore();
+    const record = makeRecord({ idSeed: 'update-embedding' });
+    await store.putCanonical(record);
+    assert.equal(record.embedding, null);
+
+    const embedding = unitEmbedding(0);
+    const updated = await store.updateEmbedding(record.id, embedding);
+    assert.ok(updated.embedding);
+    assert.equal(updated.embedding.length, 1024);
+    assert.equal(updated.updatedAt, record.updatedAt);
+    assert.equal(updated.signature, record.signature);
+
+    const fetched = await store.get(record.id);
+    assert.ok(fetched.embedding);
+    assert.equal(fetched.updatedAt, record.updatedAt);
+  });
+
+  test(`${label}: updateEmbedding returns null for an unknown id`, { skip }, async () => {
+    const store = await createFreshStore();
+    assert.equal(await store.updateEmbedding('f'.repeat(64), unitEmbedding(0)), null);
+  });
+
   test(`${label}: init() is idempotent: calling it again does not wipe existing records`, { skip }, async () => {
     const store = await createFreshStore();
     const record = makeRecord({ idSeed: 'survives-reinit' });

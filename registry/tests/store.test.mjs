@@ -6,7 +6,10 @@ import { assertStoreShape, createStore, STORE_METHODS } from '../lib/store.mjs';
 test('STORE_METHODS matches the documented interface method list', () => {
   assert.deepEqual(
     [...STORE_METHODS].sort(),
-    ['findByContentHash', 'findClusterCandidates', 'get', 'health', 'init', 'list', 'putCanonical', 'search'].sort(),
+    [
+      'findByContentHash', 'findClusterCandidates', 'get', 'health', 'init', 'list', 'putCanonical', 'search',
+      'updateEmbedding', 'updateSignature',
+    ].sort(),
   );
 });
 

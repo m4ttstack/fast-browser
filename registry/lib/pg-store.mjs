@@ -272,6 +272,33 @@ export function createPgStore(options = {}) {
       return rows[0] ? rowToRecord(rows[0]) : null;
     },
 
+    // MAT-160 Task 2 (registry maintenance script): a targeted UPDATE of
+    // exactly the `signature` column -- deliberately NOT routed through
+    // putCanonical's wholesale upsert (which sets every column, including
+    // updated_at from the caller-supplied record). A key-rotation re-sign
+    // pass must refresh every canonical's signature without bumping
+    // updated_at, since GET /v1/pull?since= exists on the wire and a
+    // rotation-wide updated_at bump would make every client re-pull the
+    // entire registry for a rotation that changed no content. See
+    // registry/lib/store.mjs's interface doc for the full rationale.
+    async updateSignature(id, signature) {
+      const { rows } = await pool.query(
+        'UPDATE canonical_flows SET signature = $1 WHERE id = $2 RETURNING *',
+        [signature, id],
+      );
+      return rows[0] ? rowToRecord(rows[0]) : null;
+    },
+
+    // Same targeted-write, no-updated_at-bump reasoning as updateSignature
+    // above, for the embedding backfill pass.
+    async updateEmbedding(id, embedding) {
+      const { rows } = await pool.query(
+        'UPDATE canonical_flows SET embedding = $1::vector WHERE id = $2 RETURNING *',
+        [embeddingLiteral(embedding), id],
+      );
+      return rows[0] ? rowToRecord(rows[0]) : null;
+    },
+
     async list({ since, origin } = {}) {
       const conditions = [];
       const params = [];

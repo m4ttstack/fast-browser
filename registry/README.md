@@ -51,10 +51,79 @@ each clearly labeled. The private key PEM becomes the Railway
 public key is printed for reference only and does not need to be stored
 anywhere separately: once the service boots with the private key, it
 derives and serves the matching public key itself from `GET /health`.
-Rotating the key later is the same command again, followed by updating the
-Railway variable and redeploying; every previously-issued signature stays
-verifiable against the OLD key, so treat a rotation as "new signatures use
-the new key" rather than a break in continuity of anything already pulled.
+
+### Rotating REGISTRY_SIGNING_KEY
+
+The service signs only at ingest (`registry/lib/ingest.mjs`): every
+canonical's `signature` was computed once, at push time, under whatever key
+was live then. Rotating `REGISTRY_SIGNING_KEY` changes what key the service
+signs NEW pushes with; it does nothing to signatures already stored from
+before the rotation. A client's `registry init` pins the service's CURRENT
+public key (TOFU) and verifies every later pull against that ONE pinned
+key -- so after a rotation, a pre-rotation canonical's old signature no
+longer verifies against the new pinned key. This is loud and safe (a
+verification failure, never silently-wrong data) but it makes that
+canonical unpullable until it is re-signed. Skipping the re-sign step below
+leaves every pre-rotation canonical unpullable indefinitely -- safe to defer,
+never safe to forget.
+
+Rotation steps, in order:
+
+1. `node registry/scripts/keygen.mjs` -- generate the new keypair (same as
+   Keygen above).
+2. Set the new private key PEM as `REGISTRY_SIGNING_KEY` (`railway variables
+   set`, or the dashboard) and redeploy. From this point on, every NEW push
+   signs under the new key; every canonical pushed before this point still
+   carries a signature from the OLD key.
+3. Re-sign every existing canonical under the new key:
+   ```
+   railway run node registry/scripts/maintain.mjs --re-sign
+   ```
+   (or, running against the service's Postgres from a machine with
+   `DATABASE_URL` and `REGISTRY_SIGNING_KEY` set locally to the same values
+   the deployed service has: `node registry/scripts/maintain.mjs --re-sign`).
+   This iterates every canonical, recomputes its canonical bytes, and
+   re-signs any whose stored signature does not already verify against the
+   current key -- safe to interrupt and re-run (a second run against an
+   already-re-signed registry reports 0 updated), and it deliberately does
+   NOT bump any canonical's `updatedAt`, so a rotation never looks like a
+   content change to `GET /v1/pull?since=`. It prints scan/update counts and
+   a duration only -- never a flow name, never key material.
+4. Every client re-runs `registry init` against the service. A "the
+   service's key changed" warning and a new fingerprint at this point are
+   EXPECTED and LEGITIMATE -- this is the one case where that warning means
+   "you just rotated the key," not "something is wrong." Re-running `init`
+   re-pins the client to the new key.
+5. Pulls verify again, against the new key, for every canonical -- including
+   the pre-rotation ones, now re-signed in step 3.
+
+`registry/scripts/maintain.mjs` requires `DATABASE_URL` unconditionally (it
+refuses to run against the in-process memory store -- maintenance there
+would be meaningless, since nothing else can ever see it) and requires
+`REGISTRY_SIGNING_KEY` for `--re-sign` specifically, validated the same way
+boot does (an Ed25519 PKCS8 PEM, rejected loudly and by name otherwise).
+Neither variable, nor any other secret, is ever echoed in its output.
+
+### Embedding backfill
+
+The same script also backfills embeddings:
+
+```
+railway run node registry/scripts/maintain.mjs --backfill-embeddings
+```
+
+(requires `VOYAGE_API_KEY`, same as ingest). Use this when some canonicals
+have a null embedding -- either pushed during a keyless era (no
+`VOYAGE_API_KEY` set at the time) or pushed while Voyage was degraded for
+that one push (registry/lib/embedder.mjs's per-call failure contract). A
+null-embedding canonical is invisible to semantic search (it can still be
+found lexically, and still pulls/verifies normally) and never participates
+in cluster-merge dedup. This pass only ever touches null-embedding records
+-- it never re-embeds one that already has a value -- so it is safe to run
+repeatedly; a per-record Voyage failure is counted and skipped (retried on
+the next run) rather than aborting the whole pass, and like `--re-sign`, it
+never bumps `updatedAt`. Both flags can be passed in the same invocation to
+run both passes back to back.
 
 ## pgvector requirement
 
