@@ -70,7 +70,29 @@ async (page, args) => {
   const onFileChooser = (chooser) => { latestChooser = chooser; };
   page.on('filechooser', onFileChooser);
 
+  // A lost cdp connection is a different failure class from a step that did
+  // not work. A replaced or reconnected browser has no page state left, so
+  // repeating the call that failed would run against a blank browser and
+  // produce confidently wrong output. Callers get a distinct prefix and an
+  // explicit recovery instruction so that path is never taken.
+  const SIDECAR_SIGNATURES = [
+    'Target closed',
+    'Target crashed',
+    'Browser has been closed',
+    'Browser closed',
+    'WebSocket',
+    'Connection closed',
+    'browserContext.newPage: Target page, context or browser has been closed',
+  ];
+  const isSidecarLost = (text) => SIDECAR_SIGNATURES.some((signature) => text.includes(signature));
   const fail = (shape) => {
+    const text = typeof shape.error === 'string' ? shape.error : '';
+    if (isSidecarLost(text)) {
+      throw new Error(`SIDECAR_LOST: ${JSON.stringify({
+        ...shape,
+        recovery: 'restart the flow from navigation; do not repeat this call',
+      })}`);
+    }
     throw new Error(`FLOW_RUNNER_FAILURE: ${JSON.stringify(shape)}`);
   };
   const failArgs = (message) => fail({

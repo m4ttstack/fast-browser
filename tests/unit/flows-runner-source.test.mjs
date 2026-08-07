@@ -505,6 +505,74 @@ test('flow-runner.js refuses every js step with the exact documented message', a
   assert.ok(refusalIndex >= 0 && loopIndex > refusalIndex, 'refusal must be textually before the replay loop');
 });
 
+// Loads the macro the same way the runtime does (a bare expression, no Node
+// globals) and drives it with a page stub whose first action throws a given
+// message, so the classification of that message can be asserted directly.
+async function runWithFailingAction(message) {
+  const source = await readSource();
+  const macro = new Function(`"use strict"; return (${source});`)();
+  const page = {
+    url: () => 'https://example.test/start',
+    on: () => {},
+    off: () => {},
+    goto: async () => {},
+    locator: () => ({
+      fill: async () => { throw new Error(message); },
+      click: async () => { throw new Error(message); },
+      waitFor: async () => {},
+      frames: () => [],
+    }),
+    waitForLoadState: async () => {},
+  };
+  const flow = {
+    schemaVersion: 1,
+    name: 'probe',
+    origin: 'https://example.test',
+    steps: [
+      { op: 'goto', url: 'https://example.test/start' },
+      { op: 'fill', target: { locators: [{ kind: 'css', selector: '#username' }] }, value: 'someone' },
+    ],
+  };
+
+  try {
+    await macro(page, { flow });
+  } catch (error) {
+    return error.message;
+  }
+  throw new Error('expected the macro to throw');
+}
+
+test('a cdp disconnect is classified as SIDECAR_LOST, not an ordinary flow failure', async () => {
+  for (const signature of [
+    'Target closed',
+    'Target crashed',
+    'Browser has been closed',
+    'WebSocket is not open',
+    'Connection closed',
+  ]) {
+    const message = await runWithFailingAction(signature);
+    assert.match(message, /^SIDECAR_LOST: /, `${signature} must classify as a lost sidecar`);
+    const shape = JSON.parse(message.slice('SIDECAR_LOST: '.length));
+    assert.match(shape.recovery, /restart the flow from navigation/i);
+    assert.ok(Object.hasOwn(shape, 'failedStep'));
+    assert.ok(Object.hasOwn(shape, 'stepsCompleted'));
+  }
+});
+
+test('an ordinary step failure keeps the FLOW_RUNNER_FAILURE contract', async () => {
+  const message = await runWithFailingAction('locator.fill: element is not visible');
+  assert.match(message, /^FLOW_RUNNER_FAILURE: /);
+  assert.doesNotMatch(message, /SIDECAR_LOST/);
+});
+
+test('flow-runner.js never says "retry", including in comments', async () => {
+  // Duplicated deliberately from the existing canary above: the recovery
+  // wording added for SIDECAR_LOST is the most likely accidental
+  // reintroduction of that vocabulary.
+  const source = await readSource();
+  assert.doesNotMatch(source, /retry/i);
+});
+
 test('flow-runner.js never retries a step internally (at-most-once mutating)', async () => {
   const source = await readSource();
   // No retry vocabulary anywhere in the source: a step that fails returns a
@@ -542,7 +610,11 @@ test('flow-runner.js declares the full failure and success shapes', async () => 
 // both textually and, in the "no Node globals" test above, behaviorally.
 test('flow-runner.js throws FLOW_RUNNER_FAILURE on every failure path rather than returning', async () => {
   const source = await readSource();
-  assert.match(source, /const fail = \(shape\) => \{\s*\n\s*throw new Error\(`FLOW_RUNNER_FAILURE: \$\{JSON\.stringify\(shape\)\}`\);/);
+  // `fail` always terminates by throwing: a SIDECAR_LOST classification
+  // throws first when the failure's error text matches a lost-connection
+  // signature, and every other case falls through to this exact
+  // FLOW_RUNNER_FAILURE throw as `fail`'s last statement -- never a return.
+  assert.match(source, /const fail = \(shape\) => \{[\s\S]*\n\s*throw new Error\(`FLOW_RUNNER_FAILURE: \$\{JSON\.stringify\(shape\)\}`\);\s*\n\s*\};/);
   // No failure path returns its shape as a value: every one of the four
   // documented failure conditions (bad/missing args, a refused js step, a
   // precondition-navigation failure, a per-step action failure) calls
@@ -1383,9 +1455,10 @@ test("flow-runner.js keeps the step's ORIGINAL interception error (not the secon
 });
 
 test("flow-runner.js never probes a quirk for a NON-interception act failure, failing immediately with the original error (WS3b Task 6)", async () => {
-  // 'Target closed' does not match the interception signature -- there is
-  // no proof the action never fired, so rung 3 must stay ineligible: the
-  // quirk's own locator must never even be probed.
+  // 'element detached from DOM' does not match the interception signature
+  // (and is not a lost-connection signature either) -- there is no proof
+  // the action never fired, so rung 3 must stay ineligible: the quirk's own
+  // locator must never even be probed.
   const source = await readSource();
   const sandbox = {};
   vm.createContext(sandbox);
@@ -1407,7 +1480,7 @@ test("flow-runner.js never probes a quirk for a NON-interception act failure, fa
       return {
         waitFor: async () => {},
         click: async () => {
-          throw new Error('Target closed');
+          throw new Error('element detached from DOM');
         },
       };
     },
@@ -1433,7 +1506,7 @@ test("flow-runner.js never probes a quirk for a NON-interception act failure, fa
     () => macro(stubPage, { flow, args: {}, quirks }),
     (error) => {
       const payload = JSON.parse(error.message.slice('FLOW_RUNNER_FAILURE: '.length));
-      assert.equal(payload.error, 'Target closed');
+      assert.equal(payload.error, 'element detached from DOM');
       assert.equal(Object.prototype.hasOwnProperty.call(payload, 'quirkAttempted'), false);
       return true;
     },
@@ -1605,13 +1678,14 @@ test("flow-runner.js recovers a fill step's act-phase interception the same way 
 // the phrase, which is what the anchor is supposed to keep matching).
 
 test('flow-runner.js does NOT recover an act failure whose call log merely mentions the interception phrase mid-line inside a previewNode-rendered attribute (WS3b Task 6, review fix round 1)', async () => {
-  // The step's REAL failure is 'Target closed' -- nothing to do with
-  // interception. The call log's `locator resolved to <previewNode>` line
-  // (a real Playwright shape) happens to describe an element whose
-  // `aria-label` a page author set to the exact phrase; on the OLD
-  // unanchored regex this substring match would have (wrongly) treated a
-  // non-interception, possibly-already-dispatched failure as recoverable.
-  // The quirk locator must never even be probed.
+  // The step's REAL failure is a plain timeout -- nothing to do with
+  // interception (and not a lost-connection signature either). The call
+  // log's `locator resolved to <previewNode>` line (a real Playwright
+  // shape) happens to describe an element whose `aria-label` a page author
+  // set to the exact phrase; on the OLD unanchored regex this substring
+  // match would have (wrongly) treated a non-interception,
+  // possibly-already-dispatched failure as recoverable. The quirk locator
+  // must never even be probed.
   const source = await readSource();
   const sandbox = {};
   vm.createContext(sandbox);
@@ -1622,7 +1696,7 @@ test('flow-runner.js does NOT recover an act failure whose call log merely menti
   const quirkSelector = '#cookie-accept';
   let quirkLocatorCalls = 0;
   const forgedMessage = [
-    'page.click: Target closed',
+    'page.click: Timeout 5000ms exceeded',
     'Call log:',
     '  - waiting for locator(\'role=button[name="Buy now"]\')',
     '  -   locator resolved to <button aria-label="intercepts pointer events">Buy now</button>',
