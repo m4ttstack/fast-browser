@@ -37,12 +37,22 @@
 // value/url/name/description/selector string in the artifact: flow
 // name/description/origin/urlPattern; per step:
 // url/value/files/target.name/target.description/target.locators[].selector
-// (including `to` for drag); and every string key and string value inside
+// (including `to` for drag); every string key and string value inside
 // a `js` step's `args` object, at any nesting depth (fix round 1, finding
 // 4: compile.mjs's `redactScriptArgs` only redacts VALUES, key names
 // survive verbatim, and `parseFlow` allows arbitrary JSON under `args` --
 // a real tamper channel pass 1 exists specifically to catch, so it cannot
-// be exempted). Four independent, non-exclusive checks -- a single field
+// be exempted); and, since MAT-160, every provenance string field
+// (compiledAt/traceDir/productVersion/lastHealed) -- WS4b shipped with
+// `provenance` skipped entirely, deferred as a minor because provenance
+// is compile-generated, not user-authored. But it is still a tamper
+// channel: `push` ships the flow's full signed artifact (registry.mjs
+// includes `provenance` byte-for-byte, never strips it), and `traceDir`
+// in particular can be an absolute path carrying a username if a caller
+// ever hands `compileSession` a non-basename trace directory. Provenance
+// gets pass 2 ONLY -- see `collectFields` below for why pass 1's
+// literal-survived check does not apply to it. Four independent,
+// non-exclusive checks -- a single field
 // can trip more than one rule, and every true reason is reported (reject
 // loudly, not "first match wins"):
 //
@@ -217,21 +227,29 @@ function collectStrings(node, basePath, out) {
 }
 
 // Walks the artifact's known shape (never a generic deep-walk over the
-// WHOLE flow: `id`, `provenance`, and a `js` step's `sha256`/`target.role`
-// are all deliberately never visited -- structural hashes/ids/roles are
-// not PII surface and scanning them produces nothing but false 'entropy'
-// noise, e.g. the flow's own 64-hex-char content-addressed `id`). `js`
-// step `args` ARE visited, recursively -- see `collectStrings` above.
+// WHOLE flow: `id` and a `js` step's `sha256`/`target.role` are
+// deliberately never visited -- structural hashes/ids/roles are not PII
+// surface and scanning them produces nothing but false 'entropy' noise,
+// e.g. the flow's own 64-hex-char content-addressed `id`). `js` step
+// `args` ARE visited, recursively -- see `collectStrings` above.
+// `provenance`'s own string fields ARE visited too, since MAT-160 (see
+// the module's top comment) -- but only into `textFields`, never
+// `valueFields`: provenance is compile-generated metadata, not
+// step/value-bearing content, so pass 1's literal-survived contract
+// (which exists to catch an un-lifted compile literal) does not apply to
+// it. `seqRange`/`successRuns`/`failStreak` are numbers, not strings, so
+// they are outside either pass's scope by construction.
 // Returns two lists:
 //   - `valueFields`: fill/select `value` and upload `files[]` entries --
 //     checked by BOTH passes. Each entry also carries `kind` ('fill' or
 //     'upload') so pass 1 can apply the right literal-survived contract
 //     (see `isCompiledFillValue` vs. `isTemplateOrEmpty` above).
-//   - `textFields`: every other name/description/url/selector/js-arg
-//     string -- checked by pass 2 only.
+//   - `textFields`: every other name/description/url/selector/js-arg/
+//     provenance string -- checked by pass 2 only.
 // Every entry carries the exact JSON-path string of its field (e.g.
-// `steps[2].target.locators[0].selector`, `steps[4].args.userEmail`),
-// matching artifact.mjs's own path-annotated error convention.
+// `steps[2].target.locators[0].selector`, `steps[4].args.userEmail`,
+// `provenance.traceDir`), matching artifact.mjs's own path-annotated
+// error convention.
 function collectFields(flow) {
   const valueFields = [];
   const textFields = [];
@@ -244,6 +262,16 @@ function collectFields(flow) {
   pushText('description', flow?.description);
   pushText('origin', flow?.origin);
   pushText('urlPattern', flow?.urlPattern);
+
+  // MAT-160: provenance's own string fields, pass 2 only -- see the
+  // module's top comment and this function's own comment above for why.
+  // `lastHealed` is nullable (artifact.mjs's `parseProvenance`); `pushText`
+  // already no-ops on a non-string, so `null` is skipped without a
+  // separate guard here.
+  pushText('provenance.compiledAt', flow?.provenance?.compiledAt);
+  pushText('provenance.traceDir', flow?.provenance?.traceDir);
+  pushText('provenance.productVersion', flow?.provenance?.productVersion);
+  pushText('provenance.lastHealed', flow?.provenance?.lastHealed);
 
   const pushTarget = (target, basePath) => {
     if (!target || typeof target !== 'object') return;
@@ -293,8 +321,9 @@ function collectFields(flow) {
         break;
       case 'js':
         // `sha256` is a content hash, never PII surface -- excluded, same
-        // as `id`/`provenance`. `args` IS scanned, recursively (fix round
-        // 1, finding 4).
+        // as `id` (unlike `id`, `provenance`'s own string fields ARE
+        // scanned, but separately -- see `collectFields` above, MAT-160).
+        // `args` IS scanned, recursively (fix round 1, finding 4).
         if (step.args && typeof step.args === 'object') {
           const argFields = [];
           collectStrings(step.args, `${base}.args`, argFields);

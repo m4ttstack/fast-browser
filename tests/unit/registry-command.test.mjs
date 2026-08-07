@@ -428,6 +428,12 @@ test('push manifest lists exactly the ready tier minus lint-excluded flows, with
   assert.ok(prints.some((line) => /1 flow\(s\)/.test(line)));
   assert.ok(prints.some((line) => line.includes('clean-flow') && line.includes('https://example.com')));
   assert.ok(prints.some((line) => line.includes('dirty-flow') && /excluded/i.test(line)));
+
+  // MAT-160: push ships each flow's full signed artifact including
+  // `provenance` (never stripped) -- the manifest must disclose that up
+  // front, not just list names/origins/count. Deleting the disclosure
+  // line must fail this test.
+  assert.ok(prints.some((line) => /provenance/i.test(line)));
 });
 
 test('push confirm gate blocks the request without approval, and never calls the registry', async () => {
@@ -525,6 +531,11 @@ test('push --yes with config registry.assumeYes:true skips the confirm prompt bu
   assert.equal(report.results[0].outcome, 'created');
   assert.ok(stderrLines.some((line) => /1 flow\(s\)/.test(line)));
   assert.ok(stderrLines.some((line) => line.includes('clean-flow') && line.includes('https://example.com')));
+
+  // MAT-160: the disclosure line belongs on the bypass arm too -- this is
+  // exactly the automation path that ships flows unattended, so the
+  // durable stderr log must record that provenance leaves with them.
+  assert.ok(stderrLines.some((line) => /provenance/i.test(line)));
 });
 
 // --- pull ---
