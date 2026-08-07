@@ -469,6 +469,24 @@ test('the codex template matches the Claude agent on flow-first, site-affordance
   }
 });
 
+// WS4b Task 10: the registry exists now (push/pull/search over compiled
+// flow artifacts), but sync with it is a HUMAN-invoked action -- `registry
+// init`, `registry push`, and `registry pull` are commands Matt runs
+// himself, never something an agent decides to run on its own (there is no
+// autonomous-sync path anywhere in this codebase; see lib/commands/
+// registry.mjs's own consent-surface comment). Losing this sentence risks
+// an agent inferring it should push or pull flows unprompted the first time
+// it notices the registry commands exist.
+test('fast-browsing states registry sync is human-invoked, never run by an agent on its own', async () => {
+  const text = await readFile(path.join(pluginRoot, 'skills/fast-browsing/SKILL.md'), 'utf8');
+
+  assert.match(text, /registry init/);
+  assert.match(text, /registry push/);
+  assert.match(text, /registry pull/);
+  assert.match(text, /human-invoked/);
+  assert.match(text, /never\s+push or pull\s+on\s+(?:its|your) own/);
+});
+
 test('skills and delegated browser guidance use authoritative live ledgers', async () => {
   const browserMacros = await readFile(
     path.join(pluginRoot, 'skills/browser-macros/SKILL.md'),
