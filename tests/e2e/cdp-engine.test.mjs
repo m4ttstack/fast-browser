@@ -202,6 +202,64 @@ test('a cdp endpoint with nothing behind it exits 69 without serving mcp', { tim
   assert.match(stderr, new RegExp(String(port)), 'names the endpoint that did not answer');
 });
 
+// --- MAT-239: local-dev CDP autolaunch, real-entrypoint proof ------------
+//
+// Both tests below deliberately stay CI-safe: neither one lets Chrome
+// actually get spawned (the guard rails route both scenarios back into the
+// ordinary "nothing answered" 30s wait), so this pair can run without a
+// real Chrome anywhere on the machine. A genuine "autolaunch spawns a real
+// Chrome and preflight connects to it" proof lives at the unit level in
+// tests/unit/preflight.test.mjs (maybeAutolaunchLocalChrome, with `spawn`
+// and `probePort` injected) instead, where it doesn't need one.
+
+test('FAST_BROWSER_CDP_AUTOLAUNCH absent leaves the pod contract byte-identical through the real entrypoint', { timeout: 40_000 }, async (t) => {
+  const port = await getFreePort();
+  const child = spawn(process.execPath, [path.join(pluginRoot, 'bin/fast-browser-mcp.mjs')], {
+    env: {
+      ...process.env,
+      FAST_BROWSER_ENGINE: 'cdp',
+      FAST_BROWSER_CDP_ENDPOINT: `http://127.0.0.1:${port}`,
+    },
+    stdio: ['ignore', 'ignore', 'pipe'],
+  });
+  t.after(() => child.kill('SIGKILL'));
+
+  let stderr = '';
+  child.stderr.on('data', (chunk) => { stderr += String(chunk); });
+
+  const code = await new Promise((resolve) => { child.once('exit', resolve); });
+
+  assert.equal(code, 69, 'EX_UNAVAILABLE so the controller knows to restart, exactly as before this feature existed');
+  assert.doesNotMatch(stderr, /auto-launched local chrome/, 'no autolaunch machinery should have run at all');
+});
+
+test('FAST_BROWSER_CDP_AUTOLAUNCH set but the endpoint is not localhost is ignored and still exits 69', { timeout: 40_000 }, async (t) => {
+  const port = await getFreePort();
+  // 127.0.0.2, not 127.0.0.1: reachable with no DNS lookup and guaranteed
+  // nothing is listening, while still exercising the "opt-in set, but this
+  // is not one of the exact hostnames autolaunch treats as local" guard
+  // rail -- a typo'd or non-canonical endpoint must fail loudly, not launch
+  // a browser nobody asked for on some other address.
+  const child = spawn(process.execPath, [path.join(pluginRoot, 'bin/fast-browser-mcp.mjs')], {
+    env: {
+      ...process.env,
+      FAST_BROWSER_ENGINE: 'cdp',
+      FAST_BROWSER_CDP_ENDPOINT: `http://127.0.0.2:${port}`,
+      FAST_BROWSER_CDP_AUTOLAUNCH: '1',
+    },
+    stdio: ['ignore', 'ignore', 'pipe'],
+  });
+  t.after(() => child.kill('SIGKILL'));
+
+  let stderr = '';
+  child.stderr.on('data', (chunk) => { stderr += String(chunk); });
+
+  const code = await new Promise((resolve) => { child.once('exit', resolve); });
+
+  assert.equal(code, 69, 'EX_UNAVAILABLE: the opt-in must not rescue a non-localhost endpoint');
+  assert.doesNotMatch(stderr, /auto-launched local chrome/, 'a non-localhost endpoint must never trigger a launch');
+});
+
 test('an unknown engine value exits 78 and never falls back to the local path', { timeout: 10_000 }, async (t) => {
   const child = spawn(process.execPath, [path.join(pluginRoot, 'bin/fast-browser-mcp.mjs')], {
     env: { ...process.env, FAST_BROWSER_ENGINE: 'headless' },
