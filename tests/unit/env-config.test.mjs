@@ -3,7 +3,12 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import { EnvContractError, cloudConfig, isCloudInvocation } from '../../lib/core/env-config.mjs';
+import {
+  EnvContractError,
+  cloudConfig,
+  isCdpAutolaunchEnabled,
+  isCloudInvocation,
+} from '../../lib/core/env-config.mjs';
 
 // Both filesystem calls are injected so these tests never touch a real disk.
 // `mkdtemp` records the prefix it was handed, so the default-output-dir tests
@@ -195,6 +200,17 @@ test('an explicit output dir is forwarded verbatim and creates no tmpdir', async
 
   assert.equal(config.outputDir, '/mnt/scratch');
   assert.deepEqual(mkdtempCalls, [], 'no scratch directory when the operator named one');
+});
+
+test('isCdpAutolaunchEnabled is recognized regardless of case or spelling, off by default', () => {
+  for (const value of ['1', 'true', 'TRUE', 'True', 'yes', 'YES', ' true ']) {
+    assert.equal(isCdpAutolaunchEnabled({ FAST_BROWSER_CDP_AUTOLAUNCH: value }), true, `expected ${JSON.stringify(value)} to enable autolaunch`);
+  }
+  for (const value of ['0', 'false', 'no', '']) {
+    assert.equal(isCdpAutolaunchEnabled({ FAST_BROWSER_CDP_AUTOLAUNCH: value }), false, `expected ${JSON.stringify(value)} to leave autolaunch off`);
+  }
+  // Unset is the mattcloud pod contract's default: never opts in.
+  assert.equal(isCdpAutolaunchEnabled({}), false);
 });
 
 test('cloudConfig never reads the secrets file contents', async () => {
