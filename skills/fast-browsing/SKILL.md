@@ -105,6 +105,12 @@ then use the loop below.
    step with a single-step tool, then resume batching.
 5. **Return distilled data.** Return only the requested string, small object,
    URL, or short list.
+6. **Let it expire.** Once you have acted on a large observation (a full
+   snapshot, a broad `browser_find`, a page read), treat it as stale. Do not
+   scroll back into context to answer a later "what was there" — the page has
+   likely moved on. Re-observe narrowly instead: `browser_find` for the
+   specific text, or `browser_snapshot` scoped with `target`/`depth`, not a
+   fresh full-page snapshot.
 
 ## Script contract
 
@@ -147,6 +153,7 @@ ask the user to complete it in the real Chrome window, then continue.
 | Digest lacks the control you need | Check `skipped`, then snapshot |
 | Predictable multi-step flow | Batch it |
 | Known text or region | Read it narrowly |
+| Need state from an already-used observation | Re-observe narrowly; never scroll back to the stale copy |
 | Same step failed twice | Change to single-step recovery |
 | `SIDECAR_LOST` from flow-runner | Follow its `recovery` field; never repeat the call |
 | Task complete | Return only the distilled result |
