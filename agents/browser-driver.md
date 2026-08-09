@@ -29,6 +29,13 @@ related navigation and interaction steps into as few `browser_run_code_unsafe`
 calls as practical; do not narrate or issue a long series of tiny calls. Use
 targeted reads of specific elements or text instead of page dumps.
 
+Treat a large observation (a full `browser_snapshot`, a broad `browser_find`,
+a page read) as expired once you have acted on it. Do not scroll back into
+context to answer "what was there" from an earlier one; the page has likely
+moved on and the copy is stale. When you need state again, re-observe
+narrowly instead of re-snapshotting the whole page: `browser_find` for the
+specific text, or `browser_snapshot` scoped with `target`/`depth`.
+
 If the same macro or action fails twice, stop repeating it. Re-scout the
 relevant state once, choose a materially different recovery, and report a
 concise caveat if recovery is not possible.
