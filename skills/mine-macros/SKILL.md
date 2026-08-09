@@ -9,6 +9,18 @@ Turn repeated recorded flows into proposals. Never install a mined macro
 without explicit approval for that individual macro in the current
 conversation.
 
+## Fast path vs batch path
+
+This skill is the batch path: it mines old recorded sessions for repeated
+macro candidates and requires evidence from at least two sessions. The
+immediate single-session path is flow distillation, owned by
+fast-browsing: right after an ad hoc solve, the just-performed session
+compiles into a flow via `fast-browser flows compile`, gated for anything
+mutating by the human running `fast-browser flows approve`. Neither path
+replaces the other. A single session is never macro evidence here, the
+2+ session rule never migrates onto the flows path, and the flows fast
+path never installs a macro.
+
 ## Recording gate
 
 Read `~/.fast-browser/config.json` first. If `sessions.enabled` is `false`,
