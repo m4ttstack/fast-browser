@@ -57,6 +57,52 @@ runnable candidate on its own. Driving the journey with discrete calls now is
 what lets the next `flows compile` sweep turn it into something a later
 session can run directly.
 
+## Distill the session after an ad hoc solve
+
+You do not have to wait for a later session. The compiler only reads
+finished recordings -- a live session never compiles -- but `browser_close`
+finishes the current recording without ending your MCP session, and the
+next browser tool call starts a fresh recording on its own. That closes
+the loop immediately, while the intent and the known-good selectors are
+still in context.
+
+Right after you complete a repeatable task ad hoc -- 3 or more discrete
+tool calls, no runnable flow or macro carried it, and the task
+succeeded -- distill the session:
+
+1. Call `browser_close`. If the user still needs the page open, do not
+   close it; instead note that the session will compile on the first
+   sweep after this session ends, and stop here.
+2. Run `fast-browser flows compile --json` via the shell. The
+   just-finished session compiles in one shot.
+3. Run `fast-browser flows find --intent "<the task>" --origin <origin>
+   --json` and locate the new candidate.
+4. Offer the flow, one flow at a time: its name, origin, `sideEffects`,
+   step count, and its `args` map as the parameterization, using this
+   run's own values as the example invocation.
+
+A read-only flow lands in the ready tier already runnable, so the offer
+is informational: future sessions replay it in one call, and no decision
+is needed. A mutating flow lands pending: present the exact
+`fast-browser flows approve <name>` command for the human to run in
+their own terminal, and never run it yourself, in any form -- broad
+delegation to the task is not approval of the flow. If the user
+explicitly declines the flow, record that decision with
+`fast-browser flows reject <name>`.
+
+Parameterization is compiler-owned: surface what `flows compile` lifted
+into `args`. If a value the user would want parameterized was not
+lifted, say so in one line; never hand-edit the artifact to add it.
+
+If nothing compiled, read `skippedBySession` in the compile JSON for
+your session's one-line reason (an unsupported tool skips its whole
+segment; a too-short segment never qualifies) and report it. If the
+journey already existed, the sweep dedups it and `find` surfaces the
+existing flow; say it already exists instead of claiming a new one.
+
+Distill at most once per completed task. Never loop back to re-close or
+re-compile, and never distill mid-task.
+
 ## Know the site
 
 Before scouting an unfamiliar page on a known origin, run `fast-browser
@@ -148,6 +194,7 @@ ask the user to complete it in the real Chrome window, then continue.
 | Predictable multi-step flow | Batch it |
 | Known text or region | Read it narrowly |
 | Same step failed twice | Change to single-step recovery |
+| Just solved a repeatable journey ad hoc | `browser_close`, `flows compile`, offer the flow |
 | `SIDECAR_LOST` from flow-runner | Follow its `recovery` field; never repeat the call |
 | Task complete | Return only the distilled result |
 
