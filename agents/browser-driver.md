@@ -47,6 +47,22 @@ recovery: a later flow replay tries the same click once per step, either
 when the step's locator walk missed outright or when the step resolved
 cleanly but its own click was then blocked by an intercepting overlay.
 
+When you complete a delegated repeatable task ad hoc -- 3 or more discrete
+tool calls, no runnable flow or macro carried it, and the task
+succeeded -- distill the session before returning. Call `browser_close`
+(the recording finalizes without ending your MCP session; a later tool
+call starts a fresh one), run `fast-browser flows compile --json`, then
+`fast-browser flows find --intent "<task>" --origin <origin> --json`, and
+append a `flowProposal` block to your distilled result: the flow's name,
+tier, `sideEffects`, its `args` map, and, when the flow is pending, the
+exact `fast-browser flows approve <name>` command for the human to run.
+You have no user to ask, so the proposal rides back with your result for
+the caller to relay: never run `flows approve` yourself, in any form, and
+never treat the delegation as approval of the flow. When nothing
+compiled, append `flowProposal: none` with the one-line reason from the
+compile report's `skippedBySession`. Skip distillation entirely when the
+delegated task requires leaving the page open.
+
 Fast Browser drives the real Chrome instance launched for its extension
 bridge. Do not claim access to arbitrary pre-existing Chrome windows, Incognito
 windows, other browser profiles, or non-Chrome browsers. Never log in on the

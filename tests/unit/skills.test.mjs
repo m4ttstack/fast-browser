@@ -513,3 +513,79 @@ test('skills and delegated browser guidance use authoritative live ledgers', asy
   assert.match(mineMacros, /~\/\.fast-browser\/rejected-macros\.md/);
   assert.doesNotMatch(mineMacros, /\[rejected\.md\]\(rejected\.md\)/);
 });
+
+// MAT-237: the distill fast path closes the flywheel loop in the same
+// conversation. Its load-bearing mechanical fact -- a live session never
+// compiles, and `browser_close` finalizes the current recording without
+// ending the MCP session (verified against the pinned runtime's trace
+// lifecycle; the next tool call starts a fresh recording) -- lives only in
+// the runtime, so the skill text is the sole place an agent learns it.
+// The compile-report diagnostic field is cross-checked against the real
+// sweep source (lib/flows/sweep.mjs), not the docs' own consistency.
+test('fast-browsing distills the just-performed session with a same-conversation fast path', async () => {
+  const text = await readFile(path.join(pluginRoot, 'skills/fast-browsing/SKILL.md'), 'utf8');
+  const sweepSource = await readFile(path.join(pluginRoot, 'lib/flows/sweep.mjs'), 'utf8');
+
+  // The trigger floor and the mechanics, in order: close, compile, find,
+  // offer.
+  assert.match(text, /3 or more discrete\s+tool calls/);
+  assert.match(text, /`browser_close`/);
+  assert.match(text, /fast-browser flows compile --json/);
+  assert.match(text, /flows find --intent "<the task>" --origin <origin>\s+--json/);
+  assert.match(text, /live session never compiles/);
+  assert.match(text, /without ending your MCP session/);
+  // The approval boundary reuses mine-macros semantics on the flows CLI:
+  // the human runs approve, the agent never does, and reject records an
+  // explicit decline only.
+  assert.match(text, /fast-browser flows approve <name>/);
+  assert.match(text, /never run it yourself, in any form/);
+  assert.match(text, /delegation to the task is not approval of the flow/);
+  assert.match(text, /fast-browser flows reject <name>/);
+  // The nothing-compiled diagnostic reads a real field of the real sweep
+  // report.
+  assert.match(text, /`skippedBySession`/);
+  assert.match(sweepSource, /skippedBySession/);
+  // Parameterization stays compiler-owned; the flows section's never-edit
+  // rule holds on this path too.
+  assert.match(text, /never hand-edit the artifact/);
+});
+
+// The subagent variant of the same fast path: browser-driver has no user in
+// its loop, so the offer must ride back inside the distilled result as a
+// flowProposal block for the caller to relay -- and the approve boundary
+// must be restated where the subagent reads, since a delegated task is the
+// exact "broad delegation is not approval" situation mine-macros warns
+// about.
+test('the browser-driver returns a flowProposal instead of asking a user it does not have', async () => {
+  const text = await readFile(path.join(pluginRoot, 'agents/browser-driver.md'), 'utf8');
+
+  assert.match(text, /3 or more discrete\s+tool calls/);
+  assert.match(text, /`browser_close`/);
+  assert.match(text, /fast-browser flows compile --json/);
+  assert.match(text, /`flowProposal` block/);
+  assert.match(text, /fast-browser flows approve <name>/);
+  assert.match(text, /never run `flows approve` yourself/);
+  assert.match(text, /never treat the delegation as approval/);
+  assert.match(text, /flowProposal: none/);
+  assert.match(text, /skippedBySession/);
+});
+
+// The delineation must hold from both sides: mine-macros stays the batch
+// path (2+ session evidence, conversational per-macro approval, macros
+// family) and names the flows fast path rather than absorbing it; the fast
+// path never imports the occurrence threshold, since a single session
+// distills.
+test('mine-macros delineates the batch path from the flows fast path', async () => {
+  const mineMacros = await readFile(path.join(pluginRoot, 'skills/mine-macros/SKILL.md'), 'utf8');
+  const fastBrowsing = await readFile(path.join(pluginRoot, 'skills/fast-browsing/SKILL.md'), 'utf8');
+
+  assert.match(mineMacros, /batch path/);
+  assert.match(mineMacros, /flow distillation/);
+  assert.match(mineMacros, /fast-browser flows compile/);
+  assert.match(mineMacros, /fast-browser flows approve/);
+  assert.match(mineMacros, /at least two sessions/);
+  assert.match(mineMacros, /2\+ session rule never migrates onto the flows path/);
+  assert.match(mineMacros, /never installs a macro/);
+  assert.match(fastBrowsing, /Distill the session after an ad hoc solve/);
+  assert.doesNotMatch(fastBrowsing, /two sessions|2\+/);
+});
