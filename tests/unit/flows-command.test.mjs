@@ -9,6 +9,7 @@ import test from 'node:test';
 import { flows } from '../../lib/commands/flows.mjs';
 import { MAX_EMBED_TEXT_CHARS, MAX_EMBED_TEXTS } from '../../lib/flows/encoder.mjs';
 import { matchFlows } from '../../lib/flows/match.mjs';
+import { replayPayload } from '../../lib/flows/replay.mjs';
 import { resolvePaths } from '../../lib/core/paths.mjs';
 
 // --- fixture builder: a minimal, schema-valid flow artifact (artifact.mjs's
@@ -106,10 +107,12 @@ test('find sweeps first, then matches loaded artifacts and embeds the flow-runne
   );
 
   assert.deepEqual(events, ['sweep', 'match']);
-  // Every other field pinned here (filename, the whole embedded flow, the
-  // args placeholder map) is unchanged by WS3a Task 4 -- only `quirks` is
-  // new, and it is `[]` because `readSite` (faked as `noQuirks` above)
-  // reports no stored site memory for this flow's origin.
+  // MAT-338: the embedded flow is the runner's PROJECTION of the artifact,
+  // not the artifact -- `browser_run_code_unsafe` echoes its arguments back
+  // to the agent verbatim, so description/urlPattern/sideEffects/result/
+  // provenance would be paid for twice and read by nobody. `quirks` is `[]`
+  // because `readSite` (faked as `noQuirks` above) reports no stored site
+  // memory for this flow's origin.
   assert.deepEqual(report, {
     command: 'flows',
     sub: 'find',
@@ -124,7 +127,7 @@ test('find sweeps first, then matches loaded artifacts and embeds the flow-runne
         tool: 'browser_run_code_unsafe',
         arguments: {
           filename: path.join(paths.macrosDir, 'flow-runner.js'),
-          args: { flow: readyFlow, args: { username: '<REQUIRED: string>' }, quirks: [] },
+          args: { flow: replayPayload(readyFlow), args: { username: '<REQUIRED: string>' }, quirks: [] },
         },
       },
     }],
