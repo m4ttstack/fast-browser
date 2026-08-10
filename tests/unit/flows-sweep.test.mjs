@@ -1774,12 +1774,17 @@ test('a replay naming a flow by an id from before an earlier heal in this same s
   assert.deepEqual(result.updated, [{ name, successRuns: 0, failStreak: 2 }]);
 
   const onDisk = await readFlow(paths.flowsDir, 'view-details.flow.json');
-  // Both locators landed, in order -- record 2's write was based on the
-  // FRESHEST known copy (resolved by name), never the stale `stored.id`
-  // snapshot, so the first heal's locator was never lost or regressed.
-  assert.equal(onDisk.steps[1].target.locators.length, 3);
-  assert.equal(onDisk.steps[1].target.locators[1].selector, 'internal:testid=[data-testid="vd-btn-1"]');
-  assert.equal(onDisk.steps[1].target.locators[2].selector, 'internal:testid=[data-testid="vd-btn-2"]');
+  // Both locators landed, appended in order after the compiled ladder --
+  // record 2's write was based on the FRESHEST known copy (resolved by
+  // name), never the stale `stored.id` snapshot, so the first heal's
+  // locator was never lost or regressed.
+  const compiledLadder = stored.steps[1].target.locators;
+  assert.equal(onDisk.steps[1].target.locators.length, compiledLadder.length + 2);
+  assert.deepEqual(onDisk.steps[1].target.locators.slice(0, compiledLadder.length), compiledLadder);
+  assert.deepEqual(
+    onDisk.steps[1].target.locators.slice(compiledLadder.length).map((l) => l.selector),
+    ['internal:testid=[data-testid="vd-btn-1"]', 'internal:testid=[data-testid="vd-btn-2"]'],
+  );
   assert.equal(onDisk.provenance.failStreak, 2);
   assert.equal(onDisk.id, flowId(onDisk));
 });
@@ -2253,10 +2258,13 @@ test('two heal-worthy failures for the same flow in one sweep, for DIFFERENT ste
   assert.deepEqual(result.updated, [{ name, successRuns: 0, failStreak: 2 }]);
 
   const healedFlow = await readFlow(dir, `${name}.flow.json`);
-  assert.equal(healedFlow.steps[1].target.locators.length, 2);
-  assert.equal(healedFlow.steps[1].target.locators[1].selector, 'internal:testid=[data-testid="vd-btn"]');
-  assert.equal(healedFlow.steps[2].target.locators.length, 2);
-  assert.equal(healedFlow.steps[2].target.locators[1].selector, 'internal:testid=[data-testid="buy-btn"]');
+  for (const [stepIndex, testid] of [[1, 'vd-btn'], [2, 'buy-btn']]) {
+    const compiledLadder = stored.steps[stepIndex].target.locators;
+    const healedLocators = healedFlow.steps[stepIndex].target.locators;
+    assert.equal(healedLocators.length, compiledLadder.length + 1);
+    assert.deepEqual(healedLocators.slice(0, compiledLadder.length), compiledLadder);
+    assert.equal(healedLocators.at(-1).selector, `internal:testid=[data-testid="${testid}"]`);
+  }
   assert.equal(healedFlow.id, flowId(healedFlow));
 });
 
@@ -2317,8 +2325,9 @@ test('two heal-worthy failures for the same flow, same step, same winning candid
   assert.deepEqual(result.updated, [{ name, successRuns: 0, failStreak: 2 }]);
 
   const onDisk = await readFlow(paths.flowsDir, 'view-details.flow.json');
-  assert.equal(onDisk.steps[1].target.locators.length, 2); // not 3 -- no double heal
-  assert.equal(onDisk.steps[1].target.locators[1].selector, 'internal:testid=[data-testid="vd-btn-1"]');
+  const compiledLadder = stored.steps[1].target.locators;
+  assert.equal(onDisk.steps[1].target.locators.length, compiledLadder.length + 1); // one appended, not two
+  assert.equal(onDisk.steps[1].target.locators.at(-1).selector, 'internal:testid=[data-testid="vd-btn-1"]');
   assert.equal(onDisk.provenance.failStreak, 2);
 });
 

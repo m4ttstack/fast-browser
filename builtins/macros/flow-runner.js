@@ -489,10 +489,62 @@ async (page, args) => {
   // Playwright's own 30s default would otherwise let one stale element
   // stall the whole failure report by up to 30s before this function's
   // own catch (see the call site below) can even fire.
-  const collectCandidates = async () => {
-    const elements = await page.locator(CANDIDATE_SELECTOR).all();
+  // MAT-336: the generic scan above takes the page's FIRST twelve
+  // interactive elements in document order, which on any real page is the
+  // masthead -- nav links, a search box, a cart button. For the failure
+  // class this enrichment exists to serve (the step's own target could not
+  // be resolved) that is evidence about everything except the target, and
+  // the host-side ranker (lib/flows/heal.mjs) scores it against the
+  // target's own role/name: a page whose masthead happens to share no
+  // tokens with the target yields twelve zero-scoring candidates and no
+  // heal. The measured case is the MAT-330 spike's DOA flow, whose target
+  // sat well below the first twelve matches and never appeared in the
+  // payload at all.
+  //
+  // So two SCOPED passes run first, both bounded and both best-effort: the
+  // elements whose text carries the target's own name, then the elements
+  // sharing its role. Each is wrapped on its own, because a stub or an
+  // older Playwright without `Locator.filter` must degrade to exactly the
+  // generic scan rather than losing the enrichment entirely. Every pass is
+  // element-cheap; all of this only ever runs on a step that has already
+  // failed.
+  const SCOPED_CANDIDATES_PER_PASS = 6;
+
+  const scopedElements = async (target) => {
+    const role = target && typeof target.role === 'string' ? target.role : '';
+    const name = target && typeof target.name === 'string' ? target.name.trim() : '';
+    const collected = [];
+    if (name) {
+      try {
+        const byText = await page.locator(CANDIDATE_SELECTOR).filter({ hasText: name }).all();
+        collected.push(...byText.slice(0, SCOPED_CANDIDATES_PER_PASS));
+      } catch {
+        // No scoped-by-text evidence available; the passes below still run.
+      }
+    }
+    if (role) {
+      try {
+        const byRole = await page.locator(`internal:role=${role}`).all();
+        collected.push(...byRole.slice(0, SCOPED_CANDIDATES_PER_PASS));
+      } catch {
+        // Same degrade.
+      }
+    }
+    return collected;
+  };
+
+  const candidateIdentity = (candidate) => JSON.stringify([
+    candidate.role, candidate.name, candidate.testid, candidate.text,
+  ]);
+
+  const collectCandidates = async (target) => {
+    const scoped = await scopedElements(target);
+    const generic = await page.locator(CANDIDATE_SELECTOR).all();
+    const elements = [...scoped, ...generic];
     const candidates = [];
-    for (const element of elements.slice(0, MAX_CANDIDATES)) {
+    const seenIdentities = new Set();
+    for (const element of elements) {
+      if (candidates.length >= MAX_CANDIDATES) break;
       // Flat wall clock (WS4a Task 8, see `deriveImplicitRole`'s doc
       // comment): `deriveImplicitRole` is one more entry in this SAME
       // `Promise.all`, always dispatched alongside the other four reads --
@@ -512,12 +564,20 @@ async (page, args) => {
       // both fall through to the tag-derived value.
       const hasExplicitRole = role !== null && role !== '';
       const resolvedRole = hasExplicitRole ? role : derivedRole;
-      candidates.push({
+      const candidate = {
         role: clampCandidateString(resolvedRole),
         name: clampCandidateString(name),
         testid: clampCandidateString(testid),
         text: clampCandidateString(text),
-      });
+      };
+      // The scoped passes and the generic scan overlap by construction (a
+      // target-relevant element near the top of the page appears in both),
+      // and a duplicate spends one of only twelve payload slots to tell the
+      // ranker something it already knows.
+      const identity = candidateIdentity(candidate);
+      if (seenIdentities.has(identity)) continue;
+      seenIdentities.add(identity);
+      candidates.push(candidate);
     }
     return candidates;
   };
@@ -1138,7 +1198,7 @@ async (page, args) => {
           // sharing this catch) never picks up candidates it has no use for.
           if (finalMessage === 'no locator candidate matched') {
             try {
-              const candidates = boundCandidatesToPayload(shape, await collectCandidates());
+              const candidates = boundCandidatesToPayload(shape, await collectCandidates(step && step.target));
               if (candidates.length > 0) shape.candidates = candidates;
             } catch {
               // Enrichment must never mask the original step failure: on any

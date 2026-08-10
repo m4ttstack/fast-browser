@@ -2436,3 +2436,252 @@ test('flow-runner.js substitutes a sanitized digit-leading arg name ("arg2faToke
   assert.equal(result.ok, true);
   assert.deepEqual(gotoCalls, ['https://example.com/verify?2fa_token=live-otp-value']);
 });
+
+// --- MAT-336: a DOA-class flow replays via a fallback candidate ---
+
+test('a flow whose first candidate resolves ambiguously replays through the compiled fallback instead of dying', async () => {
+  // The MAT-330 spike's dead-on-arrival flow, exactly: one captured
+  // `role=link[name=...][description=...]` locator on a page where that
+  // accessible name belongs to two links. flow-runner resolves a `role`
+  // candidate from the target's own role+name, so the `[description=...]`
+  // qualifier that made the capture unambiguous is dropped and the probe
+  // fails strict-mode resolution -- with a single candidate that was the
+  // whole flow (0/3 replays, `healed: []`). MAT-336's compiled ladder puts
+  // the same selector back as a verbatim `other` candidate, which is what
+  // this proves actually recovers the step.
+  const source = await readSource();
+  const sandbox = {};
+  vm.createContext(sandbox);
+  const script = new vm.Script(`(${source})`);
+  const macro = script.runInContext(sandbox);
+
+  const NAME = "It's Only the Himalayas";
+  const PRECISE = `internal:role=link[name="${NAME}"i][description="${NAME}"i]`;
+  const probes = [];
+  let clicked = 0;
+
+  const stubPage = {
+    url: () => 'https://books.example/catalogue/category/travel/',
+    on: () => {},
+    off: () => {},
+    getByRole: (role, options) => ({
+      waitFor: async () => {
+        probes.push(`getByRole:${role}:${options.name}`);
+        throw new Error('strict mode violation: resolved to 2 elements');
+      },
+    }),
+    locator: (selector) => ({
+      waitFor: async () => {
+        probes.push(selector);
+        if (selector !== PRECISE) throw new Error('not found');
+      },
+      click: async () => { clicked += 1; },
+    }),
+  };
+
+  const flow = {
+    schemaVersion: 1,
+    name: 'it-s-only-the-himalayas',
+    steps: [
+      {
+        op: 'click',
+        target: {
+          description: NAME,
+          role: 'link',
+          name: NAME,
+          locators: [
+            { kind: 'role', selector: PRECISE },
+            { kind: 'other', selector: PRECISE },
+            { kind: 'other', selector: `internal:role=link[name="${NAME}"i] >> nth=0` },
+            { kind: 'text', selector: `internal:text="${NAME}"i >> nth=0` },
+            { kind: 'css', selector: `a:has-text("${NAME}") >> nth=0` },
+          ],
+        },
+      },
+    ],
+  };
+
+  const outcome = await macro(stubPage, { flow, args: {} });
+
+  assert.equal(outcome.ok, true);
+  assert.equal(clicked, 1);
+  assert.deepEqual(probes, [`getByRole:link:${NAME}`, PRECISE], 'the walk stops at the first candidate that resolves');
+  // The macro runs in its own vm realm, so its return value's objects have
+  // that realm's prototypes -- a JSON round trip is what makes them
+  // comparable here, same as every other assertion in this file works off
+  // a JSON-parsed payload.
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(outcome.locatorFallbacks)),
+    [{ step: 0, usedKind: 'other', usedIndex: 1 }],
+  );
+});
+
+test('the same flow with only the over-specified candidate still dies, pinning what MAT-336 changed', async () => {
+  const source = await readSource();
+  const sandbox = {};
+  vm.createContext(sandbox);
+  const script = new vm.Script(`(${source})`);
+  const macro = script.runInContext(sandbox);
+
+  const NAME = "It's Only the Himalayas";
+  const stubPage = {
+    url: () => 'https://books.example/catalogue/category/travel/',
+    on: () => {},
+    off: () => {},
+    getByRole: () => ({
+      waitFor: async () => { throw new Error('strict mode violation: resolved to 2 elements'); },
+    }),
+    locator: () => ({ all: async () => [] }),
+  };
+
+  const flow = {
+    schemaVersion: 1,
+    name: 'it-s-only-the-himalayas',
+    steps: [
+      {
+        op: 'click',
+        target: {
+          description: NAME,
+          role: 'link',
+          name: NAME,
+          locators: [{ kind: 'role', selector: `internal:role=link[name="${NAME}"i][description="${NAME}"i]` }],
+        },
+      },
+    ],
+  };
+
+  await assert.rejects(
+    () => macro(stubPage, { flow, args: {} }),
+    (error) => {
+      const payload = JSON.parse(error.message.slice('FLOW_RUNNER_FAILURE: '.length));
+      assert.equal(payload.error, 'no locator candidate matched');
+      return true;
+    },
+  );
+});
+
+test('MAT-336: candidate enrichment surfaces the target-relevant elements first, not just the page masthead', async () => {
+  // The generic scan takes the page's first twelve interactive elements in
+  // document order. When the failed target sits below them -- the MAT-330
+  // spike's DOA flow exactly -- the ranker gets twelve masthead links and
+  // proposes nothing. The scoped passes put the target's own neighbourhood
+  // in the payload.
+  const source = await readSource();
+  const sandbox = {};
+  vm.createContext(sandbox);
+  const script = new vm.Script(`(${source})`);
+  const macro = script.runInContext(sandbox);
+
+  const NAME = "It's Only the Himalayas";
+  const element = (label, testid) => ({
+    getAttribute: async (attr) => (attr === 'data-testid' ? testid : null),
+    innerText: async () => label,
+    evaluate: async () => ({ tagName: 'A', type: null, hasHref: true }),
+  });
+  const masthead = Array.from({ length: 14 }, (unused, i) => element(`nav-${i}`, `nav-${i}`));
+  const bookLink = element(NAME, 'book-981');
+
+  const queries = [];
+  const stubPage = {
+    url: () => 'https://books.example/catalogue/category/travel/',
+    on: () => {},
+    off: () => {},
+    getByRole: () => ({ waitFor: async () => { throw new Error('not found'); } }),
+    locator: (selector) => {
+      queries.push(selector);
+      if (selector.indexOf(',') >= 0) {
+        return {
+          all: async () => masthead,
+          filter: ({ hasText }) => ({ all: async () => (hasText === NAME ? [bookLink] : []) }),
+        };
+      }
+      if (selector === 'internal:role=link') return { all: async () => [bookLink, ...masthead] };
+      return { waitFor: async () => { throw new Error('not found'); } };
+    },
+  };
+
+  const flow = {
+    schemaVersion: 1,
+    name: 'it-s-only-the-himalayas',
+    steps: [
+      {
+        op: 'click',
+        target: {
+          description: NAME,
+          role: 'link',
+          name: NAME,
+          locators: [{ kind: 'role', selector: `internal:role=link[name="${NAME}"i]` }],
+        },
+      },
+    ],
+  };
+
+  await assert.rejects(
+    () => macro(stubPage, { flow, args: {} }),
+    (error) => {
+      const payload = JSON.parse(error.message.slice('FLOW_RUNNER_FAILURE: '.length));
+      assert.equal(payload.error, 'no locator candidate matched');
+      assert.equal(payload.candidates[0].testid, 'book-981', 'the target-relevant element leads the payload');
+      assert.equal(payload.candidates[0].text, NAME);
+      assert.equal(payload.candidates[0].role, 'link');
+      assert.equal(
+        payload.candidates.filter((c) => c.testid === 'book-981').length,
+        1,
+        'an element found by more than one pass takes only one payload slot',
+      );
+      assert.ok(payload.candidates.length <= 12, 'the 12-candidate bound still holds across every pass');
+      return true;
+    },
+  );
+
+  assert.ok(queries.includes('internal:role=link'), 'the role-scoped pass runs');
+});
+
+test('MAT-336: candidate enrichment degrades to the generic scan when scoped filtering is unavailable', async () => {
+  const source = await readSource();
+  const sandbox = {};
+  vm.createContext(sandbox);
+  const script = new vm.Script(`(${source})`);
+  const macro = script.runInContext(sandbox);
+
+  const element = (label) => ({
+    getAttribute: async (attr) => (attr === 'data-testid' ? label : null),
+    innerText: async () => label,
+    evaluate: async () => ({ tagName: 'A', type: null, hasHref: true }),
+  });
+
+  const stubPage = {
+    url: () => 'https://books.example/',
+    on: () => {},
+    off: () => {},
+    getByRole: () => ({ waitFor: async () => { throw new Error('not found'); } }),
+    locator: (selector) => {
+      if (selector.indexOf(',') >= 0) return { all: async () => [element('generic-0')] };
+      // No `.filter`, and a role scan that rejects outright.
+      if (selector.startsWith('internal:role=')) {
+        return { all: async () => { throw new Error('unsupported selector engine'); } };
+      }
+      return { waitFor: async () => { throw new Error('not found'); } };
+    },
+  };
+
+  const flow = {
+    schemaVersion: 1,
+    name: 'degrade',
+    steps: [
+      {
+        op: 'click',
+        target: { role: 'link', name: 'Somewhere', locators: [{ kind: 'css', selector: '#gone' }] },
+      },
+    ],
+  };
+
+  await assert.rejects(
+    () => macro(stubPage, { flow, args: {} }),
+    (error) => {
+      const payload = JSON.parse(error.message.slice('FLOW_RUNNER_FAILURE: '.length));
+      assert.deepEqual(payload.candidates.map((c) => c.testid), ['generic-0']);
+      return true;
+    },
+  );
+});
