@@ -289,6 +289,7 @@ test('builds exact safe and full runtime argument snapshots', () => {
     '--extension',
     '--extension-id=abcdefghijklmnopabcdefghijklmnop',
     '--snapshot-mode=none',
+    '--codegen=none',
     '--timeout-settle=200',
     `--output-dir=${paths.dataDir}`,
     '--save-trace',
@@ -339,6 +340,7 @@ test('runtimeArgs omits --save-trace exactly when config.trace is false', () => 
     '--extension',
     '--extension-id=abcdefghijklmnopabcdefghijklmnop',
     '--snapshot-mode=none',
+    '--codegen=none',
     '--timeout-settle=200',
     `--output-dir=${paths.dataDir}`,
   ];

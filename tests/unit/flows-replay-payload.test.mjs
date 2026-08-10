@@ -9,21 +9,22 @@ import { replayPayload } from '../../lib/flows/replay.mjs';
 
 // MAT-338. A successful one-call replay is the flywheel's whole payoff, and
 // the MAT-330 spike measured the agent paying ~20,000 characters to collect
-// a ~100-character answer. Three things make up that bill, and only two of
-// them are this repo's flows subsystem to fix:
+// a ~100-character answer. Three things made up that bill:
 //
 //   1. the runner SOURCE, echoed by `browser_run_code_unsafe`'s own
 //      `response.addCode(...)` (packages/playwright-core/src/tools/backend/
-//      runCode.ts in the pinned fork) -- runtime-owned, measured here as a
-//      standing number so a regression in it is visible rather than folded
-//      into a total;
+//      runCode.ts in the pinned fork). Suppressed at launch by
+//      `--codegen=none`, pinned in tests/unit/runtime-lock.test.mjs's exact
+//      argument snapshot -- there is no per-call switch, so that flag is the
+//      whole mechanism and losing it silently reopens this ticket;
 //   2. the ARGUMENTS, echoed by the same call as `JSON.stringify(args)` --
-//      this module's projection is the fix, pinned below;
+//      the projection below is the fix;
 //   3. the runner's own RETURN value, which was already compact.
 //
-// The echo template is copied from that file verbatim; it is the one thing
-// here that could drift out from under this test, and the assertion on the
-// return shape below is what keeps the third term honest regardless.
+// Measured end to end against the pinned runtime, headless, replaying a
+// three-step flow: 65,236 -> 167 result characters. The echo template below
+// is copied from that fork file verbatim so term 2 stays measurable here
+// even though term 1 no longer ships.
 const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 
 function echoedChars(runnerSource, args) {
@@ -116,18 +117,25 @@ test('MAT-338: the runner returns compact fields, never the flow or its own sour
   assert.ok(!/return \{[^}]*\bflow\b/s.test(successReturn), 'the flow itself is never returned');
 });
 
-test('MAT-338: the echoed result is dominated by the runtime code echo, not by anything this repo sends', async () => {
-  // Not a threshold to defend -- a standing measurement. If the runner
-  // source ever shrinks (or the runtime stops echoing it), this is the
-  // number that moves, and the report that quotes it should move with it.
+test('MAT-338: the launch flag that suppresses the code echo is the only thing standing between the payload and a 65k result', async () => {
+  // Guards the pairing rather than either half: `--codegen=none` is what
+  // makes the projection worth anything (65,236 -> 167 measured), and this
+  // repo is the only place that flag is set. A future edit that drops it
+  // from `runtimeArgs` would leave every replay echoing the whole runner
+  // again with nothing failing except the argument-list snapshot, so this
+  // spells out what that snapshot is protecting.
+  const { runtimeArgs } = await import('../../lib/runtime/launch.mjs');
+  const args = runtimeArgs({
+    config: { profile: 'safe', connection: { mode: 'manual' }, sessions: { enabled: false } },
+    paths: { dataDir: '/synthetic/.fast-browser', runtimeDir: '/synthetic/.fast-browser/runtime' },
+    lock: { extension: { id: 'abcdefghijklmnopabcdefghijklmnop' } },
+  });
+  assert.ok(args.includes('--codegen=none'));
+
   const runnerSource = await readFile(path.join(pluginRoot, 'builtins/macros/flow-runner.js'), 'utf8');
   const projected = { flow: replayPayload(SPIKE_FLOW), args: {}, quirks: [] };
-
-  const total = echoedChars(runnerSource, projected);
-  const argumentShare = JSON.stringify(projected).length;
-
   assert.ok(
-    argumentShare < total * 0.1,
-    `arguments are ${argumentShare} of ${total} echoed chars; if this ever exceeds 10% the payload has regressed`,
+    echoedChars(runnerSource, projected) > 50_000,
+    'the runner source is what that flag suppresses; if it ever got small this test is measuring nothing',
   );
 });
