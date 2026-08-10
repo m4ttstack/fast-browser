@@ -1578,3 +1578,63 @@ test('MAT-149: a sanitized digit-leading name colliding with an already-claimed 
   const goto = flow.steps.find((s) => s.op === 'goto');
   assert.equal(goto.url, '/verify?2fa_token={arg2faToken2}');
 });
+
+// --- MAT-336: locator fallback candidates ---
+
+// Modeled on the flow the MAT-330 spike measured as dead on arrival: a
+// single captured alternate carrying an extra `[description=...]` qualifier
+// beyond role+name, on a page where that name is not unique. Before
+// MAT-336 this compiled to exactly one locator and replayed 0/3 with `no
+// locator candidate matched` and `healed: []`.
+const DOA_NAME = "It's Only the Himalayas";
+const DOA_SELECTOR = `internal:role=link[name="${DOA_NAME}"i][description="${DOA_NAME}"i]`;
+
+function overSpecifiedTarget() {
+  return {
+    ref: 'e1',
+    resolved: `getByRole('link', { name: '${DOA_NAME}' })`,
+    alternates: [{ kind: 'role', selector: DOA_SELECTOR }],
+    role: 'link',
+    name: DOA_NAME,
+    description: DOA_NAME,
+  };
+}
+
+test('MAT-336: an over-specified single captured locator compiles to a ranked fallback ladder', () => {
+  const records = [
+    record({ seq: 1, tool: 'browser_navigate', params: { url: 'https://books.example/' } }),
+    record({ seq: 2, targets: [overSpecifiedTarget()] }),
+  ];
+  const flow = compileSession({ records, meta }).flows[0];
+  const { locators } = flow.steps[1].target;
+
+  assert.equal(locators[0].selector, DOA_SELECTOR, 'the captured locator is still ranked first');
+  assert.ok(locators.length > 1, 'the DOA class must no longer compile to a single candidate');
+  assert.deepEqual(locators.map((l) => l.kind), ['role', 'other', 'other', 'text', 'css']);
+  assert.ok(
+    locators.some((l) => l.kind === 'other' && l.selector === DOA_SELECTOR),
+    'the over-specified selector gains a verbatim twin, so its precision is actually probed',
+  );
+});
+
+test('MAT-336: every compiled target with a role and name carries more than one candidate', () => {
+  const records = [
+    record({ seq: 1, tool: 'browser_navigate', params: { url: 'https://shop.example/cart' } }),
+    record({ seq: 2, targets: [traceTarget({ name: 'View details' })] }),
+    record({
+      seq: 3,
+      tool: 'browser_type',
+      params: { text: 'ada' },
+      targets: [traceTarget({ name: 'Username', role: 'textbox' })],
+    }),
+  ];
+  const flow = compileSession({ records, meta }).flows[0];
+
+  for (const step of flow.steps) {
+    if (!step.target) continue;
+    assert.ok(
+      step.target.locators.length > 1,
+      `${step.op} "${step.target.name}" compiled with no fallback candidate`,
+    );
+  }
+});

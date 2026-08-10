@@ -10,7 +10,8 @@
     "0.1.0-alpha.6",
     "0.1.0-alpha.7",
     "0.1.0-alpha.8",
-    "0.1.0-alpha.9"
+    "0.1.0-alpha.9",
+    "0.1.0-alpha.11"
   ],
   "macros": {
     "page-recon.js": [
@@ -24,7 +25,8 @@
       "6f317b427a2a1b805e7846d589b8a8d916881d20f33c51104085fb8964698d03"
     ],
     "flow-runner.js": [
-      "18ad1ef23b163199fec5b38168e77991a816c4aecfd2911d29f39386bec546a3"
+      "18ad1ef23b163199fec5b38168e77991a816c4aecfd2911d29f39386bec546a3",
+      "ebaa48d0fc3112459b116814aba43cb68f69a62b8394fe1127ce5a9612620244"
     ]
   },
   "indexSections": {

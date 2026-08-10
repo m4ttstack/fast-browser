@@ -1774,12 +1774,17 @@ test('a replay naming a flow by an id from before an earlier heal in this same s
   assert.deepEqual(result.updated, [{ name, successRuns: 0, failStreak: 2 }]);
 
   const onDisk = await readFlow(paths.flowsDir, 'view-details.flow.json');
-  // Both locators landed, in order -- record 2's write was based on the
-  // FRESHEST known copy (resolved by name), never the stale `stored.id`
-  // snapshot, so the first heal's locator was never lost or regressed.
-  assert.equal(onDisk.steps[1].target.locators.length, 3);
-  assert.equal(onDisk.steps[1].target.locators[1].selector, 'internal:testid=[data-testid="vd-btn-1"]');
-  assert.equal(onDisk.steps[1].target.locators[2].selector, 'internal:testid=[data-testid="vd-btn-2"]');
+  // Both locators landed, appended in order after the compiled ladder --
+  // record 2's write was based on the FRESHEST known copy (resolved by
+  // name), never the stale `stored.id` snapshot, so the first heal's
+  // locator was never lost or regressed.
+  const compiledLadder = stored.steps[1].target.locators;
+  assert.equal(onDisk.steps[1].target.locators.length, compiledLadder.length + 2);
+  assert.deepEqual(onDisk.steps[1].target.locators.slice(0, compiledLadder.length), compiledLadder);
+  assert.deepEqual(
+    onDisk.steps[1].target.locators.slice(compiledLadder.length).map((l) => l.selector),
+    ['internal:testid=[data-testid="vd-btn-1"]', 'internal:testid=[data-testid="vd-btn-2"]'],
+  );
   assert.equal(onDisk.provenance.failStreak, 2);
   assert.equal(onDisk.id, flowId(onDisk));
 });
@@ -2253,10 +2258,13 @@ test('two heal-worthy failures for the same flow in one sweep, for DIFFERENT ste
   assert.deepEqual(result.updated, [{ name, successRuns: 0, failStreak: 2 }]);
 
   const healedFlow = await readFlow(dir, `${name}.flow.json`);
-  assert.equal(healedFlow.steps[1].target.locators.length, 2);
-  assert.equal(healedFlow.steps[1].target.locators[1].selector, 'internal:testid=[data-testid="vd-btn"]');
-  assert.equal(healedFlow.steps[2].target.locators.length, 2);
-  assert.equal(healedFlow.steps[2].target.locators[1].selector, 'internal:testid=[data-testid="buy-btn"]');
+  for (const [stepIndex, testid] of [[1, 'vd-btn'], [2, 'buy-btn']]) {
+    const compiledLadder = stored.steps[stepIndex].target.locators;
+    const healedLocators = healedFlow.steps[stepIndex].target.locators;
+    assert.equal(healedLocators.length, compiledLadder.length + 1);
+    assert.deepEqual(healedLocators.slice(0, compiledLadder.length), compiledLadder);
+    assert.equal(healedLocators.at(-1).selector, `internal:testid=[data-testid="${testid}"]`);
+  }
   assert.equal(healedFlow.id, flowId(healedFlow));
 });
 
@@ -2317,8 +2325,9 @@ test('two heal-worthy failures for the same flow, same step, same winning candid
   assert.deepEqual(result.updated, [{ name, successRuns: 0, failStreak: 2 }]);
 
   const onDisk = await readFlow(paths.flowsDir, 'view-details.flow.json');
-  assert.equal(onDisk.steps[1].target.locators.length, 2); // not 3 -- no double heal
-  assert.equal(onDisk.steps[1].target.locators[1].selector, 'internal:testid=[data-testid="vd-btn-1"]');
+  const compiledLadder = stored.steps[1].target.locators;
+  assert.equal(onDisk.steps[1].target.locators.length, compiledLadder.length + 1); // one appended, not two
+  assert.equal(onDisk.steps[1].target.locators.at(-1).selector, 'internal:testid=[data-testid="vd-btn-1"]');
   assert.equal(onDisk.provenance.failStreak, 2);
 });
 
@@ -2697,4 +2706,126 @@ test('report.warnings stays empty when a configured ranker succeeds -- no false 
   const result = await sweep({ paths, ranker: succeedingRanker });
   assert.deepEqual(result.warnings, []);
   assert.deepEqual(result.healed, [{ name, stepIndex: 1, kind: 'testid' }]);
+});
+
+// --- MAT-337: local clustering at compile time ---
+
+// The MAT-330 spike compiled 18 benchmark sessions into 15 flows, six of
+// which were `login` variants of the SAME journey captured across six
+// sessions. Exact-content dedup never caught them: the first collision
+// renames the candidate (`login-2`) and rehashes it, so the id the NEXT
+// identical candidate computes -- still under the base name -- matches
+// nothing in the registry, and the cycle repeats. Recall then ranks six
+// near-duplicates against each other instead of one canonical flow.
+function loginJourney(seq) {
+  return [
+    record({ seq: seq + 0, tool: 'browser_navigate', params: { url: 'https://the-internet.example/login' } }),
+    record({
+      seq: seq + 1,
+      tool: 'browser_type',
+      params: { text: 'tomsmith' },
+      targets: [traceTarget({ name: 'Username', role: 'textbox' })],
+    }),
+    record({
+      seq: seq + 2,
+      tool: 'browser_type',
+      params: { text: 'SuperSecretPassword!' },
+      targets: [traceTarget({ name: 'Password', role: 'textbox' })],
+    }),
+    record({ seq: seq + 3, targets: [traceTarget({ name: 'Login' })], mutating: true }),
+  ];
+}
+
+test('MAT-337: six sessions of the same journey compile to one canonical flow', async (t) => {
+  const paths = await tempPaths(t);
+  // A DIFFERENT journey squats the minted name first -- that is the whole
+  // mechanism the spike hit. Without a squatter, six byte-identical
+  // candidates already collapse on `flowId` alone; with one, the first
+  // collision renames and rehashes, and every later twin's id then matches
+  // nothing, which is how six sessions became six flows.
+  await writeSession(paths, 69000, {
+    meta: baseMeta(),
+    records: [
+      record({ seq: 1, tool: 'browser_navigate', params: { url: 'https://the-internet.example/login-classic' } }),
+      record({ seq: 2, targets: [traceTarget({ name: 'Login' })], mutating: true }),
+    ],
+  });
+  for (let i = 0; i < 6; i += 1) {
+    await writeSession(paths, 70000 + i, { meta: baseMeta(), records: loginJourney(1) });
+  }
+
+  const result = await sweep({ paths });
+
+  assert.equal(result.sessionsProcessed, 7);
+  assert.deepEqual(result.compiled.map((c) => c.name).sort(), ['login', 'login-2']);
+  assert.equal(result.clustered, 5, 'the other five collapse into the canonical rather than being written');
+  assert.deepEqual(
+    await listFlowFiles(paths.flowsPendingDir),
+    ['login-2.flow.json', 'login.flow.json'],
+    'six captures of one journey leave exactly one artifact behind',
+  );
+  assert.deepEqual(await listFlowFiles(paths.flowsDir), []);
+});
+
+test('MAT-337: clustering unions the collapsed flow\'s locator candidates into the canonical', async (t) => {
+  const paths = await tempPaths(t);
+  await writeSession(paths, 71000, { meta: baseMeta(), records: loginJourney(1) });
+
+  const twin = loginJourney(1);
+  twin[3].targets = [{
+    ...traceTarget({ name: 'Login' }),
+    alternates: [
+      { kind: 'role', selector: 'internal:role=button[name="Login"i]' },
+      { kind: 'testid', selector: 'internal:testid=[data-testid="login-submit"]' },
+    ],
+  }];
+  await writeSession(paths, 71001, { meta: baseMeta(), records: twin });
+
+  const result = await sweep({ paths });
+
+  assert.equal(result.clustered, 1);
+  const canonical = await readFlow(paths.flowsPendingDir, 'login.flow.json');
+  const selectors = canonical.steps[3].target.locators.map((l) => l.selector);
+  assert.ok(
+    selectors.includes('internal:testid=[data-testid="login-submit"]'),
+    'the twin contributes the fallback candidate the canonical lacked',
+  );
+  assert.equal(canonical.id, flowId(canonical), 'a union that changes content recomputes the id');
+});
+
+test('MAT-337: a genuinely different journey on the same origin is never clustered away', async (t) => {
+  const paths = await tempPaths(t);
+  await writeSession(paths, 72000, { meta: baseMeta(), records: loginJourney(1) });
+  await writeSession(paths, 72001, {
+    meta: baseMeta(),
+    records: [
+      ...loginJourney(1),
+      record({ seq: 5, targets: [traceTarget({ name: 'Logout' })], mutating: true }),
+    ],
+  });
+
+  const result = await sweep({ paths });
+
+  assert.equal(result.clustered, 0);
+  assert.equal(result.compiled.length, 2);
+  assert.deepEqual(await listFlowFiles(paths.flowsPendingDir), ['login.flow.json', 'logout.flow.json']);
+});
+
+test('MAT-337: two steps that only look alike to stepSignature are never clustered', async (t) => {
+  // `#confirm` and `#delete-account` share the (op, role, name, urlPattern)
+  // tuple exactly -- both carry no role and no name -- so the anchor check,
+  // not the signature, is what keeps them apart.
+  const paths = await tempPaths(t);
+  const rawTarget = (selector) => ({ ref: 'e1', resolved: selector, alternates: [{ kind: 'css', selector }] });
+  const journey = (selector) => [
+    record({ seq: 1, tool: 'browser_navigate', params: { url: 'https://shop.example/settings' } }),
+    record({ seq: 2, targets: [rawTarget(selector)], mutating: true }),
+  ];
+  await writeSession(paths, 73000, { meta: baseMeta(), records: journey('#confirm') });
+  await writeSession(paths, 73001, { meta: baseMeta(), records: journey('#delete-account') });
+
+  const result = await sweep({ paths });
+
+  assert.equal(result.clustered, 0);
+  assert.equal(result.compiled.length, 2);
 });

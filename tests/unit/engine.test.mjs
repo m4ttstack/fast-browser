@@ -40,6 +40,7 @@ test('the attached arg list keeps its exact historical order', () => {
     '--extension',
     '--extension-id=abcdefghijklmnopabcdefghijklmnop',
     '--snapshot-mode=none',
+    '--codegen=none',
     '--timeout-settle=200',
     '--output-dir=/synthetic-home/.fast-browser',
   ]);
@@ -51,6 +52,7 @@ test('the cdp engine emits the endpoint and never --headless or --extension', ()
   assert.deepEqual(args, [
     '--cdp-endpoint=http://127.0.0.1:9222',
     '--snapshot-mode=none',
+    '--codegen=none',
     '--timeout-settle=200',
     '--output-dir=/synthetic-home/.fast-browser',
   ]);
@@ -64,6 +66,7 @@ test('both engines inherit the shared observation defaults', () => {
   for (const config of [legacy, cloud]) {
     const args = runtimeArgs({ config, paths, lock });
     assert.ok(args.includes('--snapshot-mode=none'), 'snapshots stay off by default');
+    assert.ok(args.includes('--codegen=none'), 'the code echo stays off by default (MAT-338)');
     assert.ok(args.includes('--timeout-settle=200'), 'settle stays at 200ms');
   }
 });
