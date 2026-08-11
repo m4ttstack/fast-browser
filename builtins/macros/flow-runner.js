@@ -86,6 +86,15 @@ async (page, args) => {
   // cover every failure path, including the earliest ones. Removed again
   // in `finally` so a page reused across many replay calls never
   // accumulates one per call.
+  //
+  // This ordering is load-bearing, not incidental: registering here means
+  // the listener exists before the flow-shape validation below (the
+  // `failArgs` calls in the top-of-try block) can refuse the run. That is
+  // still correct because attaching a listener does not itself interact
+  // with the page -- no page interaction happens before a validation
+  // refusal either way -- but moving this registration to after validation
+  // would leave a window where an early file chooser has no listener to
+  // catch it.
   let latestChooser = null;
   const onFileChooser = (chooser) => { latestChooser = chooser; };
   page.on('filechooser', onFileChooser);
@@ -1028,6 +1037,17 @@ async (page, args) => {
         }
         case 'expect': {
           if (step.state === 'visible' || step.state === 'hidden') {
+            // Note only, no behavior change: for state 'hidden', candidate 0
+            // is checked first (resolveTarget's normal probe order) and
+            // Playwright's 'hidden' waitFor is satisfied by an element that
+            // is simply not attached to the DOM at all, not only by one that
+            // exists but is invisible. A detached candidate 0 therefore
+            // already satisfies 'hidden' on the very first probe, so the
+            // walk never advances to a later candidate and locatorFallbacks
+            // recording (usedIndex > 0) is meaningless for this state -- it
+            // will never fire even when a later candidate would also match.
+            // This matches Playwright's own semantics for 'hidden' and is
+            // not something this runner can or should change.
             await resolveTarget(step.target, index, { state: step.state });
           } else {
             const locator = await resolveTarget(step.target, index, { state: 'attached' });

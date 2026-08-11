@@ -730,7 +730,44 @@ test('list reports both tiers with health, ready sorted before pending', async (
         lastHealed: null,
       },
     ],
+    warnings: [],
   });
+});
+
+// A5: a corrupt .flow.json used to be silently skipped here with no signal
+// at all, not even a count -- `list` destructured only `entries` out of
+// `loadAllArtifacts`, dropping its `warnings`. Pins that `flows list` now
+// surfaces the same 'artifact-load' warning `find` already does, so a
+// caller has SOME way to notice before a same-name compile silently
+// overwrites the corrupt file.
+test('list surfaces an artifact-load warning for a corrupt flow file, not just a silent skip', async () => {
+  const paths = { flowsDir: '/h/flows', flowsPendingDir: '/h/pending' };
+  const ready = validFlow({ name: 'b-flow' });
+
+  const report = await flows(
+    { sub: 'list', json: true },
+    {
+      paths,
+      listFlowFiles: async (dir) => (
+        dir === paths.flowsDir ? ['b-flow.flow.json', 'broken.flow.json'] : []
+      ),
+      readFlowFile: async (filePath) => {
+        if (filePath.includes('broken')) return 'not valid json';
+        return JSON.stringify(ready);
+      },
+    },
+  );
+
+  assert.equal(report.flows.length, 1);
+  assert.deepEqual(report.warnings, [
+    {
+      kind: 'artifact-load',
+      file: 'broken.flow.json',
+      tier: 'ready',
+      reason: report.warnings[0].reason,
+    },
+  ]);
+  assert.match(report.warnings[0].reason, /^invalid:/);
 });
 
 // --- compile ---

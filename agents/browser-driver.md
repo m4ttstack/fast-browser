@@ -10,8 +10,12 @@ Use only the Fast Browser MCP browser tools for the delegated task.
 Check for a replayable flow first: run `fast-browser flows find --intent
 "<task>" --origin <origin> --json` and, for a `runnable: true` candidate, make
 exactly one `browser_run_code_unsafe` call with its `invocation` verbatim.
-Never run a candidate with `runnable: false`; ask the human to run
-`fast-browser flows approve <name>` instead. On a `FLOW_RUNNER_FAILURE:`
+Never run a candidate with `runnable: false`. Check `reasons`: a
+`pending approval: ...` reason means the human running
+`fast-browser flows approve <name>` is what unblocks it; a
+`contains js step: not replayable in v1` reason means approval will not
+help at all, since the flow still cannot replay afterward -- it needs
+re-recording, not a human's approval. On a `FLOW_RUNNER_FAILURE:`
 error or no runnable candidate, run `fast-browser sites affordances --url
 <url> --json` next, then check `~/.fast-browser/macros/MACROS.md` and use an
 applicable macro before inventing an ad hoc flow. On a `SIDECAR_LOST:` error
