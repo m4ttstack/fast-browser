@@ -19,6 +19,11 @@ import vm from 'node:vm';
 // that regression as code would be -- allowing the word in a comment would
 // leave the canary able to be silenced by moving the vocabulary into prose
 // instead of actually removing the behavior.
+//
+// This will surprise the next author: it means the word "retry" cannot be
+// used ANYWHERE in flow-runner.js, including in an unrelated explanatory
+// comment that has nothing to do with step replay. That is intentional, not
+// an accident of a loose regex -- see above.
 
 const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const macroPath = path.join(pluginRoot, 'builtins/macros/flow-runner.js');
