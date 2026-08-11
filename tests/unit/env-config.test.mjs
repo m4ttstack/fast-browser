@@ -142,6 +142,26 @@ test('every allowlisted FAST_BROWSER_* variable is accepted', async () => {
   assert.equal(config.debugCapture, true);
 });
 
+test('the e2e harness variables do not exit 78 on the cloud path', async () => {
+  // entry.mjs hands cloudConfig the whole ambient environment, and
+  // tests/e2e/cdp-engine.test.mjs spreads `...process.env` into the child it
+  // drives through this contract. HARNESS.md documents running those suites
+  // as `FAST_BROWSER_RELEASE_DIR=/path npm run test:cdp`, so these names are
+  // genuinely present in a developer's shell when this parser runs. Failing
+  // closed on them rejects a documented workflow rather than catching a typo,
+  // which is the exact failure this allowlist exists to avoid.
+  const ambient = {
+    ...MINIMAL,
+    FAST_BROWSER_RELEASE_DIR: '/path/to/fast-browser-dist',
+    FAST_BROWSER_LIVE_E2E: '1',
+    FAST_BROWSER_LIVE_CDP_URL: 'http://127.0.0.1:9333',
+    FAST_BROWSER_LIVE_EXTENSION_TOKEN: 'token',
+  };
+
+  const config = await cloudConfig(ambient, fakeFs());
+  assert.equal(config.engine, 'cdp');
+});
+
 test('an empty FAST_BROWSER_SECRETS exits 78 rather than reading as no secrets', async () => {
   // Presence is presence, exactly as for FAST_BROWSER_ENGINE. Treating it as
   // absence is the dangerous reading: with no secrets file resolved, a login
