@@ -48,7 +48,7 @@ lookups are narrow, so pages come back as the few facts you needed rather than
 a full accessibility dump.
 
 **Two hosts, one setup.** Claude Code and Codex get the same tools, the same
-three skills, and the same macro library.
+six skills, and the same macro library.
 
 **It stays out of your way.** Fast Browser does not steal focus, so an agent
 can work while you keep using the browser.

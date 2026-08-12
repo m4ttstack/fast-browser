@@ -14,9 +14,10 @@ never work, and puts what is left in front of them with its steps rendered.
 This skill may reject. It may never approve.
 
 Approval needs a TTY this skill does not have, and that is the gate working as
-designed, not an obstacle to route around. Never wrap, pipe, expect, or
-otherwise automate the confirm prompt. Print the command and let the human type
-it themselves.
+designed, not an obstacle to route around. Never wrap, pipe, script, or
+otherwise automate the confirm prompt, and never simulate the human's
+keystrokes with a terminal-automation tool. Print the command for the human to
+run themselves; do not run it yourself.
 
 Everything here moves flows toward less runnable, never more. That is what
 makes acting without asking safe.
@@ -44,7 +45,12 @@ Sort every pending flow into exactly one bucket, first match wins:
 2. `dead-origin` ... the origin host is `localhost`, `127.0.0.1`, or `::1`, and
    the origin is not on the user's keep-list.
 3. `superseded` ... a sibling in the same name family, on the same origin,
-   whose steps are a superset of this one's.
+   whose steps are a superset of this one's. A name family is a set of flows
+   whose names are identical up to a trailing `-<number>` suffix, so `login`,
+   `login-2`, and `login-3` are one family. One flow's steps are a superset
+   of another's when the other's ordered sequence of `(op, target role,
+   target name)` triples appears as a subsequence of the first flow's own
+   sequence.
 4. `reviewable` ... everything else.
 
 The `dead-origin` rule deliberately catches every loopback origin, not only the
@@ -54,6 +60,11 @@ purpose and safe only because this bucket is never rejected automatically.
 
 Report bucket counts, origins by frequency, and name families. Ask for a
 keep-list if loopback origins dominate.
+
+The keep-list is user-supplied and empty by default. An empty keep-list means
+every loopback origin is only ever proposed for rejection under `dead-origin`,
+never rejected outright, so a missing keep-list can never by itself cause a
+deletion.
 
 ## Phase 2: clean
 
@@ -85,7 +96,8 @@ will silently decline.
 
 For each `reviewable` flow, render what the prompt cannot show: origin, side
 effects, arg names, and every step with its op, its target role and name, and
-its redacted value. Then hand it over:
+its redacted value. Then print this command for the human to run themselves;
+do not run it yourself:
 
 ```
 fast-browser flows approve <name>
@@ -95,8 +107,9 @@ They type APPROVE, exact case. Anything else declines and exits 2. Ctrl-D
 currently raises an uncaught `AbortError` rather than declining cleanly, so
 suggest Ctrl-C to back out.
 
-If approve fails because a ready-tier flow already holds that name, say which name collided. The fix is to rename or reject one of the two, and the raw error
-does not make that obvious.
+If approve fails because a ready-tier flow already holds that name, say which
+name collided. The fix is to rename or reject one of the two, and the raw
+error does not make that obvious.
 
 Print the `dead-origin` and `superseded` proposals here too, as reject commands
 the human can run or ignore.
@@ -113,4 +126,8 @@ deliverable; there is no re-approval path to offer.
 ## Corrupt artifacts
 
 A `.flow.json` that will not parse shows up in `warnings` from
-`flows list --json`. Report it and leave it alone. Unparseable means unjudgeable, and a parse failure is not evidence a flow is junk.
+`flows list --json`. Report it and leave it alone.
+Unparseable means unjudgeable, and a parse failure is not evidence a flow is
+junk. A corrupt artifact is excluded from bucketing entirely: it never lands
+in `unapprovable`, `dead-origin`, `superseded`, or `reviewable`, since none of
+those judgments can be made about a file that cannot be read.

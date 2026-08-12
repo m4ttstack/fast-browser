@@ -7,13 +7,11 @@ import { fileURLToPath } from 'node:url';
 import { OFFERED_PALETTES } from '../../lib/annotate/palette.mjs';
 
 const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const skillNames = [
-  'fast-browsing',
-  'browser-macros',
-  'mine-macros',
-  'annotating-screenshots',
-  'capturing-flows',
-];
+
+async function skillNamesFromDisk() {
+  const entries = await readdir(path.join(pluginRoot, 'skills'), { withFileTypes: true });
+  return entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort();
+}
 
 const deployTextExtensions = new Set([
   '.json',
@@ -26,7 +24,9 @@ const deployTextExtensions = new Set([
 ]);
 
 // Never part of the npm package: dependency, VCS, and gitignored scratch dirs.
-const unpackagedDirectories = new Set(['node_modules', '.git', '.superpowers', '.worktrees']);
+const unpackagedDirectories = new Set([
+  'node_modules', '.git', '.superpowers', '.worktrees', '.local-dev',
+]);
 
 async function packagedTextFiles(directory, relative = '') {
   const files = [];
@@ -62,7 +62,7 @@ test('packages portable skill and macro files without host-specific remnants', a
 });
 
 test('skill frontmatter contains only portable discovery fields', async () => {
-  for (const name of skillNames) {
+  for (const name of await skillNamesFromDisk()) {
     const skillFile = path.join(pluginRoot, 'skills', name, 'SKILL.md');
     const text = await readFile(skillFile, 'utf8');
     const match = text.match(/^---\n([\s\S]*?)\n---\n/);
@@ -607,6 +607,17 @@ test('the reviewing-flows skill pins its buckets, its safety contract, and the r
   assert.match(command, /expected: 'APPROVE'/);
   assert.match(text, /type APPROVE/i);
 
+  // `reject` is a real subcommand, not a skill invention.
+  assert.match(command, /SUBCOMMANDS = new Set\(\[[^\]]*'reject'[^\]]*\]\)/);
+
+  // A js step is identified by `op === 'js'`, pinned against the artifact
+  // module's own step-op classification.
+  const artifact = await readFile(
+    path.join(pluginRoot, 'lib/flows/artifact.mjs'),
+    'utf8',
+  );
+  assert.match(artifact, /op === 'js'/);
+
   // The safety contract, which is the whole reason this skill is allowed to
   // act on its own. Each of these is a claim a reviewer should be able to
   // check against behavior.
@@ -628,12 +639,12 @@ test('the reviewing-flows skill pins its buckets, its safety contract, and the r
   assert.match(text, /propose, never act/i);
 
   // Corrupt artifacts are reported, never rejected.
-  assert.match(text, /unparseable means unjudgeable/i);
+  assert.match(text, /unparseable\s+means\s+unjudgeable/i);
 
   // Cleaning is auditable, which is what makes a large batch reasonable to
   // accept, and a name collision names the colliding flow.
   assert.match(text, /rejected ledger/);
-  assert.match(text, /which name collided/);
+  assert.match(text, /which\s+name\s+collided/);
 
   // The data sources, including the fact that `list` does not carry steps.
   assert.match(text, /flows list --json/);
@@ -644,8 +655,12 @@ test('the reviewing-flows skill pins its buckets, its safety contract, and the r
   assert.match(text, /lastHealed/);
   assert.match(text, /without re-entering the gate/);
 
-  // The skill must never automate the prompt.
-  assert.doesNotMatch(text, /echo APPROVE/);
+  // The skill must never automate the prompt: echo/printf piped in, a
+  // heredoc/herestring, `expect`, or `yes` piping the literal.
+  assert.doesNotMatch(
+    text,
+    /echo\s+APPROVE|printf[^\n]*APPROVE|\bexpect\b|<<<\s*APPROVE|yes\s+APPROVE/,
+  );
 });
 
 // FB-23: Every skill must declare itself to the Codex host via agents/openai.yaml.

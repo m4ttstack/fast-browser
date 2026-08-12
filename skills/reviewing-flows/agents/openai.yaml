@@ -1,4 +1,4 @@
 interface:
   display_name: "Reviewing Flows"
-  short_description: "Triage the pending flow queue and prepare approvals."
+  short_description: "Triage the pending flow queue and stage flows for human approval."
   default_prompt: "Use $reviewing-flows to review the pending flow queue."
