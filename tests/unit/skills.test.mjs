@@ -633,6 +633,45 @@ test('the reviewing-flows skill pins its buckets, its safety contract, and the r
   assert.match(text, /reviewable/);
   assert.match(text, /first match wins/i);
 
+  // The superseded rule has two failure modes that were found by running it
+  // against a real 50-flow queue, and both are pinned here so a later
+  // simplification cannot quietly reintroduce them.
+  //
+  // 1. A family of byte-identical recordings: every member covers every
+  //    other, so without a keeper tiebreak all of them bucket as superseded
+  //    and NONE survives. Observed live on four identical `toggle-todo`
+  //    recordings, which the rule proposed deleting in full.
+  // 2. Two recordings of the same journey under unrelated names: `selenium`
+  //    is a strict prefix of `submit` on the same origin, and a rule scoped
+  //    to a shared name family misses it entirely.
+  //
+  // Hence: the rule keys on origin, explicitly NOT on the name, and states a
+  // tiebreak that guarantees exactly one survivor.
+  assert.match(text, /tiebreak/i);
+  assert.match(text, /exactly\s+one\s+survivor/i);
+  assert.match(text, /same\s+origin/i);
+  assert.match(text, /name\s+is\s+not\s+part\s+of\s+this\s+rule/i);
+
+  // A fresh agent handed only this document produced the right buckets but
+  // had to guess on four points. Each guess is now stated, because a rule
+  // that needs guessing is not reproducible run to run:
+  //   - which flows can do the covering (both tiers, not just pending)
+  //   - what "sorts first" means (byte order, so it is deterministic)
+  //   - whether the tiebreak is judged pairwise or against all rivals
+  //   - whether the port is part of the loopback host test
+  assert.match(text, /both\s+tiers/i);
+  assert.match(text, /byte\s+order/i);
+  assert.match(text, /pairwise/i);
+  assert.match(text, /ignoring\s+the\s+port/i);
+
+  // Coverage may come from either tier, and `flows list --json` carries no
+  // steps, so BOTH artifact directories have to be named or the ready half
+  // of that rule is unreachable. A re-test agent hit exactly this: it read
+  // "B may come from either tier" and had no documented way to get a ready
+  // flow's steps.
+  assert.match(text, /~\/\.fast-browser\/flows-pending\//);
+  assert.match(text, /~\/\.fast-browser\/flows\/</);
+
   // Only the content fact earns autonomous rejection. Both of these open a
   // sentence in the skill, so they are matched case-insensitively.
   assert.match(text, /only `unapprovable` is rejected automatically/i);
