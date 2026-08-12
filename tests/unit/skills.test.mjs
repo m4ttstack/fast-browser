@@ -647,3 +647,28 @@ test('the reviewing-flows skill pins its buckets, its safety contract, and the r
   // The skill must never automate the prompt.
   assert.doesNotMatch(text, /echo APPROVE/);
 });
+
+// FB-23: Every skill must declare itself to the Codex host via agents/openai.yaml.
+// This is the guard that makes a missing parity file impossible for any future skill.
+test('every skill ships a Codex parity file with a populated interface', async () => {
+  const skillsDir = path.join(pluginRoot, 'skills');
+  const names = (await readdir(skillsDir, { withFileTypes: true }))
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .sort();
+
+  assert.ok(names.includes('reviewing-flows'), 'reviewing-flows is missing');
+
+  for (const name of names) {
+    const parity = await readFile(
+      path.join(skillsDir, name, 'agents/openai.yaml'),
+      'utf8',
+    );
+    // A skill whose parity file exists but is blank is invisible to the Codex
+    // host in exactly the same way a missing one is.
+    assert.match(parity, /^interface:/m, `${name}: no interface block`);
+    assert.match(parity, /display_name: "[^"]+"/, `${name}: no display_name`);
+    assert.match(parity, /short_description: "[^"]+"/, `${name}: no short_description`);
+    assert.match(parity, /default_prompt: "[^"]+"/, `${name}: no default_prompt`);
+  }
+});
