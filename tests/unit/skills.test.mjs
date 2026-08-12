@@ -589,3 +589,61 @@ test('mine-macros delineates the batch path from the flows fast path', async () 
   assert.match(fastBrowsing, /Distill the session after an ad hoc solve/);
   assert.doesNotMatch(fastBrowsing, /two sessions|2\+/);
 });
+
+// The approve literal is pinned against the CLI's own `expected` value rather
+// than against the skill's internal consistency: a skill that told a human to
+// type the wrong word would fail every approval while looking correct.
+test('the reviewing-flows skill pins its buckets, its safety contract, and the real approve literal', async () => {
+  const text = await readFile(
+    path.join(pluginRoot, 'skills/reviewing-flows/SKILL.md'),
+    'utf8',
+  );
+  const command = await readFile(
+    path.join(pluginRoot, 'lib/commands/flows.mjs'),
+    'utf8',
+  );
+
+  // The literal the human must type, taken from the command that demands it.
+  assert.match(command, /expected: 'APPROVE'/);
+  assert.match(text, /type APPROVE/i);
+
+  // The safety contract, which is the whole reason this skill is allowed to
+  // act on its own. Each of these is a claim a reviewer should be able to
+  // check against behavior.
+  assert.match(text, /may reject/i);
+  assert.match(text, /never approve/i);
+  assert.match(text, /less runnable/);
+  assert.match(text, /needs a TTY this skill does not have/);
+
+  // The four buckets, first match wins.
+  assert.match(text, /unapprovable/);
+  assert.match(text, /dead-origin/);
+  assert.match(text, /superseded/);
+  assert.match(text, /reviewable/);
+  assert.match(text, /first match wins/i);
+
+  // Only the content fact earns autonomous rejection. Both of these open a
+  // sentence in the skill, so they are matched case-insensitively.
+  assert.match(text, /only `unapprovable` is rejected automatically/i);
+  assert.match(text, /propose, never act/i);
+
+  // Corrupt artifacts are reported, never rejected.
+  assert.match(text, /unparseable means unjudgeable/i);
+
+  // Cleaning is auditable, which is what makes a large batch reasonable to
+  // accept, and a name collision names the colliding flow.
+  assert.match(text, /rejected ledger/);
+  assert.match(text, /which name collided/);
+
+  // The data sources, including the fact that `list` does not carry steps.
+  assert.match(text, /flows list --json/);
+  assert.match(text, /~\/\.fast-browser\/flows-pending\//);
+  assert.match(text, /does not carry steps/);
+
+  // Drift: a heal rewrites approved content with no gate.
+  assert.match(text, /lastHealed/);
+  assert.match(text, /without re-entering the gate/);
+
+  // The skill must never automate the prompt.
+  assert.doesNotMatch(text, /echo APPROVE/);
+});
