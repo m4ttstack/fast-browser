@@ -29,7 +29,6 @@
 // unwrapped rather than translating them into an EmbeddingDimensionMismatchError
 // instance -- that class documents memory-store's specific pairwise check,
 // not a store-interface-wide type every implementation must throw.
-import pg from 'pg';
 import { readdir, readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -37,7 +36,15 @@ import { fileURLToPath } from 'node:url';
 import { TOP_RESULTS } from './store.mjs';
 import { lexicalScore, queryTermsFrom } from './lexical-score.mjs';
 
-const { Pool } = pg;
+// `pg` is loaded on first connection, never at import time, matching the
+// laziness store.mjs already applies one level up: it reaches this module
+// through `await import('./pg-store.mjs')` precisely so a memory-driver
+// caller never pays for the pg driver. A static import here defeated that
+// from the other side -- importing this module required the driver even
+// for callers that only wanted its shape, so a checkout without
+// registry/'s own dependencies installed could not load it at all, and
+// registry/tests/pg-store.test.mjs's REGISTRY_TEST_DATABASE_URL skip gate
+// never got the chance to fire.
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_MIGRATIONS_DIR = join(HERE, '..', 'migrations');
@@ -123,8 +130,11 @@ function rowToRecord(row) {
   };
 }
 
-export function createPgStore(options = {}) {
+export async function createPgStore(options = {}) {
   const { connectionString, migrationsDir = DEFAULT_MIGRATIONS_DIR } = options;
+  // `pg` is CommonJS, so its module.exports arrives as the namespace's
+  // `default`.
+  const { Pool } = (await import('pg')).default;
   const pool = new Pool({ connectionString, connectionTimeoutMillis: CONNECTION_TIMEOUT_MILLIS });
 
   // Fix round 1, finding 1 (verified live): node-postgres surfaces a

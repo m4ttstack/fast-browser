@@ -169,7 +169,7 @@ export async function createStore(driver = 'memory', options = {}) {
   }
   if (driver === 'pg') {
     const { createPgStore } = await import('./pg-store.mjs');
-    return assertStoreShape(createPgStore(options));
+    return assertStoreShape(await createPgStore(options));
   }
   throw new Error(`unknown or not-yet-implemented store driver: ${driver}`);
 }

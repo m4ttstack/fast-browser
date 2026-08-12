@@ -22,11 +22,22 @@
 // not shared with memory-store.test.mjs's version of the same guarantee.
 import assert from 'node:assert/strict';
 import test, { after } from 'node:test';
-import pg from 'pg';
 
 import { createStore } from '../lib/store.mjs';
 import { registerStoreSuite } from './helpers/store-suite.mjs';
 import { makeRecord, unitEmbedding } from './helpers/records.mjs';
+
+// `pg` is imported lazily, inside the helper below, for the same reason
+// pg-store.mjs defers it: a static import here ran at module load, BEFORE
+// the skip gate below could skip anything, so a checkout without
+// registry/'s own dependencies installed failed to load this file at all
+// rather than skipping its suite. The comment on `sharedStore` further
+// down reasoned correctly that a skipped test's body never runs, but an
+// import is not a body.
+async function pgPool(connectionString) {
+  const { Pool } = (await import('pg')).default;
+  return new Pool({ connectionString });
+}
 
 const DATABASE_URL = process.env.REGISTRY_TEST_DATABASE_URL;
 const skip = DATABASE_URL
@@ -47,7 +58,7 @@ async function createFreshPgStore() {
   if (!sharedStore) {
     sharedStore = await createStore('pg', { connectionString: DATABASE_URL });
     await sharedStore.init();
-    truncatePool = new pg.Pool({ connectionString: DATABASE_URL });
+    truncatePool = await pgPool(DATABASE_URL);
   }
   await truncatePool.query('TRUNCATE TABLE canonical_flows');
   return sharedStore;
@@ -152,7 +163,7 @@ test('pg-store: an idle pooled client killed out from under it (e.g. a Railway r
   // (or an operator) terminating the first connection's backend -- the
   // same effect a managed Postgres's own restart/failover has on a
   // connection nothing in this process is currently using.
-  const killer = new pg.Pool({ connectionString: DATABASE_URL });
+  const killer = await pgPool(DATABASE_URL);
   try {
     // Races the Pool's 'error' event against the kill query's own
     // response: pg_terminate_backend's result can come back on the
@@ -193,7 +204,7 @@ test('pg-store: an idle pooled client killed out from under it (e.g. a Railway r
 // init() calls nothing left to race over), then runs two independent
 // pg-store instances' init() concurrently.
 test('pg-store: concurrent init() against a not-yet-migrated database both succeed (one applies, one waits and no-ops)', { skip }, async () => {
-  const resetPool = new pg.Pool({ connectionString: DATABASE_URL });
+  const resetPool = await pgPool(DATABASE_URL);
   try {
     await resetPool.query('DROP TABLE IF EXISTS canonical_flows');
     await resetPool.query('DROP TABLE IF EXISTS schema_migrations');
@@ -211,7 +222,7 @@ test('pg-store: concurrent init() against a not-yet-migrated database both succe
     await second.close();
   }
 
-  const checkPool = new pg.Pool({ connectionString: DATABASE_URL });
+  const checkPool = await pgPool(DATABASE_URL);
   try {
     const { rows } = await checkPool.query('SELECT filename FROM schema_migrations');
     assert.deepEqual(rows.map((row) => row.filename), ['001-init.sql'], 'the migration must be recorded exactly once, not twice, not zero times');

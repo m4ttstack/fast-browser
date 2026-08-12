@@ -61,10 +61,23 @@ test('createStore throws loudly on an unknown driver', async () => {
 // only checks that the factory wires the driver name to a shape-complete
 // store -- it must not require a real database: createPgStore() builds a
 // node-postgres Pool lazily (Pool's constructor never connects on its
-// own), so this stays a fast, offline, always-on test. The gated parity
-// suite that actually exercises this store against Postgres lives in
+// own), so this stays a fast, offline test. The gated parity suite that
+// actually exercises this store against Postgres lives in
 // registry/tests/pg-store.test.mjs (REGISTRY_TEST_DATABASE_URL).
-test('createStore("pg") builds a shape-complete store without needing a real database', async () => {
+//
+// No database, but it does need the DRIVER: building a Pool means
+// constructing node-postgres's class. registry/ is a separate package and
+// a root `npm install` does not install its dependencies, so on a fresh
+// checkout the driver is simply absent. Skip by name in that case rather
+// than failing, the same way the Postgres-backed suite skips on a missing
+// REGISTRY_TEST_DATABASE_URL. Run `npm install` inside registry/ to get
+// this covered.
+const pgDriverMissing = await import('pg').then(() => false, () => true);
+const skipWithoutDriver = pgDriverMissing
+  ? "the 'pg' driver is not installed; run npm install inside registry/"
+  : false;
+
+test('createStore("pg") builds a shape-complete store without needing a real database', { skip: skipWithoutDriver }, async () => {
   const store = await createStore('pg', { connectionString: 'postgres://placeholder@127.0.0.1/placeholder' });
   assert.equal(typeof store.init, 'function');
   assert.equal(typeof store.search, 'function');
