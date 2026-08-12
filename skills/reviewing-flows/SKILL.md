@@ -31,35 +31,63 @@ fast-browser flows list --json
 ```
 
 That gives tier, name, description, origin, health, `lastHealed`, and
-`warnings`. It does not carry steps, side effects, or args, so read each
-artifact directly for those:
+`warnings`. It does not carry steps, side effects, or args, so read the
+artifacts directly for those. Pending and ready live in separate directories:
 
 ```
 ~/.fast-browser/flows-pending/<name>.flow.json
+~/.fast-browser/flows/<name>.flow.json
 ```
+
+Only pending flows get bucketed, but bucket 3 below compares against ready
+flows too, so read both.
 
 Sort every pending flow into exactly one bucket, first match wins:
 
 1. `unapprovable` ... any step has `op: "js"`. Approval can never make it
    runnable; it needs re-recording.
-2. `dead-origin` ... the origin host is `localhost`, `127.0.0.1`, or `::1`, and
-   the origin is not on the user's keep-list.
-3. `superseded` ... a sibling in the same name family, on the same origin,
-   whose steps are a superset of this one's. A name family is a set of flows
-   whose names are identical up to a trailing `-<number>` suffix, so `login`,
-   `login-2`, and `login-3` are one family. One flow's steps are a superset
-   of another's when the other's ordered sequence of `(op, target role,
-   target name)` triples appears as a subsequence of the first flow's own
-   sequence.
+2. `dead-origin` ... the origin's host is `localhost`, `127.0.0.1`, or `::1`,
+   and the origin is not on the user's keep-list. Test the host alone,
+   ignoring the port, but keep-list entries are whole origins, port included:
+   `http://localhost:6001` can be kept without keeping `localhost:7930`.
+3. `superseded` ... another flow on the same origin covers this one and wins
+   the tiebreak. B covers A when A's ordered sequence of `(op, target role,
+   target name)` triples appears as a subsequence of B's. B wins the tiebreak
+   when it has more steps, or the same number of steps and a name that sorts
+   first in plain byte order.
+
+   B may come from either tier. `flows list --json` returns both, and an
+   already-approved flow that covers a pending one is the clearest case of
+   all: the better version is already through the gate. Only pending flows
+   get bucketed, but every flow in both tiers can do the covering.
+
+   Judge the tiebreak pairwise: A is superseded the moment any single B beats
+   it, with no need to find one B that beats every rival at once.
 4. `reviewable` ... everything else.
+
+Name is not part of this rule, and the tiebreak is not decoration. Both come
+from running the rule against a real queue:
+
+- Four `toggle-todo` recordings were byte-identical. Every one covered every
+  other, so a rule without a tiebreak marked all four superseded and kept
+  none. The tiebreak is what guarantees exactly one survivor from any set of
+  mutually-covering flows.
+- `selenium` was a strict prefix of `submit` on the same origin under an
+  unrelated name. A rule scoped to a shared name family missed it.
+
+Two flows where neither covers the other both survive, which is correct: they
+are different journeys.
 
 The `dead-origin` rule deliberately catches every loopback origin, not only the
 ones that look ephemeral. `localhost:6001` and `127.0.0.1:18990` are
 indistinguishable by shape and opposite in value, so the rule is blunt on
 purpose and safe only because this bucket is never rejected automatically.
 
-Report bucket counts, origins by frequency, and name families. Ask for a
-keep-list if loopback origins dominate.
+Report bucket counts, origins by frequency, and name families. A name family
+is a set of flows whose names match up to a trailing `-<number>` suffix, so
+`login`, `login-2`, and `login-3` are one family. Families are worth reporting
+because they show a human where they re-recorded the same journey, but they do
+NOT drive any bucket. Ask for a keep-list if loopback origins dominate.
 
 The keep-list is user-supplied and empty by default. An empty keep-list means
 every loopback origin is only ever proposed for rejection under `dead-origin`,
