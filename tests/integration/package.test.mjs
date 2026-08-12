@@ -75,16 +75,20 @@ const requiredEntries = [
   'package/registry/lib/signing.mjs',
   'package/skills/annotating-screenshots/agents/openai.yaml',
   'package/skills/browser-macros/agents/openai.yaml',
+  'package/skills/capturing-flows/agents/openai.yaml',
   'package/skills/fast-browsing/agents/openai.yaml',
   'package/skills/mine-macros/agents/openai.yaml',
+  'package/skills/reviewing-flows/agents/openai.yaml',
   'package/templates/codex/browser_driver.toml',
   'package/templates/routing/claude/fast-browser-routing.md',
   'package/templates/routing/claude/fast-browser-verification-consent.md',
   'package/templates/routing/codex/fast-browser.md',
   'package/skills/annotating-screenshots/SKILL.md',
   'package/skills/browser-macros/SKILL.md',
+  'package/skills/capturing-flows/SKILL.md',
   'package/skills/fast-browsing/SKILL.md',
   'package/skills/mine-macros/SKILL.md',
+  'package/skills/reviewing-flows/SKILL.md',
   'package/runtime-lock.json',
   'package/README.md',
   'package/SECURITY.md',
@@ -207,8 +211,8 @@ test('npm package contains only portable deployable Fast Browser assets', async 
   }
   assert.equal(
     entries.filter((entry) => /\/skills\/[^/]+\/SKILL\.md$/.test(entry)).length,
-    5,
-    'package must contain exactly five real skills',
+    6,
+    'package must contain exactly six real skills',
   );
 
   for (const entry of entries) {
