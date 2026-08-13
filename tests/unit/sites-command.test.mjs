@@ -153,6 +153,7 @@ test('affordances reports found:true with the freshest digest plus the mined inv
         siteArgs = { pathsArg, origin, options };
         return {
           inventory: { patterns: { '/cart/:id': { targets: [{ role: 'button', name: 'Place order' }] } } },
+          quirks: { quirks: [] },
         };
       },
     },
@@ -170,6 +171,7 @@ test('affordances reports found:true with the freshest digest plus the mined inv
     pattern: '/cart/:id',
     digest: { affordances: ['button:Place order'] },
     inventory: [{ role: 'button', name: 'Place order' }],
+    quirks: [],
   });
 });
 
@@ -181,6 +183,7 @@ test('affordances reports found:false but still returns the mined inventory as t
       readDigest: async () => null,
       readSite: async () => ({
         inventory: { patterns: { '/cart': { targets: [{ role: 'button', name: 'Place order' }] } } },
+        quirks: { quirks: [] },
       }),
     },
   );
@@ -193,6 +196,7 @@ test('affordances reports found:false but still returns the mined inventory as t
     pattern: '/cart',
     digest: null,
     inventory: [{ role: 'button', name: 'Place order' }],
+    quirks: [],
   });
 });
 
@@ -202,11 +206,35 @@ test('affordances returns an empty inventory array when nothing has been mined f
     {
       paths: { sitesDir: '/h/sites', dataDir: '/h' },
       readDigest: async () => null,
-      readSite: async () => ({ inventory: { patterns: {} } }),
+      readSite: async () => ({ inventory: { patterns: {} }, quirks: { quirks: [] } }),
     },
   );
   assert.equal(report.found, false);
   assert.deepEqual(report.inventory, []);
+});
+
+test('affordances returns the quirks for the requested pattern plus origin-wide (null-pattern) quirks, and no others', async () => {
+  const report = await sites(
+    { sub: 'affordances', url: 'https://example.com/cart/123', json: true },
+    {
+      paths: { sitesDir: '/h/sites', dataDir: '/h' },
+      readDigest: async () => null,
+      readSite: async () => ({
+        inventory: { patterns: {} },
+        quirks: {
+          quirks: [
+            { name: 'cart-tooltip', urlPattern: '/cart/:id' },
+            { name: 'cookie-banner', urlPattern: null },
+            { name: 'checkout-modal', urlPattern: '/checkout' },
+          ],
+        },
+      }),
+    },
+  );
+  assert.deepEqual(report.quirks, [
+    { name: 'cart-tooltip', urlPattern: '/cart/:id' },
+    { name: 'cookie-banner', urlPattern: null },
+  ]);
 });
 
 test('affordances refuses an unparseable or non-http(s) url without echoing it', async () => {

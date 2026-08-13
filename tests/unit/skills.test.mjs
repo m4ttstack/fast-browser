@@ -433,9 +433,9 @@ test('fast-browsing pins the sites affordances/show CLI shapes against the real 
     .map(([, name]) => name);
   assert.deepEqual(
     affordancesFields,
-    ['command', 'sub', 'found', 'stale', 'savedAt', 'pattern', 'digest', 'inventory'],
+    ['command', 'sub', 'found', 'stale', 'savedAt', 'pattern', 'digest', 'inventory', 'quirks'],
   );
-  for (const field of ['found', 'stale', 'inventory', 'digest']) {
+  for (const field of ['found', 'stale', 'inventory', 'digest', 'quirks']) {
     assert.match(text, new RegExp('`' + field + '`'), field);
   }
 

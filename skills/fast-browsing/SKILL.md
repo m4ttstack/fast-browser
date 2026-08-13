@@ -113,6 +113,11 @@ If `found` is true or `inventory` is non-empty, use the returned `digest`
 `page-affordances` cold. Check `stale` and `savedAt` before trusting it
 without verification.
 
+The response also carries `quirks`: recorded page hazards for this pattern
+plus origin-wide ones (a cookie banner that eats the first click, an
+overlay to dismiss). Apply them before your first interaction with the
+page.
+
 For a multi-page plan, run `fast-browser sites show <origin> --json` and
 read `edges` for the route graph between patterns.
 
