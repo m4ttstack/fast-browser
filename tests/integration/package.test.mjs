@@ -10,7 +10,7 @@ import {
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import test from 'node:test';
 import { gunzipSync } from 'node:zlib';
 
@@ -326,5 +326,34 @@ test('npm package contains only portable deployable Fast Browser assets', async 
   assert.match(notices, /Apache License 2\.0/);
   for (const value of [lock.sourceCommit, lock.runtime.file, lock.extension.file]) {
     assert.ok(notices.includes(value), `notices must record ${value}`);
+  }
+});
+
+// A consumer that embeds this package inside a signed macOS app bundle must
+// strip dotted directories (.claude-plugin/, .codex-plugin/): codesign treats
+// them as malformed nested bundles and refuses to seal the outer app. A module
+// that reads one at import time is unloadable there — which shipped a
+// bundled fast-browser that crashed on every invocation.
+test('host modules import with the dotted plugin directories absent', async () => {
+  const staged = await mkdtemp(path.join(os.tmpdir(), 'fb-nodotted-'));
+  try {
+    await execFileAsync('rsync', [
+      '-a',
+      '--exclude', '.git',
+      '--exclude', '.claude-plugin',
+      '--exclude', '.codex-plugin',
+      `${pluginRoot}/`,
+      `${staged}/`,
+    ]);
+    for (const dotted of ['.claude-plugin', '.codex-plugin']) {
+      await assert.rejects(lstat(path.join(staged, dotted)), 'fixture must not contain the dotted dirs');
+    }
+    for (const host of ['claude', 'codex']) {
+      const entry = path.join(staged, 'lib', 'hosts', `${host}.mjs`);
+      const mod = await import(pathToFileURL(entry).href);
+      assert.ok(mod, `${host}.mjs must import without the dotted plugin dirs`);
+    }
+  } finally {
+    await rm(staged, { recursive: true, force: true });
   }
 });
