@@ -12,12 +12,11 @@ async function readJson(path) {
 }
 
 test('publishes host-compatible bundled MCP contracts', async () => {
-  const [claude, codex, claudeMcp, codexMcp, claudeMarketplace, codexMarketplace] = await Promise.all([
+  const [claude, codex, claudeMcp, codexMcp, codexMarketplace] = await Promise.all([
     readJson(resolve(pluginRoot, '.claude-plugin/plugin.json')),
     readJson(resolve(pluginRoot, '.codex-plugin/plugin.json')),
     readJson(resolve(pluginRoot, '.mcp.json')),
     readJson(resolve(pluginRoot, 'adapters/codex/mcp.json')),
-    readJson(resolve(repositoryRoot, '.claude-plugin/marketplace.json')),
     readJson(resolve(repositoryRoot, '.agents/plugins/marketplace.json')),
   ]);
 
@@ -46,7 +45,6 @@ test('publishes host-compatible bundled MCP contracts', async () => {
       args: ['${PLUGIN_ROOT}/bin/fast-browser-mcp.mjs'],
     },
   });
-  assert.equal(claudeMarketplace.plugins[0].source, '.');
   assert.deepEqual(codexMarketplace.plugins[0].source, {
     source: 'local',
     path: '.',
