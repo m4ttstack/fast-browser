@@ -34,17 +34,6 @@ test('both plugin manifests carry the same SPDX license and version as the packa
   assert.equal(codex.version, packageJson.version);
 });
 
-test('the marketplace entry matches the plugin version', async () => {
-  const [packageJson, marketplace] = await Promise.all([
-    json('package.json'),
-    json('.claude-plugin/marketplace.json', repoRoot),
-  ]);
-  const entry = marketplace.plugins.find(({ name }) => name === 'fast-browser');
-
-  assert.ok(entry, 'fast-browser is listed in the marketplace');
-  assert.equal(entry.version, packageJson.version);
-});
-
 test('the declared license file exists and states that license', async () => {
   const [packageJson, license] = await Promise.all([
     json('package.json'),
@@ -169,16 +158,15 @@ test('the published tree exposes both host plugin manifests', async () => {
   ]);
 });
 
-// Attribution was inconsistent before publication: both plugin manifests and
-// the marketplace named a different person than the git identity that
-// authored the commits, and the LICENSE copyright line is a legal claim that
-// has to name the actual holder. Cross-check them rather than trusting any
-// one file, since these drifted apart silently.
-test('attribution is consistent across manifests, marketplace, and LICENSE', async () => {
-  const [claude, codex, marketplace, license] = await Promise.all([
+// Attribution was inconsistent before publication: the plugin manifests named
+// a different person than the git identity that authored the commits, and the
+// LICENSE copyright line is a legal claim that has to name the actual holder.
+// Cross-check them rather than trusting any one file, since these drifted
+// apart silently.
+test('attribution is consistent across manifests and LICENSE', async () => {
+  const [claude, codex, license] = await Promise.all([
     json('.claude-plugin/plugin.json'),
     json('.codex-plugin/plugin.json'),
-    json('.claude-plugin/marketplace.json', repoRoot),
     readFile(path.join(pluginRoot, 'LICENSE'), 'utf8'),
   ]);
   const holder = license.match(/Copyright \(c\) \d{4} (.+)/)?.[1]?.trim();
@@ -187,7 +175,6 @@ test('attribution is consistent across manifests, marketplace, and LICENSE', asy
   assert.equal(claude.author.name, holder);
   assert.equal(codex.author.name, holder);
   assert.equal(codex.interface.developerName, holder);
-  assert.equal(marketplace.owner.name, holder);
 });
 
 test('the annotation skill ships for both hosts', async () => {

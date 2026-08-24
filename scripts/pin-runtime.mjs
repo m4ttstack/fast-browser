@@ -125,7 +125,7 @@ async function main() {
     const pluginFrom = await currentPluginVersion();
     if (pluginFrom === args.plugin)
       throw new Error(`--plugin ${args.plugin} is already this repo's version`);
-    for (const relative of ['package.json', 'package-lock.json', '.claude-plugin/plugin.json', '.codex-plugin/plugin.json', '.claude-plugin/marketplace.json'])
+    for (const relative of ['package.json', 'package-lock.json', '.claude-plugin/plugin.json', '.codex-plugin/plugin.json'])
       edits.push(await rewrite(relative, [[`"version": "${pluginFrom}"`, `"version": "${args.plugin}"`]], []));
 
     if (args.dryRun) {
