@@ -90,22 +90,32 @@ never loosen or delete them to get green.
 
 ## Before blaming your change for a test failure
 
-This suite passes 1635/1669 with 33 skipped, and both it and the fork's
-extension suite have known pre-existing failures: here,
-`plugin-install.test.mjs › both host adapters resolve the local catalog from
-isolated homes`; in the fork, `cli.spec.ts › attach <url> --extension`.
+This suite is green at 1669/1669 (33 skipped) and the fork's extension suite
+has known pre-existing failures (`cli.spec.ts › attach <url> --extension`).
 Baseline first: stash your change, rebuild if the artifact matters, re-run.
 Slow browser tests also contaminate each other, so confirm a failure in
 isolation before treating it as real.
 
-That install failure is real, not stale coverage. This repo stopped being a
-Claude marketplace in MAT-378, but the CLI still defaults `--source` to
+## This repo is not a Claude marketplace
+
+MAT-378 moved that role out, so there is no `.claude-plugin/marketplace.json`
+here and re-adding one is a regression: binding the `mattstack` name to one
+plugin's own repo is what made every other plugin install as
+`<plugin>@<that-repo>`. The catalog that replaces it is generated at release
+time from the sibling repos and published as `m4ttstack/mattstack-marketplace`
+(MAT-389), which does not exist yet.
+
+Two live consequences. The CLI still defaults `--source` to
 `m4ttstack/fast-browser` (`lib/cli/parse-args.mjs`), so a clean-machine
-`setup` still tries to add a catalog that is no longer here. The default is
-waiting on `m4ttstack/mattstack-marketplace` to exist (MAT-389); MAT-388
-tracks repointing it. Codex is unaffected only because its catalog,
-`.agents/plugins/marketplace.json`, is still served from this repo — that
-half of the consolidation is MAT-390.
+`setup` adds a catalog that is no longer here and fails; MAT-388 repoints it
+once MAT-389 lands. And Codex still resolves `mattstack` from this repo via
+`.agents/plugins/marketplace.json`, so that half of the consolidation is
+unfinished by choice — MAT-390.
+
+`plugin-install.test.mjs` therefore builds its own catalog in a temp dir
+rather than installing this repo. It copies the packed plugin instead of
+symlinking it, because Codex's `localPluginPathMatches` rejects a plugin path
+whose realpath escapes the marketplace root.
 
 ## Local install
 
