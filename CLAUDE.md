@@ -68,10 +68,10 @@ npm run pin-runtime -- --runtime 0.1.0-alpha.9 --plugin 0.1.0-alpha.10
 npm test
 ```
 
-A pin writes the release into eight places: `runtime-lock.json`, five version
+A pin writes the release into seven places: `runtime-lock.json`, four version
 fields (`package.json`, `package-lock.json`, `.claude-plugin/plugin.json`,
-`.codex-plugin/plugin.json`, `.claude-plugin/marketplace.json`), the provenance
-values in `THIRD_PARTY_NOTICES.md`, and a deliberate literal in
+`.codex-plugin/plugin.json`), the provenance values in
+`THIRD_PARTY_NOTICES.md`, and a deliberate literal in
 `tests/unit/runtime-lock.test.mjs`.
 
 Doing that by hand takes several rounds of run-the-suite-find-the-next-miss.
@@ -90,11 +90,22 @@ never loosen or delete them to get green.
 
 ## Before blaming your change for a test failure
 
-This suite is green at 1670/1670 (33 skipped) and the fork's extension suite
-has known pre-existing failures (`cli.spec.ts › attach <url> --extension`).
+This suite passes 1635/1669 with 33 skipped, and both it and the fork's
+extension suite have known pre-existing failures: here,
+`plugin-install.test.mjs › both host adapters resolve the local catalog from
+isolated homes`; in the fork, `cli.spec.ts › attach <url> --extension`.
 Baseline first: stash your change, rebuild if the artifact matters, re-run.
 Slow browser tests also contaminate each other, so confirm a failure in
 isolation before treating it as real.
+
+That install failure is real, not stale coverage. This repo stopped being a
+Claude marketplace in MAT-378, but the CLI still defaults `--source` to
+`m4ttstack/fast-browser` (`lib/cli/parse-args.mjs`), so a clean-machine
+`setup` still tries to add a catalog that is no longer here. The default is
+waiting on `m4ttstack/mattstack-marketplace` to exist (MAT-389); MAT-388
+tracks repointing it. Codex is unaffected only because its catalog,
+`.agents/plugins/marketplace.json`, is still served from this repo — that
+half of the consolidation is MAT-390.
 
 ## Local install
 
