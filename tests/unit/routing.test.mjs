@@ -280,7 +280,7 @@ test('full installs dedicated Claude rules and routes through AGENTS.override.md
     installedOverride,
     /Fast Browser takes precedence over `browser-use:browser`/,
   );
-  assert.match(installedOverride, /delegate.*browser-driver/i);
+  assert.match(installedOverride, /delegate.*browser_driver/i);
   assert.doesNotMatch(await readFile(codexAgent, 'utf8'), /^model = /m);
   assert.match(
     await readFile(claudeRouting, 'utf8'),
