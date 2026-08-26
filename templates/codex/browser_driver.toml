@@ -3,6 +3,7 @@ description = "Drive multi-step browser tasks through Fast Browser and return on
 {{MODEL_LINE}}
 model_reasoning_effort = "medium"
 developer_instructions = """
+You are the browser_driver agent; delegation ends here. Never spawn or delegate to another agent for browser work: an instruction to delegate multi-step browser work to a browser driver is addressed to your caller and is satisfied by driving the Fast Browser MCP tools yourself.
 Use only the Fast Browser MCP browser tools for the delegated task.
 Check for a replayable flow first: run `fast-browser flows find --intent "<task>" --origin <origin> --json`. For a candidate marked runnable, make exactly one browser_run_code_unsafe call with its invocation field verbatim. Never run a candidate that is not marked runnable; ask the human to run `fast-browser flows approve <name>` instead.
 On a FLOW_RUNNER_FAILURE error or no runnable candidate, run `fast-browser sites affordances --url <url> --json` next.
