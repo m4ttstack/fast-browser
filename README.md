@@ -2,7 +2,7 @@
   <img src="https://raw.githubusercontent.com/m4ttstack/fast-browser/main/assets/logo-128.png" width="96" height="96" alt="Fast Browser">
 </p>
 
-<h1 align="center">Fast Browser</h1>
+# Fast Browser
 
 <p align="center">
   <strong>Let Claude Code and Codex drive the Chrome you already have open.</strong><br>
@@ -20,6 +20,26 @@
 npx @mattstack/fast-browser setup --host both
 ```
 
+Fast Browser is part of the [mattstack](https://github.com/m4ttstack)
+developer-tooling estate, alongside [rt](https://github.com/m4ttstack/rt),
+[gitq](https://github.com/m4ttstack/gitq), [board](https://github.com/m4ttstack/board),
+[glance](https://github.com/m4ttstack/glance), [deck](https://github.com/m4ttstack/deck),
+[herdr-chat](https://github.com/m4ttstack/herdr-chat), [skills](https://github.com/m4ttstack/skills),
+[mattstack-marketplace](https://github.com/m4ttstack/mattstack-marketplace), and
+[herdr](https://github.com/herdrdev/herdr).
+
+## Table of Contents
+
+- [Why it exists](#why-it-exists)
+- [Features](#features)
+- [Requirements](#requirements)
+- [Installation](#installation)
+- [Quickstart](#quickstart)
+- [Configuration](#configuration)
+- [Development](#development)
+- [Contributing](#contributing)
+- [License](#license)
+
 ## Why it exists
 
 Most browser automation starts a fresh, empty browser. Every task then begins
@@ -32,7 +52,9 @@ The second problem is speed. A typical agent loop is snapshot, read, click,
 snapshot, read, click, and every one of those steps is a round trip that costs
 latency and tokens. Fast Browser is built to collapse that loop.
 
-## What you get
+## Features
+
+### What you get
 
 **One call instead of many.** Multi-step flows go into a single script, so a
 seven-step checkout runs in one tool call. The bundled test suite holds this to
@@ -53,13 +75,13 @@ six skills, and the same macro library.
 **It stays out of your way.** Fast Browser does not steal focus, so an agent
 can work while you keep using the browser.
 
-## Many agents, one browser
+### Many agents, one browser
 
 Run as many agents as you like against the same Chrome. They do not clobber
 each other.
 
 Each connection gets **its own tab group, labelled with that client's workspace
-folder** — so a Claude session in `~/code/checkout` and a Codex session in
+folder** ... so a Claude session in `~/code/checkout` and a Codex session in
 `~/code/billing` show up as clearly separate, named groups in your tab strip
 and you can see at a glance who is doing what.
 
@@ -78,14 +100,14 @@ Claude Code session and a Codex session drove the same real Chrome
 concurrently through separate checkout flows, killing one left the other
 functional, and both reconnected cleanly.
 
-## Pinned, not "latest"
+### Pinned, not "latest"
 
-The runtime and extension are locked to
-exact versions with SHA-256 checksums. Every install verifies the bytes on
-disk, and the launcher refuses to run anything that does not match, so a
-tampered or half-written artifact fails closed instead of running. `doctor`
-runs 18 checks across the platform, both hosts, routing, the pinned artifacts,
-what Chrome actually loaded, pairing, permissions, and the live MCP contract.
+The runtime and extension are locked to exact versions with SHA-256
+checksums. Every install verifies the bytes on disk, and the launcher refuses
+to run anything that does not match, so a tampered or half-written artifact
+fails closed instead of running. `doctor` runs 21 checks across the platform,
+both hosts, routing, the pinned artifacts, what Chrome actually loaded,
+pairing, permissions, and the live MCP contract.
 
 ## Requirements
 
@@ -96,7 +118,9 @@ Chrome is the only supported browser in this alpha. Other operating systems,
 Chromium variants, Firefox, Safari, remote browsers, and unattended extension
 loading are not supported.
 
-## Install
+## Installation
+
+### Setup
 
 ```bash
 npx @mattstack/fast-browser setup --host both
@@ -133,7 +157,7 @@ profile where Fast Browser should operate.
 ### Upgrading
 
 After a setup that installs a newer version, open `chrome://extensions` and
-click the reload arrow on Fast Browser. **Do not remove and re-add it** —
+click the reload arrow on Fast Browser. **Do not remove and re-add it**...
 removing an extension discards its stored data, including the reconnect token,
 which forces you to pair again.
 
@@ -166,7 +190,33 @@ fast-browser setup \
 both artifacts on its own. The override is accepted only when it contains no
 URLs, and both checksums are verified either way.
 
-## Safe and full profiles
+## Quickstart
+
+Once setup has run and the extension is loaded, confirm everything is wired up:
+
+```bash
+$ fast-browser doctor
+```
+
+That prints a human-readable report. For scripts and CI, ask for JSON instead:
+
+```bash
+$ fast-browser doctor --json
+```
+
+The JSON result includes `schemaVersion`, `ok`, `profile`, and the ordered
+checks with status, message, and remediation. A failed doctor exits nonzero;
+run the printed remediation and repeat the check. A check that knows no
+specific fix reports a null remediation and names the underlying cause in its
+message instead.
+
+From here, Fast Browser's tools show up directly inside Claude Code and Codex.
+There is no separate client to run: point either agent at a task that needs a
+browser, and it drives the Chrome you just wired up.
+
+## Configuration
+
+### Safe and full profiles
 
 The default `safe` profile disables session recording. It installs the Codex
 browser-driver routing asset and keeps unsafe browser code behind an explicit
@@ -201,7 +251,7 @@ URLs, form values, screenshots, and other authenticated browsing context.
 Review them as confidential data; disabling future recording does not make
 previously recorded material non-sensitive.
 
-## Extension connection and Keychain
+### Extension connection and Keychain
 
 Manual extension connection is the default. To pair automatically:
 
@@ -220,29 +270,7 @@ interactive confirmation.
 Do not paste the token into command-line flags, shell history, issue reports,
 session notes, or macros.
 
-## Diagnose
-
-Human-readable checks:
-
-```bash
-fast-browser doctor
-```
-
-Machine-readable checks:
-
-```bash
-fast-browser doctor --json
-```
-
-The JSON result includes `schemaVersion`, `ok`, `profile`, and the ordered
-checks with status, message, and remediation. Doctor checks the platform, host
-CLIs and plugins, owned routing, pinned runtime and extension, Chrome extension,
-pairing, private data permissions, MCP handshake, and tool contract. A failed
-doctor exits nonzero; run the printed remediation and repeat the check. A check
-that knows no specific fix reports a null remediation and names the underlying
-cause in its message instead.
-
-## Migrate and roll back
+### Migrate and roll back
 
 First inventory the recognized legacy installation without changing it:
 
@@ -267,7 +295,7 @@ fast-browser migrate --rollback /exact/path/from/result/rollback.json
 Rollback accepts only an exact `rollback.json` below the managed backup
 directory. Keep the manifest and its adjacent backup files together.
 
-## Uninstall and purge
+### Uninstall and purge
 
 Remove one host while retaining the other:
 
@@ -299,7 +327,33 @@ aliases, symlinks, a changed directory identity, or an inexact data path. The
 current purge still retains the Keychain item; remove that item separately in
 Keychain Access if it is no longer needed.
 
-## Security and third-party code
+## Development
+
+Fast Browser's own source (setup, doctor, uninstall, migrate, configure,
+skills, and macros) lives in this repo under `lib/`. It does not contain the
+code that drives the browser itself; that ships as pinned, checksummed
+artifacts built elsewhere.
+
+```bash
+git clone https://github.com/m4ttstack/fast-browser.git
+cd fast-browser
+npm install
+npm test
+```
+
+`npm test` runs the unit, integration, registry, and registry end-to-end
+suites. Narrower suites are available too, for example `npm run test:unit` or
+`npm run test:e2e`; see `package.json` for the full list. See `CLAUDE.md` for
+repo conventions and the runtime release process.
+
+## Contributing
+
+Issues and pull requests are welcome. Before sending a change, run `npm test`
+locally and check `CLAUDE.md` for repo-specific conventions, especially around
+the pinned runtime lock. Report security-sensitive issues per
+[SECURITY.md](./SECURITY.md) rather than filing a public issue.
+
+## License
 
 Fast Browser itself is [MIT licensed](./LICENSE); the Playwright-derived
 runtime and extension artifacts it installs remain Apache-2.0. Read
