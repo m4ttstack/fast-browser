@@ -34,6 +34,7 @@
     "THIRD_PARTY_NOTICES.md"
   ],
   "scripts": {
+    "icon:build": "node scripts/generate-icon.mjs",
     "macro-hashes": "node scripts/generate-macro-hashes.mjs",
     "pin-runtime": "node scripts/pin-runtime.mjs",
     "prepublishOnly": "node scripts/generate-macro-hashes.mjs --check",
