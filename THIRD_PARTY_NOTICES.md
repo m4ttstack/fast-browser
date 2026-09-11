@@ -17,16 +17,16 @@ project and its contributors.
 The URLs in `runtime-lock.json` are immutable release coordinates: a specific
 tag, never `latest`, so the bytes behind them cannot change without the lock
 changing. The artifacts are built from that commit of the fork; publishing the
-`fast-browser-v0.1.0-alpha.15` tag and its release assets is part of cutting
+`fast-browser-v0.1.0` tag and its release assets is part of cutting
 the release this lock belongs to, and the installer verifies both checksums
 after download regardless.
 
-- Runtime: `fast-browser-mcp-0.1.0-alpha.15.tar.gz`
-  SHA-256 `f65969b5c3e1d28b49311be9a1000038703bc7fbc691ad52f99129161adf7470`
-  https://github.com/m4ttheweric/playwright/releases/download/fast-browser-v0.1.0-alpha.15/fast-browser-mcp-0.1.0-alpha.15.tar.gz
-- Chrome extension: `fast-browser-extension-0.1.0-alpha.15.zip`
+- Runtime: `fast-browser-mcp-0.1.0.tar.gz`
+  SHA-256 `4a7d00de0daa3dac8a2ad2ade67b4f58b3e46aa1b0a81335056e918dc49b688c`
+  https://github.com/m4ttheweric/playwright/releases/download/fast-browser-v0.1.0/fast-browser-mcp-0.1.0.tar.gz
+- Chrome extension: `fast-browser-extension-0.1.0.zip`
   SHA-256 `d51bc78d74848fcf078f1da47f864e313039c6b4fcaf3e5db488470db8256218`
-  https://github.com/m4ttheweric/playwright/releases/download/fast-browser-v0.1.0-alpha.15/fast-browser-extension-0.1.0-alpha.15.zip
+  https://github.com/m4ttheweric/playwright/releases/download/fast-browser-v0.1.0/fast-browser-extension-0.1.0.zip
   Extension ID `bjlfojdaaanoliidngocnbcalhpfmlie`, version `0.2.10`
 
 Every value above is reproduced from the committed runtime lock, so the notice
@@ -35,7 +35,7 @@ still agree; hand-editing either one alone fails that gate rather than silently
 publishing stale provenance.
 
 An unpublished local build can still be installed with a URL-free
-`fast-browser-release-0.1.0-alpha.15.json` beside those exact two files, passed
+`fast-browser-release-0.1.0.json` beside those exact two files, passed
 via `--runtime-lock`. That local manifest and the locked hashes provide the
 same provenance without reaching the network.
 
