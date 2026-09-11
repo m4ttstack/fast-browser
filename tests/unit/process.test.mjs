@@ -8,8 +8,18 @@ import test from 'node:test';
 
 import { createProcessRunner, run } from '../../lib/core/process.mjs';
 
-const CAPTURE_LIMIT = 1024 * 1024;
-const TRUNCATION_MARKER = '\n[output truncated at 1048576 bytes]\n';
+const CAPTURE_LIMIT = 8 * 1024 * 1024;
+const TRUNCATION_MARKER = `\n[output truncated at ${8 * 1024 * 1024} bytes]\n`;
+
+test('passes a 2 MB stream through untruncated', async () => {
+  const twoMb = 2 * 1024 * 1024;
+  const result = await run(process.execPath, [
+    '-e',
+    `process.stdout.write('o'.repeat(${twoMb}))`,
+  ], { timeoutMs: 30000 });
+  assert.equal(Buffer.byteLength(result.stdout), twoMb);
+  assert.ok(!result.stdout.includes('[output truncated'));
+});
 
 test('returns the command result without throwing for a nonzero exit', async () => {
   const result = await run(process.execPath, [

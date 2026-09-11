@@ -13,7 +13,7 @@ const gitSource = 'm4ttstack/fast-browser';
 const pluginVersion = JSON.parse(
   await readFile(path.join(pluginRoot, 'package.json'), 'utf8'),
 ).version;
-const TRUNCATION_MARKER = '\n[output truncated at 1048576 bytes]\n';
+const TRUNCATION_MARKER = `\n[output truncated at ${8 * 1024 * 1024} bytes]\n`;
 
 function result(command, args, stdout = '', overrides = {}) {
   return {
