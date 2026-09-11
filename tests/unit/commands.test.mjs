@@ -725,18 +725,25 @@ test('doctor real composition accepts complete injected platform adapters with n
       runCodexAgentSmoke: async () => {},
       checkRuntime: async () => {},
       checkExtensionArtifact: async () => {},
-      detectChromeExtension: async () => [{
-        profile: 'Default',
-        installed: true,
-        manifestVersion: '1.0.0',
-        versionSource: 'disk',
-        // The managed directory itself, so extension-loaded actually has a
-        // load to evaluate rather than passing because it found nothing.
-        path: extensionInstallLocation({
-          extensionDir: '/home/test/.fast-browser/extension',
-        }).unpacked,
-        loadedAt: 1_700_000_000_000,
-      }],
+      // Keyed on the id asked about: retired-extension asks about a different
+      // one, and an id-blind stub answers that the retired extension is
+      // installed too.
+      detectChromeExtension: async ({ extensionId }) => (
+        extensionId === 'extension-id'
+          ? [{
+            profile: 'Default',
+            installed: true,
+            manifestVersion: '1.0.0',
+            versionSource: 'disk',
+            // The managed directory itself, so extension-loaded actually has a
+            // load to evaluate rather than passing because it found nothing.
+            path: extensionInstallLocation({
+              extensionDir: '/home/test/.fast-browser/extension',
+            }).unpacked,
+            loadedAt: 1_700_000_000_000,
+          }]
+          : [{ profile: 'Default', installed: false, manifestVersion: null }]
+      ),
       verifyExtensionContent: async () => true,
       verifyExtensionIsLoadedContent: async () => true,
       hasToken: async () => true,
@@ -3843,6 +3850,56 @@ test('extension-loaded stays silent when no managed extension is loaded', async 
       loadedAt: null,
     }],
   });
+
+  assert.equal(status.status, 'pass');
+});
+
+async function retiredExtensionStatus(detect) {
+  const stubbed = Object.fromEntries(DOCTOR_CHECK_IDS
+    .filter((id) => id !== 'retired-extension')
+    .map((id) => [id, async () => ({ status: 'pass', message: `${id} passed.`, remediation: null })]));
+  const report = await doctor(
+    { profile: 'safe' },
+    {
+      checks: stubbed,
+      paths: {
+        homeDir: '/unused',
+        dataDir: '/unused',
+        configFile: '/unused',
+        runtimeDir: '/unused',
+        extensionDir: '/unused',
+        pluginRoot: '/unused',
+      },
+      lock: null,
+      detectChromeExtension: detect,
+    },
+  );
+  return report.checks.find(({ id }) => id === 'retired-extension');
+}
+
+// This check has to ask about an id that is NOT the pinned one, so it cannot
+// take the id from the lock the way every other extension check does.
+// Asserting which id it queries is the point: querying the pinned id would
+// make it pass forever.
+test('retired-extension names the id to remove when a profile still holds one', async () => {
+  const { RETIRED_EXTENSION_IDS } = await import('../../lib/extension/detect.mjs');
+  const queried = [];
+
+  const status = await retiredExtensionStatus(async ({ extensionId }) => {
+    queried.push(extensionId);
+    return [{ profile: 'Default', installed: true, manifestVersion: '0.2.10' }];
+  });
+
+  assert.deepEqual(queried, [...RETIRED_EXTENSION_IDS]);
+  assert.equal(status.status, 'fail');
+  assert.match(status.message, new RegExp(RETIRED_EXTENSION_IDS[0]));
+  assert.match(status.remediation, /chrome:\/\/extensions/);
+});
+
+test('retired-extension passes when no profile holds a retired id', async () => {
+  const status = await retiredExtensionStatus(async () => [
+    { profile: 'Default', installed: false, manifestVersion: null },
+  ]);
 
   assert.equal(status.status, 'pass');
 });

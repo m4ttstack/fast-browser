@@ -165,6 +165,55 @@ test('rejects noncanonical or path-capable extension versions', () => {
   }
 });
 
+// Nothing in this CLI installs the CRX -- `setup` installs the unpacked zip --
+// so a lock without one is complete. A lock WITH one is describing bytes an
+// unattended installer will hand Chrome, and gets the same scrutiny as the
+// artifacts this CLI does fetch.
+function crxFixture(lock) {
+  return {
+    url: 'https://github.com/m4ttheweric/playwright/releases/download/'
+      + 'fast-browser-v0.1.0-alpha.1/fast-browser-extension-0.1.0-alpha.1.crx',
+    file: `fast-browser-extension-${lock.productVersion}.crx`,
+    sha256: 'c'.repeat(64),
+  };
+}
+
+test('keeps an extension CRX entry when the lock carries one', () => {
+  const input = fixtureLock();
+  input.extension.crx = { ...crxFixture(input), ignored: 'discard me' };
+
+  const parsed = parseRuntimeLock(input);
+  assert.deepEqual(parsed.extension.crx, crxFixture(input));
+});
+
+test('omits the CRX entry entirely when the lock has none', () => {
+  assert.equal('crx' in parseRuntimeLock(fixtureLock()).extension, false);
+});
+
+test('rejects a CRX entry that is malformed, misnamed, mutable or unchecksummed', () => {
+  const cases = [
+    ['extension.crx must be an object', (crx, lock) => { lock.extension.crx = 'nope'; }],
+    ['extension.crx.file must be exactly', (crx) => { crx.file = 'fast-browser-extension.crx'; }],
+    ['extension.crx.file must be exactly', (crx) => { crx.file = '../escape.crx'; }],
+    ['extension.crx.sha256 must be a 64-character', (crx) => { crx.sha256 = 'nope'; }],
+    ['extension.crx.url must be an immutable', (crx) => {
+      crx.url = 'https://github.com/m4ttheweric/playwright/releases/latest/download/'
+        + 'fast-browser-extension-0.1.0-alpha.1.crx';
+    }],
+    ['extension.crx.url filename must match', (crx) => {
+      crx.url = 'https://github.com/m4ttheweric/playwright/releases/download/'
+        + 'fast-browser-v0.1.0-alpha.1/somethingelse.crx';
+    }],
+  ];
+
+  for (const [message, corrupt] of cases) {
+    const input = fixtureLock();
+    input.extension.crx = crxFixture(input);
+    corrupt(input.extension.crx, input);
+    assert.throws(() => parseRuntimeLock(input), new RegExp(message.replaceAll('.', '\\.')), message);
+  }
+});
+
 test('accepts immutable GitHub release URLs and rejects mutable or remote HTTP URLs', () => {
   const immutable = fixtureLock(
     'https://github.com/m4ttheweric/playwright/releases/download/'
@@ -211,10 +260,43 @@ test('loads a URL-free release override by resolving exact adjacent artifacts in
   assert.equal('url' in persisted.extension, false);
 });
 
+test('resolves an override CRX beside the manifest that names it', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'fast-browser-lock-'));
+  const overridePath = path.join(directory, 'release.json');
+  const release = fixtureLock();
+  delete release.runtime.url;
+  delete release.extension.url;
+  const { url, ...crx } = crxFixture(release);
+  release.extension.crx = crx;
+  await writeFile(overridePath, `${JSON.stringify(release)}\n`);
+
+  const loaded = await loadRuntimeLock({
+    bundledPath: path.join(directory, 'unused.json'),
+    overridePath,
+  });
+
+  assert.equal(loaded.extension.crx.url, pathToFileURL(path.join(directory, crx.file)).href);
+});
+
 test('rejects URL-bearing local overrides instead of persisting or trusting their locations', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'fast-browser-lock-'));
   const overridePath = path.join(directory, 'release.json');
   await writeFile(overridePath, JSON.stringify(fixtureLock()));
+
+  await assert.rejects(
+    loadRuntimeLock({ bundledPath: path.join(directory, 'unused.json'), overridePath }),
+    /override.*must not contain artifact URLs/i,
+  );
+});
+
+test('rejects a local override that names a URL for its CRX', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'fast-browser-lock-'));
+  const overridePath = path.join(directory, 'release.json');
+  const release = fixtureLock();
+  delete release.runtime.url;
+  delete release.extension.url;
+  release.extension.crx = crxFixture(release);
+  await writeFile(overridePath, JSON.stringify(release));
 
   await assert.rejects(
     loadRuntimeLock({ bundledPath: path.join(directory, 'unused.json'), overridePath }),
@@ -228,23 +310,29 @@ test('bundled lock pins the intended candidate identity and immutable artifact U
 
   assert.deepEqual(lock, {
     schemaVersion: 1,
-    productVersion: '0.1.0',
-    sourceCommit: 'eada1975a8a489d0a9c50421202013ba8e7403f4',
+    productVersion: '0.1.1',
+    sourceCommit: '677504c52c664b930dc4757bf608efc94675135d',
     protocolVersion: 2,
     runtime: {
       url: 'https://github.com/m4ttheweric/playwright/releases/download/'
-        + 'fast-browser-v0.1.0/fast-browser-mcp-0.1.0.tar.gz',
-      file: 'fast-browser-mcp-0.1.0.tar.gz',
-      sha256: '4a7d00de0daa3dac8a2ad2ade67b4f58b3e46aa1b0a81335056e918dc49b688c',
+        + 'fast-browser-v0.1.1/fast-browser-mcp-0.1.1.tar.gz',
+      file: 'fast-browser-mcp-0.1.1.tar.gz',
+      sha256: '11c1584b5c5c2e2a93aa02bfc2e3966406efada966f391e4d0e70ae1a1c51c12',
       node: '>=20',
     },
     extension: {
       url: 'https://github.com/m4ttheweric/playwright/releases/download/'
-        + 'fast-browser-v0.1.0/fast-browser-extension-0.1.0.zip',
-      file: 'fast-browser-extension-0.1.0.zip',
-      sha256: 'd51bc78d74848fcf078f1da47f864e313039c6b4fcaf3e5db488470db8256218',
-      id: 'bjlfojdaaanoliidngocnbcalhpfmlie',
-      version: '0.2.10',
+        + 'fast-browser-v0.1.1/fast-browser-extension-0.1.1.zip',
+      file: 'fast-browser-extension-0.1.1.zip',
+      sha256: 'b6bccac5cdd19c5588b6c9f77847877a88021acb55a67ad3153085ac2efe63a7',
+      id: 'fnfikoifhimpdedpdepehibjjkcfbacm',
+      version: '0.2.11',
+      crx: {
+        url: 'https://github.com/m4ttheweric/playwright/releases/download/'
+          + 'fast-browser-v0.1.1/fast-browser-extension-0.1.1.crx',
+        file: 'fast-browser-extension-0.1.1.crx',
+        sha256: 'b98600eb6b42a2e3d40cc4a165c02a7b64da7cfefc288e4b4214756cec8a41ca',
+      },
     },
   });
 });
@@ -256,7 +344,7 @@ test('bundled lock is internally consistent whatever it pins', async () => {
   const bundledPath = new URL('../../runtime-lock.json', import.meta.url);
   const lock = await loadRuntimeLock({ bundledPath });
 
-  for (const artifact of [lock.runtime, lock.extension]) {
+  for (const artifact of [lock.runtime, lock.extension, lock.extension.crx]) {
     assert.match(artifact.sha256, /^[0-9a-f]{64}$/);
     assert.ok(artifact.url.startsWith('https://'));
     assert.ok(artifact.url.endsWith(`/${artifact.file}`));
@@ -264,6 +352,7 @@ test('bundled lock is internally consistent whatever it pins', async () => {
     assert.ok(artifact.url.includes(`fast-browser-v${lock.productVersion}/`));
   }
   assert.notEqual(lock.runtime.sha256, lock.extension.sha256);
+  assert.notEqual(lock.extension.sha256, lock.extension.crx.sha256);
   assert.match(lock.sourceCommit, /^[0-9a-f]{40}$/);
 });
 

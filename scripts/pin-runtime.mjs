@@ -69,8 +69,11 @@ async function main() {
     const manifest = JSON.parse(await readFile(path.join(work, `fast-browser-release-${args.runtime}.json`), 'utf8'));
 
     console.log('==> verifying published bytes against the release manifest');
-    for (const role of ['runtime', 'extension']) {
-      const entry = manifest[role];
+    for (const [role, entry] of [
+      ['runtime', manifest.runtime],
+      ['extension', manifest.extension],
+      ...(manifest.extension.crx ? [['extension crx', manifest.extension.crx]] : []),
+    ]) {
       const digest = createHash('sha256').update(await readFile(path.join(work, entry.file))).digest('hex');
       if (digest !== entry.sha256)
         throw new Error(`${role}: manifest claims ${entry.sha256}, published bytes hash to ${digest}`);
@@ -84,20 +87,38 @@ async function main() {
       sourceCommit: manifest.sourceCommit,
       protocolVersion: manifest.protocolVersion,
       runtime: { ...old.runtime, ...manifest.runtime, url: `${base}/${manifest.runtime.file}` },
-      extension: { ...old.extension, ...manifest.extension, url: `${base}/${manifest.extension.file}` },
+      extension: {
+        ...old.extension,
+        ...manifest.extension,
+        url: `${base}/${manifest.extension.file}`,
+        ...(manifest.extension.crx
+          ? { crx: { ...manifest.extension.crx, url: `${base}/${manifest.extension.crx.file}` } }
+          : {}),
+      },
     };
 
     // Every downstream edit is expressed as old-value -> new-value taken from
     // the two locks, so nothing here needs to know the shape of the files it
     // touches beyond the values themselves.
     const v = { from: old.productVersion, to: lock.productVersion };
+    // The extension id is normally carried forward untouched, so this pair is
+    // usually a no-op. It is here because the one time it is not -- a re-key,
+    // which happened when the original signing key was lost -- the id is
+    // pinned in the notices and the lock test as a literal, and every other
+    // value in those files moves without it.
+    const crxPairs = old.extension.crx && lock.extension.crx
+      ? [[old.extension.crx.file, lock.extension.crx.file],
+        [old.extension.crx.sha256, lock.extension.crx.sha256]]
+      : [];
     const artifacts = [
       [old.runtime.file, lock.runtime.file],
       [old.extension.file, lock.extension.file],
+      ...crxPairs,
       [`fast-browser-release-${v.from}.json`, `fast-browser-release-${v.to}.json`],
       [`fast-browser-v${v.from}`, `fast-browser-v${v.to}`],
       [old.runtime.sha256, lock.runtime.sha256],
       [old.extension.sha256, lock.extension.sha256],
+      [old.extension.id, lock.extension.id],
       [old.sourceCommit, lock.sourceCommit],
     ];
 
@@ -109,9 +130,11 @@ async function main() {
     // proves nothing was missed. Only values the pin actually changes can go
     // stale, so only those are asserted on.
     const carriedForward = new Set([lock.sourceCommit, lock.runtime.sha256, lock.extension.sha256,
-      lock.runtime.file, lock.extension.file, `fast-browser-v${v.to}`]);
+      lock.runtime.file, lock.extension.file, lock.extension.id, `fast-browser-v${v.to}`,
+      ...crxPairs.map(([, to]) => to)]);
     const stale = [old.sourceCommit, old.runtime.sha256, old.extension.sha256,
-      old.runtime.file, old.extension.file, `fast-browser-v${v.from}`]
+      old.runtime.file, old.extension.file, old.extension.id, `fast-browser-v${v.from}`,
+      ...crxPairs.map(([from]) => from)]
         .filter(value => !carriedForward.has(value));
 
     const edits = [

@@ -66,15 +66,26 @@ test('Playwright notices exist and agree with the runtime lock', async () => {
     lock.extension.file,
     lock.extension.sha256,
     lock.extension.id,
+    ...(lock.extension.crx ? [lock.extension.crx.file, lock.extension.crx.sha256] : []),
   ]) {
     assert.ok(notices.includes(value), `notices must record ${value}`);
   }
 });
 
+// Every install is keyed by the extension id, so pinning a retired one would
+// point installers at an extension that can never be updated again.
+test('the pinned extension id is not one this project has retired', async () => {
+  const { RETIRED_EXTENSION_IDS } = await import('../../lib/extension/detect.mjs');
+  const lock = await json('runtime-lock.json');
+
+  assert.ok(RETIRED_EXTENSION_IDS.length > 0, 'there is a retired list to check against');
+  assert.ok(!RETIRED_EXTENSION_IDS.includes(lock.extension.id));
+});
+
 test('runtime lock artifact URLs are immutable and checksummed', async () => {
   const lock = await json('runtime-lock.json');
 
-  for (const artifact of [lock.runtime, lock.extension]) {
+  for (const artifact of [lock.runtime, lock.extension, lock.extension.crx].filter(Boolean)) {
     const url = new URL(artifact.url);
     assert.equal(url.protocol, 'https:');
     assert.equal(url.hostname, 'github.com');

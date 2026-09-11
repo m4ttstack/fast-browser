@@ -860,14 +860,21 @@ test('setup treats a real, fully composed doctor report as unchanged when only t
       checkChrome: async () => {},
       preflightClaude: async () => ({ installed: true }),
       preflightRouting: async () => ({ files: [], blocks: [] }),
-      detectChromeExtension: async () => [{
-        profile: 'Default',
-        installed: true,
-        manifestVersion: lock.extension.version,
-        versionSource: 'disk',
-        path: unpacked,
-        loadedAt: 1_700_000_000_000,
-      }],
+      // Keyed on the id asked about: retired-extension asks about a different
+      // one, and an id-blind stub answers that the retired extension is
+      // installed too.
+      detectChromeExtension: async ({ extensionId }) => (
+        extensionId === lock.extension.id
+          ? [{
+            profile: 'Default',
+            installed: true,
+            manifestVersion: lock.extension.version,
+            versionSource: 'disk',
+            path: unpacked,
+            loadedAt: 1_700_000_000_000,
+          }]
+          : [{ profile: 'Default', installed: false, manifestVersion: null }]
+      ),
       verifyExtensionIsLoadedContent: async () => true,
       // The adapters this test deliberately fails: no librsvg and no ffmpeg
       // installed, the resting state for the optional capabilities.

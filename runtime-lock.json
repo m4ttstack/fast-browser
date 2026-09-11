@@ -1,19 +1,24 @@
 {
   "schemaVersion": 1,
-  "productVersion": "0.1.0",
-  "sourceCommit": "eada1975a8a489d0a9c50421202013ba8e7403f4",
+  "productVersion": "0.1.1",
+  "sourceCommit": "677504c52c664b930dc4757bf608efc94675135d",
   "protocolVersion": 2,
   "runtime": {
-    "url": "https://github.com/m4ttheweric/playwright/releases/download/fast-browser-v0.1.0/fast-browser-mcp-0.1.0.tar.gz",
-    "file": "fast-browser-mcp-0.1.0.tar.gz",
-    "sha256": "4a7d00de0daa3dac8a2ad2ade67b4f58b3e46aa1b0a81335056e918dc49b688c",
+    "url": "https://github.com/m4ttheweric/playwright/releases/download/fast-browser-v0.1.1/fast-browser-mcp-0.1.1.tar.gz",
+    "file": "fast-browser-mcp-0.1.1.tar.gz",
+    "sha256": "11c1584b5c5c2e2a93aa02bfc2e3966406efada966f391e4d0e70ae1a1c51c12",
     "node": ">=20"
   },
   "extension": {
-    "url": "https://github.com/m4ttheweric/playwright/releases/download/fast-browser-v0.1.0/fast-browser-extension-0.1.0.zip",
-    "file": "fast-browser-extension-0.1.0.zip",
-    "sha256": "d51bc78d74848fcf078f1da47f864e313039c6b4fcaf3e5db488470db8256218",
-    "id": "bjlfojdaaanoliidngocnbcalhpfmlie",
-    "version": "0.2.10"
+    "url": "https://github.com/m4ttheweric/playwright/releases/download/fast-browser-v0.1.1/fast-browser-extension-0.1.1.zip",
+    "file": "fast-browser-extension-0.1.1.zip",
+    "sha256": "b6bccac5cdd19c5588b6c9f77847877a88021acb55a67ad3153085ac2efe63a7",
+    "id": "fnfikoifhimpdedpdepehibjjkcfbacm",
+    "version": "0.2.11",
+    "crx": {
+      "file": "fast-browser-extension-0.1.1.crx",
+      "sha256": "b98600eb6b42a2e3d40cc4a165c02a7b64da7cfefc288e4b4214756cec8a41ca",
+      "url": "https://github.com/m4ttheweric/playwright/releases/download/fast-browser-v0.1.1/fast-browser-extension-0.1.1.crx"
+    }
   }
 }
