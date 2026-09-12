@@ -165,6 +165,44 @@ test('pruneSessions removes every aged entry under the output dir, recordings in
   assert.equal((await lstat(videosDir)).isDirectory(), true);
 });
 
+// Two MCP servers can launch at once (Claude and Codex, or two panes) and
+// both prune the same output dir. A candidate the peer removed between this
+// pruner's selection and its confirming stat is already gone: skip it and
+// keep going, rather than abort the sweep on an entry nobody needs deleted.
+test('pruneSessions skips a candidate that vanished before its confirming stat', async (t) => {
+  const { pruneSessions } = await import('../../lib/sessions/retention.mjs');
+  const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'fast-browser-retention-race-'));
+  t.after(() => rm(tempRoot, { recursive: true, force: true }));
+  const dataDir = path.join(tempRoot, '.fast-browser');
+  const outputDir = path.join(dataDir, 'output');
+  await mkdir(outputDir, { recursive: true });
+  const now = new Date('2026-07-26T12:00:00.000Z');
+  const old = new Date(now.getTime() - 31 * DAY_MS);
+  const raced = await sessionDirectory(outputDir, 'trace-1000', 'gone', old);
+  const survivor = await sessionDirectory(outputDir, 'trace-2000', 'still-old', old);
+  const physicalSurvivor = await realpath(survivor);
+
+  const peerRemoves = async (target) => {
+    if (target === raced) await rm(raced, { recursive: true, force: true });
+    return lstat(target);
+  };
+  const result = await pruneSessions({
+    paths: {
+      dataDir,
+      sessionsDir: path.join(dataDir, 'sessions'),
+      archiveDir: path.join(dataDir, 'archive'),
+      outputDir,
+      videosDir: path.join(outputDir, 'videos'),
+    },
+    now,
+    retentionDays: 30,
+    deps: { lstat: peerRemoves },
+  });
+
+  assert.deepEqual(result, { removedPaths: [physicalSurvivor], removedBytes: 9 });
+  await assert.rejects(lstat(raced), { code: 'ENOENT' });
+});
+
 test('pruneSessions treats missing exact roots as empty', async (t) => {
   const { pruneSessions } = await import('../../lib/sessions/retention.mjs');
   const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'fast-browser-retention-empty-'));
