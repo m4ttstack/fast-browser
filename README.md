@@ -246,10 +246,14 @@ fast-browser configure --profile full --record-sessions --retention-days 14
 fast-browser configure --profile full --no-record-sessions
 ```
 
-Retention accepts 1 through 365 days. Recorded sessions can contain page text,
-URLs, form values, screenshots, and other authenticated browsing context.
-Review them as confidential data; disabling future recording does not make
-previously recorded material non-sensitive.
+Retention accepts 1 through 365 days and applies to everything the runtime
+writes under `~/.fast-browser/output/` (session transcripts, traces, console
+logs, recordings, and captures saved by bare filename), on every profile. The
+sweep runs each time the MCP server starts and on `setup` and `configure`.
+Recorded sessions can contain page text, URLs, form values, screenshots, and
+other authenticated browsing context. Review them as confidential data;
+disabling future recording does not make previously recorded material
+non-sensitive.
 
 ### Extension connection and Keychain
 
