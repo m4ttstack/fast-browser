@@ -70,7 +70,7 @@ function jsonl(records) {
 }
 
 async function writeSession(paths, epochMs, { meta, records }) {
-  const dir = path.join(paths.dataDir, `trace-${epochMs}`);
+  const dir = path.join(paths.outputDir, `trace-${epochMs}`);
   await mkdir(dir, { recursive: true });
   if (meta !== null) await writeFile(path.join(dir, 'meta.json'), JSON.stringify(meta));
   await writeFile(path.join(dir, 'actions.jsonl'), jsonl(records));
@@ -78,13 +78,13 @@ async function writeSession(paths, epochMs, { meta, records }) {
 }
 
 async function appendRecords(paths, epochMs, records) {
-  const dir = path.join(paths.dataDir, `trace-${epochMs}`);
+  const dir = path.join(paths.outputDir, `trace-${epochMs}`);
   const existing = await readFile(path.join(dir, 'actions.jsonl'), 'utf8');
   await writeFile(path.join(dir, 'actions.jsonl'), existing + jsonl(records));
 }
 
 async function rewriteMeta(paths, epochMs, meta) {
-  const dir = path.join(paths.dataDir, `trace-${epochMs}`);
+  const dir = path.join(paths.outputDir, `trace-${epochMs}`);
   await writeFile(path.join(dir, 'meta.json'), JSON.stringify(meta));
 }
 
@@ -96,7 +96,7 @@ async function rewriteMeta(paths, epochMs, meta) {
 // assertions honest against whatever `record()`/`traceTarget()` actually
 // serialize to.
 async function sessionByteLength(paths, epochMs) {
-  const { size } = await stat(path.join(paths.dataDir, `trace-${epochMs}`, 'actions.jsonl'));
+  const { size } = await stat(path.join(paths.outputDir, `trace-${epochMs}`, 'actions.jsonl'));
   return size;
 }
 
@@ -943,7 +943,7 @@ test('a state entry for a trace dir that no longer exists is pruned from the per
   });
 
   // The session directory is gone (e.g. archived/cleaned up elsewhere).
-  await rm(path.join(paths.dataDir, 'trace-11000'), { recursive: true, force: true });
+  await rm(path.join(paths.outputDir, 'trace-11000'), { recursive: true, force: true });
 
   const second = await sweep({ paths });
   assert.deepEqual(second.cursor, {});
@@ -984,7 +984,7 @@ test('a session whose actions.jsonl becomes unreadable is left completely untouc
     lines: 3, provenanceLines: 3, bytes: bytes14000, provenanceBytes: bytes14000,
   });
 
-  const actionsFile = path.join(paths.dataDir, 'trace-14000', 'actions.jsonl');
+  const actionsFile = path.join(paths.outputDir, 'trace-14000', 'actions.jsonl');
   await chmod(actionsFile, 0o000);
   t.after(() => chmod(actionsFile, 0o600).catch(() => {})); // safety net for the outer tmpdir rm
 
@@ -1058,7 +1058,7 @@ test('a session whose actions.jsonl vanishes (file deleted, dir still present) r
 
   // The file itself vanishes -- the session DIRECTORY (and its meta.json)
   // stays put, so this is not the F8 stale-directory-pruning case.
-  await unlink(path.join(paths.dataDir, 'trace-15000', 'actions.jsonl'));
+  await unlink(path.join(paths.outputDir, 'trace-15000', 'actions.jsonl'));
 
   const third = await sweep({ paths });
   assert.deepEqual(third.compiled, []);
@@ -1075,7 +1075,7 @@ test('a session whose actions.jsonl vanishes (file deleted, dir still present) r
   // Restored with EXACTLY its prior content: records.length (3) is no
   // longer less than the saved cursor (3), so nothing new is (re-)sliced.
   await writeFile(
-    path.join(paths.dataDir, 'trace-15000', 'actions.jsonl'),
+    path.join(paths.outputDir, 'trace-15000', 'actions.jsonl'),
     jsonl([
       record({ seq: 1, tool: 'browser_navigate', params: { url: 'https://shop.example/cart' } }),
       record({ seq: 2, targets: [traceTarget({ name: 'View details' })], mutating: false }),
@@ -2121,7 +2121,7 @@ test('an old-format entry whose actions.jsonl vanishes then is restored byte-ide
 
   // The file vanishes (dir stays put) -- the sweep that observes this has
   // no new content and no prior byte value to carry forward.
-  await unlink(path.join(paths.dataDir, 'trace-55000', 'actions.jsonl'));
+  await unlink(path.join(paths.outputDir, 'trace-55000', 'actions.jsonl'));
   const vanished = await sweep({ paths });
   assert.deepEqual(vanished.updated, []); // nothing new -- not yet the bug's trigger point
   assert.deepEqual(vanished.cursor['trace-55000'], { lines: 3, provenanceLines: 3 }); // still old-shaped: no poisoned bytes
@@ -2130,7 +2130,7 @@ test('an old-format entry whose actions.jsonl vanishes then is restored byte-ide
   // trigger: a buggy `bytes: 0` cursor would resume from byte zero here and
   // treat all 3 already-counted records as new.
   await writeFile(
-    path.join(paths.dataDir, 'trace-55000', 'actions.jsonl'),
+    path.join(paths.outputDir, 'trace-55000', 'actions.jsonl'),
     jsonl(sessionRecords),
   );
   const restored = await sweep({ paths });
