@@ -165,6 +165,44 @@ test('pruneSessions removes every aged entry under the output dir, recordings in
   assert.equal((await lstat(videosDir)).isDirectory(), true);
 });
 
+// output/videos/ is both a direct entry of the output root and a root of its
+// own. Its mtime goes stale whenever no recording has landed inside the
+// window, and removing it as an output candidate would pull the directory out
+// from under the videos sweep that was validated before any removal began.
+// The output sweep leaves it to the videos sweep, which ages out its contents.
+test('pruneSessions never removes the videos root itself, only aged recordings inside it', async (t) => {
+  const { pruneSessions } = await import('../../lib/sessions/retention.mjs');
+  const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'fast-browser-retention-videos-'));
+  t.after(() => rm(tempRoot, { recursive: true, force: true }));
+  const dataDir = path.join(tempRoot, '.fast-browser');
+  const outputDir = path.join(dataDir, 'output');
+  const videosDir = path.join(outputDir, 'videos');
+  await mkdir(videosDir, { recursive: true });
+  const now = new Date('2026-07-26T12:00:00.000Z');
+  const old = new Date(now.getTime() - 31 * DAY_MS);
+  const recent = new Date(now.getTime() - 29 * DAY_MS);
+  const oldRecording = await agedFile(videosDir, 'flow-old.webm', 'stale', old);
+  const recentRecording = await agedFile(videosDir, 'flow-new.webm', 'keep', recent);
+  await utimes(videosDir, old, old);
+  const physicalOld = await realpath(oldRecording);
+
+  const result = await pruneSessions({
+    paths: {
+      dataDir,
+      sessionsDir: path.join(dataDir, 'sessions'),
+      archiveDir: path.join(dataDir, 'archive'),
+      outputDir,
+      videosDir,
+    },
+    now,
+    retentionDays: 30,
+  });
+
+  assert.deepEqual(result, { removedPaths: [physicalOld], removedBytes: 5 });
+  assert.equal((await lstat(videosDir)).isDirectory(), true);
+  assert.equal((await lstat(recentRecording)).isFile(), true);
+});
+
 // Two MCP servers can launch at once (Claude and Codex, or two panes) and
 // both prune the same output dir. A candidate the peer removed between this
 // pruner's selection and its confirming stat is already gone: skip it and
