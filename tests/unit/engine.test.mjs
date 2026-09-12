@@ -4,7 +4,10 @@ import test from 'node:test';
 import { DEFAULT_ENGINE, UnknownEngineError, engineFor } from '../../lib/runtime/engine.mjs';
 import { runtimeArgs } from '../../lib/runtime/launch.mjs';
 
-const paths = { dataDir: '/synthetic-home/.fast-browser' };
+const paths = {
+  dataDir: '/synthetic-home/.fast-browser',
+  outputDir: '/synthetic-home/.fast-browser/output',
+};
 const lock = { extension: { id: 'abcdefghijklmnopabcdefghijklmnop' } };
 
 // A config with no `engine` field is what every pre-existing caller passes,
@@ -42,7 +45,7 @@ test('the attached arg list keeps its exact historical order', () => {
     '--snapshot-mode=none',
     '--codegen=none',
     '--timeout-settle=200',
-    '--output-dir=/synthetic-home/.fast-browser',
+    '--output-dir=/synthetic-home/.fast-browser/output',
   ]);
 });
 
@@ -54,7 +57,7 @@ test('the cdp engine emits the endpoint and never --headless or --extension', ()
     '--snapshot-mode=none',
     '--codegen=none',
     '--timeout-settle=200',
-    '--output-dir=/synthetic-home/.fast-browser',
+    '--output-dir=/synthetic-home/.fast-browser/output',
   ]);
   // Under --cdp-endpoint, headlessness belongs to the sidecar's Chrome.
   // Emitting the flag would imply a knob that does nothing.
@@ -74,7 +77,7 @@ test('both engines inherit the shared observation defaults', () => {
 test('outputDir overrides the resolved data dir when set', () => {
   const args = runtimeArgs({ config: { ...cloud, outputDir: '/tmp/fb' }, paths, lock });
   assert.ok(args.includes('--output-dir=/tmp/fb'));
-  assert.ok(!args.includes('--output-dir=/synthetic-home/.fast-browser'));
+  assert.ok(!args.includes('--output-dir=/synthetic-home/.fast-browser/output'));
 });
 
 test('secretsFile adds --secrets and is absent when unset', () => {

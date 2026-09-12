@@ -368,6 +368,7 @@ function launcherPaths(directory) {
   return {
     dataDir: path.join(directory, '.fast-browser'),
     runtimeDir: path.join(directory, '.fast-browser', 'runtime'),
+    outputDir: path.join(directory, '.fast-browser', 'output'),
   };
 }
 
@@ -380,7 +381,7 @@ test('builds exact safe and full runtime argument snapshots', () => {
     '--snapshot-mode=none',
     '--codegen=none',
     '--timeout-settle=200',
-    `--output-dir=${paths.dataDir}`,
+    `--output-dir=${paths.outputDir}`,
     '--save-trace',
   ];
 
@@ -431,7 +432,7 @@ test('runtimeArgs omits --save-trace exactly when config.trace is false', () => 
     '--snapshot-mode=none',
     '--codegen=none',
     '--timeout-settle=200',
-    `--output-dir=${paths.dataDir}`,
+    `--output-dir=${paths.outputDir}`,
   ];
 
   assert.deepEqual(
