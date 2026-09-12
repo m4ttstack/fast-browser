@@ -59,7 +59,7 @@ test('pruneSessions removes only eligible direct session directories and reports
   const physicalOldSessions = await Promise.all([realpath(oldSession), realpath(oldArchive)]);
 
   const result = await pruneSessions({
-    paths: { dataDir, sessionsDir, archiveDir },
+    paths: { dataDir, sessionsDir, archiveDir, outputDir: path.join(dataDir, 'output') },
     now,
     retentionDays: 30,
   });
@@ -94,13 +94,66 @@ test('pruneSessions does not follow symlinks inside an eligible directory', asyn
 
   const physicalCandidate = await realpath(candidate);
   const result = await pruneSessions({
-    paths: { dataDir, sessionsDir, archiveDir },
+    paths: { dataDir, sessionsDir, archiveDir, outputDir: path.join(dataDir, 'output') },
     now,
     retentionDays: 30,
   });
 
   assert.deepEqual(result, { removedPaths: [physicalCandidate], removedBytes: 5 });
   assert.equal(await readFile(outsideFile, 'utf8'), 'outside');
+});
+
+async function agedFile(root, name, contents, mtime) {
+  const file = path.join(root, name);
+  await writeFile(file, contents, 'utf8');
+  await utimes(file, mtime, mtime);
+  return file;
+}
+
+// The runtime writes session-*/ transcripts and console-*.log files straight
+// into --output-dir (paths.outputDir), so retention has to sweep there or the
+// retention window never applies to anything the runtime records. Trace
+// sessions in the same directory are the flow sweep's input and are not the
+// pruner's to remove; nor is anything a caller wrote there by its own name.
+test('pruneSessions sweeps aged session directories and console logs out of the output dir', async (t) => {
+  const { pruneSessions } = await import('../../lib/sessions/retention.mjs');
+  const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'fast-browser-retention-output-'));
+  t.after(() => rm(tempRoot, { recursive: true, force: true }));
+  const dataDir = path.join(tempRoot, '.fast-browser');
+  const sessionsDir = path.join(dataDir, 'sessions');
+  const archiveDir = path.join(dataDir, 'archive');
+  const outputDir = path.join(dataDir, 'output');
+  await Promise.all([
+    mkdir(sessionsDir, { recursive: true }),
+    mkdir(archiveDir, { recursive: true }),
+    mkdir(outputDir, { recursive: true }),
+  ]);
+
+  const now = new Date('2026-07-26T12:00:00.000Z');
+  const old = new Date(now.getTime() - 31 * DAY_MS);
+  const recent = new Date(now.getTime() - 29 * DAY_MS);
+  const oldSession = await sessionDirectory(outputDir, 'session-1785116095663', '1234', old);
+  const oldLog = await agedFile(outputDir, 'console-2026-06-20T10-00-00-000Z.log', '123456', old);
+  const recentSession = await sessionDirectory(outputDir, 'session-1789139552151', 'keep', recent);
+  const recentLog = await agedFile(outputDir, 'console-2026-07-25T10-00-00-000Z.log', 'keep', recent);
+  const trace = await sessionDirectory(outputDir, 'trace-1785958739383', 'trace', old);
+  const capture = await agedFile(outputDir, 'before-fix.png', 'png', old);
+  const physicalOld = await Promise.all([realpath(oldSession), realpath(oldLog)]);
+
+  const result = await pruneSessions({
+    paths: { dataDir, sessionsDir, archiveDir, outputDir },
+    now,
+    retentionDays: 30,
+  });
+
+  assert.deepEqual(new Set(result.removedPaths), new Set(physicalOld));
+  assert.equal(result.removedBytes, 10);
+  for (const kept of [recentSession, trace]) {
+    assert.equal((await lstat(kept)).isDirectory(), true, kept);
+  }
+  for (const kept of [recentLog, capture]) {
+    assert.equal((await lstat(kept)).isFile(), true, kept);
+  }
 });
 
 test('pruneSessions treats missing exact roots as empty', async (t) => {
@@ -116,6 +169,7 @@ test('pruneSessions treats missing exact roots as empty', async (t) => {
         dataDir,
         sessionsDir: path.join(dataDir, 'sessions'),
         archiveDir: path.join(dataDir, 'archive'),
+        outputDir: path.join(dataDir, 'output'),
       },
       now: new Date('2026-07-26T12:00:00.000Z'),
       retentionDays: 30,
@@ -141,7 +195,7 @@ for (const linkedRoot of ['sessions', 'archive']) {
 
     await assert.rejects(
       () => pruneSessions({
-        paths: { dataDir, sessionsDir, archiveDir },
+        paths: { dataDir, sessionsDir, archiveDir, outputDir: path.join(dataDir, 'output') },
         now: new Date('2026-07-26T12:00:00.000Z'),
         retentionDays: 30,
       }),
@@ -166,7 +220,7 @@ for (const fileRoot of ['sessions', 'archive']) {
 
     await assert.rejects(
       () => pruneSessions({
-        paths: { dataDir, sessionsDir, archiveDir },
+        paths: { dataDir, sessionsDir, archiveDir, outputDir: path.join(dataDir, 'output') },
         now: new Date('2026-07-26T12:00:00.000Z'),
         retentionDays: 30,
       }),
@@ -189,7 +243,7 @@ test('pruneSessions rejects roots that are not the exact data-directory children
 
   await assert.rejects(
     () => pruneSessions({
-      paths: { dataDir, sessionsDir, archiveDir },
+      paths: { dataDir, sessionsDir, archiveDir, outputDir: path.join(dataDir, 'output') },
       now: new Date('2026-07-26T12:00:00.000Z'),
       retentionDays: 30,
     }),

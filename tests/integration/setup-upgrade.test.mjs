@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import {
-  chmod, mkdir, mkdtemp, readFile, rm, writeFile,
+  chmod, lstat, mkdir, mkdtemp, readFile, rm, writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -297,6 +297,42 @@ test('setup makes no changes when the installed artifacts already match the curr
   assert.equal(report.changed, false);
   assert.deepEqual(installCalls, []);
   assert.deepEqual(untouchedCalls, []);
+});
+
+// The runtime writes every artifact it produces on its own (traces, session
+// transcripts, console logs, videos) into --output-dir, and launch pins that
+// to paths.outputDir. A fresh install creates it with the other data-dir
+// children; an existing install only mutates on a lock upgrade, so that path
+// has to create it too or the first runtime write picks the directory's mode.
+test('a lock upgrade creates the runtime output directory as a private data-dir child', async () => {
+  const oldLock = lockFor('0.1.0-alpha.1', '0.2.1');
+  const newLock = lockFor('0.1.0-alpha.5', '0.2.2');
+  const paths = await fixtureHome('fast-browser-output-dir-');
+  await writeRuntimeInstall(paths, oldLock);
+  await writeExtensionInstall(paths, oldLock);
+  await saveConfig(paths, configFor(oldLock));
+
+  await setup(baseRequest, {
+    paths,
+    checkPlatform: async () => {},
+    detectHosts: async () => ['claude'],
+    loadConfig,
+    loadRuntimeLock: async () => newLock,
+    installRuntime: async ({ lock }) => ({ version: lock.productVersion }),
+    installExtension: async ({ lock }) => ({ unpacked: '/unused', version: lock.extension.version }),
+    ...untouchedDuringUpgrade([]),
+    saveConfig,
+    doctor: doctorSequence(
+      ['runtime-checksum', 'extension-artifact', 'mcp-handshake', 'tool-contract', 'extension-installed'],
+      ['extension-installed'],
+    ),
+  });
+
+  assert.equal(path.dirname(paths.outputDir), paths.dataDir);
+  const state = await lstat(paths.outputDir);
+  assert.equal(state.isDirectory(), true);
+  assert.equal(state.isSymbolicLink(), false);
+  assert.equal(state.mode & 0o777, 0o700);
 });
 
 test('setup refuses to upgrade when the installed extension bytes no longer match their own marker', async () => {

@@ -15,15 +15,17 @@ import { startMcpClient } from './mcp-client.mjs';
 const pluginRoot = fileURLToPath(new URL('../../../', import.meta.url));
 
 // Hand-built paths object matching lib/core/paths.mjs's key shape, but
-// rooted at `outputDir` itself rather than at `homeDir/.fast-browser`:
-// lib/runtime/launch.mjs's real wiring is `--output-dir=${paths.dataDir}`
-// (runtimeArgs), and mcp-client.mjs's `startMcpClient` passes `outputDir`
-// as `--output-dir` verbatim -- so in every caller of this helper,
-// `paths.dataDir` IS `outputDir`, never a nested subdirectory of it. This
-// is where `TraceLog.create` writes `trace-<epochMs>/` (TRACE.md's
-// "Directory layout"), exactly what sweep.mjs's `listTraceSessions` scans
-// -- `resolvePaths({ homeDir: outputDir })` would instead compute
-// `outputDir/.fast-browser`, one level too deep. `sitesDir` is included
+// with every key rooted at `outputDir` itself rather than at
+// `homeDir/.fast-browser`: mcp-client.mjs's `startMcpClient` passes
+// `outputDir` as `--output-dir` verbatim, so that is where
+// `TraceLog.create` writes `trace-<epochMs>/` (TRACE.md's "Directory
+// layout") and therefore what `paths.outputDir` must name for sweep.mjs's
+// `listTraceSessions` to scan it. Production nests it one level below
+// `paths.dataDir` (launch.mjs's `--output-dir=${paths.outputDir}`); the
+// e2e fixtures collapse the two onto one temp root because nothing here
+// depends on them differing, and `resolvePaths({ homeDir: outputDir })`
+// would instead compute `outputDir/.fast-browser`, one level too deep.
+// `sitesDir` is included
 // even for a caller that never writes under it (`flows find` reads the
 // flow's own origin's stored quirks via lib/sites/store.mjs's
 // `readSite(paths, origin)`, which requires the key to be a string, or
@@ -32,6 +34,7 @@ const pluginRoot = fileURLToPath(new URL('../../../', import.meta.url));
 export function pathsForOutputDir(outputDir) {
   return {
     dataDir: outputDir,
+    outputDir,
     flowsDir: path.join(outputDir, 'flows'),
     flowsPendingDir: path.join(outputDir, 'flows-pending'),
     flowsStateFile: path.join(outputDir, 'flows-state.json'),
