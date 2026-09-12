@@ -12,6 +12,8 @@ test('resolves every mutable path below the supplied home', () => {
   assert.equal(paths.configFile, '/tmp/fb-home/.fast-browser/config.json');
   assert.equal(paths.macrosDir, '/tmp/fb-home/.fast-browser/macros');
   assert.equal(paths.sessionsDir, '/tmp/fb-home/.fast-browser/sessions');
+  assert.equal(paths.outputDir, '/tmp/fb-home/.fast-browser/output');
+  assert.equal(paths.videosDir, '/tmp/fb-home/.fast-browser/output/videos');
   assert.equal(paths.runtimeDir, '/tmp/fb-home/.fast-browser/runtime');
   assert.equal(paths.extensionDir, '/tmp/fb-home/.fast-browser/extension');
   assert.equal(paths.archiveDir, '/tmp/fb-home/.fast-browser/archive');
