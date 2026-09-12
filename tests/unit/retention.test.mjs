@@ -59,7 +59,7 @@ test('pruneSessions removes only eligible direct session directories and reports
   const physicalOldSessions = await Promise.all([realpath(oldSession), realpath(oldArchive)]);
 
   const result = await pruneSessions({
-    paths: { dataDir, sessionsDir, archiveDir, outputDir: path.join(dataDir, 'output') },
+    paths: { dataDir, sessionsDir, archiveDir, outputDir: path.join(dataDir, 'output'), videosDir: path.join(dataDir, 'output', 'videos') },
     now,
     retentionDays: 30,
   });
@@ -94,7 +94,7 @@ test('pruneSessions does not follow symlinks inside an eligible directory', asyn
 
   const physicalCandidate = await realpath(candidate);
   const result = await pruneSessions({
-    paths: { dataDir, sessionsDir, archiveDir, outputDir: path.join(dataDir, 'output') },
+    paths: { dataDir, sessionsDir, archiveDir, outputDir: path.join(dataDir, 'output'), videosDir: path.join(dataDir, 'output', 'videos') },
     now,
     retentionDays: 30,
   });
@@ -110,12 +110,14 @@ async function agedFile(root, name, contents, mtime) {
   return file;
 }
 
-// The runtime writes session-*/ transcripts and console-*.log files straight
-// into --output-dir (paths.outputDir), so retention has to sweep there or the
-// retention window never applies to anything the runtime records. Trace
-// sessions in the same directory are the flow sweep's input and are not the
-// pruner's to remove; nor is anything a caller wrote there by its own name.
-test('pruneSessions sweeps aged session directories and console logs out of the output dir', async (t) => {
+// The runtime owns everything under --output-dir (paths.outputDir): trace-*/
+// sessions, session-*/ transcripts, console-*.log, videos/, and any capture a
+// caller handed a bare filename. Retention treats every direct entry there
+// uniformly by age, and reaches one level into videos/ because that
+// directory's own mtime moves whenever a recording lands and would otherwise
+// shelter old recordings next to a fresh one. The flow sweep tolerates a
+// trace directory disappearing, so aged traces are not exempt.
+test('pruneSessions removes every aged entry under the output dir, recordings included', async (t) => {
   const { pruneSessions } = await import('../../lib/sessions/retention.mjs');
   const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'fast-browser-retention-output-'));
   t.after(() => rm(tempRoot, { recursive: true, force: true }));
@@ -123,37 +125,44 @@ test('pruneSessions sweeps aged session directories and console logs out of the 
   const sessionsDir = path.join(dataDir, 'sessions');
   const archiveDir = path.join(dataDir, 'archive');
   const outputDir = path.join(dataDir, 'output');
+  const videosDir = path.join(outputDir, 'videos');
   await Promise.all([
     mkdir(sessionsDir, { recursive: true }),
     mkdir(archiveDir, { recursive: true }),
-    mkdir(outputDir, { recursive: true }),
+    mkdir(videosDir, { recursive: true }),
   ]);
 
   const now = new Date('2026-07-26T12:00:00.000Z');
   const old = new Date(now.getTime() - 31 * DAY_MS);
   const recent = new Date(now.getTime() - 29 * DAY_MS);
-  const oldSession = await sessionDirectory(outputDir, 'session-1785116095663', '1234', old);
-  const oldLog = await agedFile(outputDir, 'console-2026-06-20T10-00-00-000Z.log', '123456', old);
-  const recentSession = await sessionDirectory(outputDir, 'session-1789139552151', 'keep', recent);
-  const recentLog = await agedFile(outputDir, 'console-2026-07-25T10-00-00-000Z.log', 'keep', recent);
-  const trace = await sessionDirectory(outputDir, 'trace-1785958739383', 'trace', old);
-  const capture = await agedFile(outputDir, 'before-fix.png', 'png', old);
-  const physicalOld = await Promise.all([realpath(oldSession), realpath(oldLog)]);
+  const removed = await Promise.all([
+    sessionDirectory(outputDir, 'session-1785116095663', '1234', old),
+    agedFile(outputDir, 'console-2026-06-20T10-00-00-000Z.log', '123456', old),
+    sessionDirectory(outputDir, 'trace-1785958739383', 'trace', old),
+    agedFile(outputDir, 'before-fix.png', 'png', old),
+    agedFile(videosDir, 'flow-old.webm', 'webm', old),
+  ]);
+  const kept = await Promise.all([
+    sessionDirectory(outputDir, 'session-1789139552151', 'keep', recent),
+    agedFile(outputDir, 'console-2026-07-25T10-00-00-000Z.log', 'keep', recent),
+    sessionDirectory(outputDir, 'trace-1789139552151', 'keep', recent),
+    agedFile(outputDir, 'after-fix.png', 'keep', recent),
+    agedFile(videosDir, 'flow-new.webm', 'keep', recent),
+  ]);
+  const physicalRemoved = await Promise.all(removed.map((entry) => realpath(entry)));
 
   const result = await pruneSessions({
-    paths: { dataDir, sessionsDir, archiveDir, outputDir },
+    paths: { dataDir, sessionsDir, archiveDir, outputDir, videosDir },
     now,
     retentionDays: 30,
   });
 
-  assert.deepEqual(new Set(result.removedPaths), new Set(physicalOld));
-  assert.equal(result.removedBytes, 10);
-  for (const kept of [recentSession, trace]) {
-    assert.equal((await lstat(kept)).isDirectory(), true, kept);
+  assert.deepEqual(new Set(result.removedPaths), new Set(physicalRemoved));
+  assert.equal(result.removedBytes, 4 + 6 + 5 + 3 + 4);
+  for (const entry of kept) {
+    assert.equal((await lstat(entry)).isSymbolicLink(), false, entry);
   }
-  for (const kept of [recentLog, capture]) {
-    assert.equal((await lstat(kept)).isFile(), true, kept);
-  }
+  assert.equal((await lstat(videosDir)).isDirectory(), true);
 });
 
 test('pruneSessions treats missing exact roots as empty', async (t) => {
@@ -170,6 +179,7 @@ test('pruneSessions treats missing exact roots as empty', async (t) => {
         sessionsDir: path.join(dataDir, 'sessions'),
         archiveDir: path.join(dataDir, 'archive'),
         outputDir: path.join(dataDir, 'output'),
+        videosDir: path.join(dataDir, 'output', 'videos'),
       },
       now: new Date('2026-07-26T12:00:00.000Z'),
       retentionDays: 30,
@@ -195,7 +205,7 @@ for (const linkedRoot of ['sessions', 'archive']) {
 
     await assert.rejects(
       () => pruneSessions({
-        paths: { dataDir, sessionsDir, archiveDir, outputDir: path.join(dataDir, 'output') },
+        paths: { dataDir, sessionsDir, archiveDir, outputDir: path.join(dataDir, 'output'), videosDir: path.join(dataDir, 'output', 'videos') },
         now: new Date('2026-07-26T12:00:00.000Z'),
         retentionDays: 30,
       }),
@@ -220,7 +230,7 @@ for (const fileRoot of ['sessions', 'archive']) {
 
     await assert.rejects(
       () => pruneSessions({
-        paths: { dataDir, sessionsDir, archiveDir, outputDir: path.join(dataDir, 'output') },
+        paths: { dataDir, sessionsDir, archiveDir, outputDir: path.join(dataDir, 'output'), videosDir: path.join(dataDir, 'output', 'videos') },
         now: new Date('2026-07-26T12:00:00.000Z'),
         retentionDays: 30,
       }),
@@ -243,7 +253,7 @@ test('pruneSessions rejects roots that are not the exact data-directory children
 
   await assert.rejects(
     () => pruneSessions({
-      paths: { dataDir, sessionsDir, archiveDir, outputDir: path.join(dataDir, 'output') },
+      paths: { dataDir, sessionsDir, archiveDir, outputDir: path.join(dataDir, 'output'), videosDir: path.join(dataDir, 'output', 'videos') },
       now: new Date('2026-07-26T12:00:00.000Z'),
       retentionDays: 30,
     }),
