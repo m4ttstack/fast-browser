@@ -295,7 +295,7 @@ test('the capturing-flows skill states recording scope, finalization, and the PI
   // videos directory, converted by the real CLI.
   assert.match(text, /one flow per tab/i);
   assert.match(text, /when the tab or the session closes/);
-  assert.match(text, /~\/\.fast-browser\/videos\//);
+  assert.match(text, /~\/\.fast-browser\/output\/videos\//);
   assert.match(text, /fast-browser gif/);
   assert.match(text, /brew install ffmpeg/);
   // The PII rule: no blur pass exists for motion, so the choices are a

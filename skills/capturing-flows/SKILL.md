@@ -43,7 +43,7 @@ file, which makes the PII rule below load-bearing, not theoretical.
    collect a recording from a tab that is still open; close it first.
 
 4. **Collect from the videos directory.** Recordings land in
-   `~/.fast-browser/videos/` under generated names. The newest `.webm` there
+   `~/.fast-browser/output/videos/` under generated names. The newest `.webm` there
    is the recording that just finished.
 
 5. **Convert with the CLI:**
@@ -52,7 +52,7 @@ file, which makes the PII rule below load-bearing, not theoretical.
    fast-browser gif <name>.webm --fps 8 --width 800
    ```
 
-   `<name>` is a name inside `~/.fast-browser/videos/`, never a path. The GIF
+   `<name>` is a name inside `~/.fast-browser/output/videos/`, never a path. The GIF
    lands in `~/.fast-browser/screenshots/` (same name, `.gif`, or choose one
    with `--out`). `--fps` is 1 to 30 and defaults to 8; `--width` caps the
    output width at up to 1200 px, defaults to 1200, and never upscales.
@@ -78,7 +78,7 @@ containing PII on the promise that nobody will look closely.
 
 | Symptom | Cause and fix |
 |---|---|
-| No `.webm` appears in `~/.fast-browser/videos/` | Recording was enabled after the session started; the setting only applies to sessions started after it. Enable first, then start a fresh session and re-drive the flow |
+| No `.webm` appears in `~/.fast-browser/output/videos/` | Recording was enabled after the session started; the setting only applies to sessions started after it. Enable first, then start a fresh session and re-drive the flow |
 | The `.webm` is tiny or unreadable | The session is still open, so the file is not finalized yet. Close the tab or session, then collect |
 | `gif` reports the renderer missing | `brew install ffmpeg`, then `fast-browser doctor` to confirm |
 | `gif` refuses the name | `<name>` must be a bare name inside the videos directory, and `--out` a bare name for the screenshots directory, never paths |

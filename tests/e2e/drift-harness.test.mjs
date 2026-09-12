@@ -1334,7 +1334,7 @@ test(
 // distinctly so a keyless `npm run test:drift` reports exactly which
 // precondition is missing rather than a generic "skipped".
 const encoderLegSkipReason = !voyageKeyConfigured
-  ? `${VOYAGE_API_KEY_ENV} is not set; this leg needs a live Voyage key to prove the rung-4 semantic re-bind (source ~/.fast-browser/voyage.env)`
+  ? `${VOYAGE_API_KEY_ENV} is not set; this leg needs a live Voyage key to prove the rung-4 semantic re-bind (source ~/.fast-browser/keys/voyage.env)`
   : (!releaseDirConfigured ? 'FAST_BROWSER_RELEASE_DIR is not set; this leg needs a local runtime' : false);
 
 const ENCODER_EXPECTED_SELECTOR = 'internal:role=button[name="Checkout"i]';

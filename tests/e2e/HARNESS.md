@@ -27,7 +27,7 @@ One leg proves the encoder-backed (Voyage) healing path, on top of the same
 matrix fixture the lexical legs use. It needs a live Voyage API key:
 
 ```bash
-source ~/.fast-browser/voyage.env
+source ~/.fast-browser/keys/voyage.env
 FAST_BROWSER_RELEASE_DIR=/path/to/fast-browser-dist npm run test:drift
 ```
 

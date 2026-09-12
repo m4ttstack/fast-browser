@@ -38,7 +38,9 @@ Stop. Do not enumerate sessions, inspect other roots, or mutate macro state.
    Match each failed macro to recent sessions on the same origin and queue a
    repaired script as a proposal before new candidates.
 2. **Collect direct sessions.** Enumerate only direct `session-*` directories
-   beneath `~/.fast-browser/sessions/`. Do not mine nested directories or
+   beneath `~/.fast-browser/output/` (where the runtime records them) and
+   `~/.fast-browser/sessions/` (where `migrate` places imported ones). Do not
+   mine nested directories, `trace-*` directories, or
    `~/.fast-browser/archive/`. Parse each `session.md` into its ordered tool
    flow and report unparseable sessions as no-ops.
 3. **Cluster repeated flows.** Group by origin and similar ordered actions.

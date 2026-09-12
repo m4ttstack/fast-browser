@@ -78,13 +78,13 @@ async function settledWebm(videosDir) {
 }
 
 test('a managed session records a finalized webm and the gif CLI converts it', async (t) => {
-  // The output dir doubles as the temp home's data dir: pointing the runtime
-  // at `<tempHome>/.fast-browser` means its recordings land exactly where the
-  // gif CLI (run with HOME=tempHome) will look for them, mirroring how
-  // launchRuntime pins --output-dir to the real data dir in production.
+  // Pointing the runtime at `<tempHome>/.fast-browser/output` means its
+  // recordings land exactly where the gif CLI (run with HOME=tempHome) will
+  // look for them, mirroring how launchRuntime pins --output-dir to
+  // paths.outputDir in production.
   const tempHome = await mkdtemp(path.join(os.tmpdir(), 'fb-video-e2e-home-'));
   t.after(() => rm(tempHome, { recursive: true, force: true }).catch(() => {}));
-  const outputDir = path.join(tempHome, '.fast-browser');
+  const outputDir = path.join(tempHome, '.fast-browser', 'output');
   await mkdir(outputDir, { recursive: true });
 
   const client = await startMcpClient({
@@ -128,8 +128,8 @@ test('a managed session records a finalized webm and the gif CLI converts it', a
       'gif', recording.name, '--fps', '8', '--width', '800', '--json',
     ],
     // HOME must be the temp home so the CLI resolves the same
-    // .fast-browser/videos the runtime just wrote into, and its screenshots
-    // directory, never the developer's real one.
+    // .fast-browser/output/videos the runtime just wrote into, and its
+    // screenshots directory, never the developer's real one.
     { env: { ...process.env, HOME: tempHome } },
   );
   const report = JSON.parse(stdout);
