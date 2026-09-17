@@ -2,3 +2,4 @@ node_modules/
 .worktrees/
 .superpowers/
 .local-dev/
+store/upload/*-keyed.zip
