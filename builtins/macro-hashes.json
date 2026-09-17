@@ -12,7 +12,8 @@
     "0.1.0-alpha.8",
     "0.1.0-alpha.9",
     "0.1.0-alpha.11",
-    "0.1.0-alpha.15"
+    "0.1.0-alpha.15",
+    "0.1.0-alpha.17"
   ],
   "macros": {
     "page-recon.js": [
