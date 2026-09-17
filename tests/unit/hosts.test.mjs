@@ -39,26 +39,34 @@ function scriptedRunner(responses) {
   return { calls, run };
 }
 
-const claudeNoPlugins =
-  'No plugins installed. Use `claude plugin install` to install a plugin.\n';
-const claudeNoMarketplaces = 'No marketplaces configured\n';
-const claudeInstalledCurrent = `Installed plugins:
+const claudeNoPlugins = '[]';
+const claudeNoMarketplaces = '[]';
 
-  ❯ fast-browser@mattstack
-    Version: ${pluginVersion}
-    Scope: user
-    Status: ✔ enabled
-`;
-const claudeMarketplace = `Configured marketplaces:
+function claudePluginEntry(id = 'fast-browser@mattstack', version = pluginVersion) {
+  return {
+    id,
+    version,
+    scope: 'user',
+    enabled: true,
+    installPath: `/fake/plugins/cache/mattstack/${id}/${version}`,
+  };
+}
 
-  ❯ mattstack
-    Source: Directory (${source})
-`;
-const claudeGitMarketplace = `Configured marketplaces:
+function claudeMarketplaceEntry(overrides = {}) {
+  return {
+    name: 'mattstack',
+    source: 'directory',
+    path: source,
+    installLocation: source,
+    ...overrides,
+  };
+}
 
-  ❯ mattstack
-    Source: GitHub (${gitSource})
-`;
+const claudeInstalledCurrent = JSON.stringify([claudePluginEntry()]);
+const claudeMarketplace = JSON.stringify([claudeMarketplaceEntry()]);
+const claudeGitMarketplace = JSON.stringify([
+  claudeMarketplaceEntry({ source: 'github', repo: gitSource, path: undefined, installLocation: '/fake/cache/mattstack' }),
+]);
 
 const codexEmptyPlugins = JSON.stringify({ installed: [], available: [] });
 const codexNoMarketplaces = JSON.stringify({ marketplaces: [] });
@@ -149,8 +157,8 @@ test('refreshes an exact Claude marketplace and leaves the matching version inst
   const installed = await installClaude({ source: gitSource, run });
 
   assert.deepEqual(calls, [
-    ['claude', ['plugin', 'list']],
-    ['claude', ['plugin', 'marketplace', 'list']],
+    ['claude', ['plugin', 'list', '--json']],
+    ['claude', ['plugin', 'marketplace', 'list', '--json']],
     ['claude', ['plugin', 'marketplace', 'update', 'mattstack']],
   ]);
   assert.deepEqual(installed, {
@@ -294,12 +302,10 @@ test('uninstall is idempotent and removes only the exact plugin selector', async
   const claudeAbsent = scriptedRunner([{ stdout: claudeNoPlugins }]);
   const claudePresent = scriptedRunner([
     {
-      stdout: `${claudeInstalledCurrent}
-  ❯ fast-browser-helper@other-market
-    Version: 9.0.0
-    Scope: user
-    Status: ✔ enabled
-`,
+      stdout: JSON.stringify([
+        claudePluginEntry(),
+        claudePluginEntry('fast-browser-helper@other-market', '9.0.0'),
+      ]),
     },
     { stdout: 'plugin removed' },
   ]);
@@ -460,13 +466,7 @@ test('relative local input is idempotent against canonical host paths', async ()
 test('requires the exact marketplace source type as well as source text', async () => {
   const claude = scriptedRunner([
     { stdout: claudeInstalledCurrent },
-    {
-      stdout: `Configured marketplaces:
-
-  ❯ mattstack
-    Source: Directory (${gitSource})
-`,
-    },
+    { stdout: JSON.stringify([claudeMarketplaceEntry({ path: gitSource, installLocation: gitSource })]) },
   ]);
   const codex = scriptedRunner([
     { stdout: codexPlugins(pluginVersion, gitSource) },
@@ -513,22 +513,17 @@ test('rejects unsupported local-like source forms before running a CLI', async (
   }
 });
 
-test('Claude text parsing does not treat substring mentions as installed or configured', async () => {
+test('Claude JSON parsing does not treat substring or name-prefix mentions as installed or configured', async () => {
   const { calls, run } = scriptedRunner([
     {
-      stdout: `Installed plugins:
-
-  ❯ helper@other
-    Version: 1.0.0
-    Description: migrates fast-browser@mattstack
-`,
+      stdout: JSON.stringify([
+        { id: 'helper@other', version: '1.0.0', description: 'migrates fast-browser@mattstack' },
+      ]),
     },
     {
-      stdout: `Configured marketplaces:
-
-  ❯ mattstack-archive
-    Source: Directory (${source})
-`,
+      stdout: JSON.stringify([
+        claudeMarketplaceEntry({ name: 'mattstack-archive' }),
+      ]),
     },
     { stdout: 'marketplace added' },
     { stdout: 'plugin installed' },
@@ -543,16 +538,11 @@ test('Claude text parsing does not treat substring mentions as installed or conf
   ]);
 });
 
-test('Claude rejects malformed or truncated plugin-list text before mutation', async () => {
+test('Claude rejects malformed or truncated plugin-list JSON before mutation', async () => {
   const malformedOutputs = [
     'arbitrary fast-browser@mattstack text',
     `${claudeInstalledCurrent}${TRUNCATION_MARKER}`,
-    `Installed plugins:
-
-  ❯ fast-browser@mattstack
-    Scope: user
-    Status: ✔ enabled
-`,
+    JSON.stringify([{ id: 'fast-browser@mattstack', scope: 'user', enabled: true }]),
   ];
 
   for (const stdout of malformedOutputs) {
@@ -570,14 +560,11 @@ test('Claude rejects malformed or truncated plugin-list text before mutation', a
   }
 });
 
-test('Claude rejects malformed or truncated marketplace-list text before mutation', async () => {
+test('Claude rejects malformed or truncated marketplace-list JSON before mutation', async () => {
   const malformedOutputs = [
     'mattstack might be configured',
     `${claudeMarketplace}${TRUNCATION_MARKER}`,
-    `Configured marketplaces:
-
-  ❯ mattstack
-`,
+    JSON.stringify([{ name: 'mattstack' }]),
   ];
 
   for (const stdout of malformedOutputs) {
@@ -602,11 +589,9 @@ test('rejects a marketplace name collision whose source is not exact', async () 
   const { calls, run } = scriptedRunner([
     { stdout: claudeNoPlugins },
     {
-      stdout: `Configured marketplaces:
-
-  ❯ mattstack
-    Source: Directory (/another/source)
-`,
+      stdout: JSON.stringify([
+        claudeMarketplaceEntry({ path: '/another/source', installLocation: '/another/source' }),
+      ]),
     },
   ]);
 
