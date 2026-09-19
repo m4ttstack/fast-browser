@@ -53,7 +53,9 @@
     "test:annotate": "node --test tests/e2e/annotate.test.mjs",
     "test:affordances": "node --test tests/e2e/affordances.test.mjs",
     "test:video": "node --test tests/e2e/video.test.mjs",
-    "test:cdp": "node --test tests/e2e/cdp-engine.test.mjs"
+    "test:cdp": "node --test tests/e2e/cdp-engine.test.mjs",
+    "publish-extension": "node scripts/publish-extension.mjs",
+    "cws-mint-token": "node scripts/cws-mint-token.mjs"
   },
   "dependencies": {},
   "devDependencies": {
