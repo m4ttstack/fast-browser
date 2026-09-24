@@ -1027,7 +1027,7 @@ test('extension-installed fails, unchanged, when the extension is absent entirel
     message: 'The pinned Chrome extension is not installed.',
     // Naming the directory matters more now that it is stable: it is the one
     // path the user ever has to load, and it never changes again afterward.
-    remediation: `Load the unpacked extension in Google Chrome from ${unpacked}.`,
+    remediation: `Open chrome://extensions, turn on Developer mode, click Load unpacked, and choose ${unpacked}.`,
   });
 });
 
@@ -1056,7 +1056,10 @@ test('extension-installed passes a Chrome Web Store install of the pinned versio
   });
 });
 
-test('extension-installed still fails a Chrome Web Store install at another version', async () => {
+// A store copy trails the lock after every extension bump until review
+// clears. Telling it "not installed, load unpacked" would swap it for a copy
+// that never auto-updates.
+test('extension-installed names the version gap for a Chrome Web Store install at another version', async () => {
   const { extensionDir, lock } = await setupManagedExtension('1.0.0', {
     'manifest.json': '{"version":"1.0.0"}',
   });
@@ -1067,8 +1070,12 @@ test('extension-installed still fails a Chrome Web Store install at another vers
     profiles: [{ profile: 'Default', installed: true, manifestVersion: '0.9.0', path: '/store/0.9.0_0', fromWebStore: true }],
   });
 
-  assert.equal(status.status, 'fail');
-  assert.equal(status.message, 'The pinned Chrome extension is not installed.');
+  assert.deepEqual(status, {
+    id: 'extension-installed',
+    status: 'fail',
+    message: 'The Chrome Web Store copy is at 0.9.0; this Fast Browser pins 1.0.0.',
+    remediation: 'Chrome updates it once the store has 1.0.0. To check now, open chrome://extensions, turn on Developer mode, and click Update.',
+  });
 });
 
 test('extension-installed fails on content drift even though the version string still matches the lock', async () => {

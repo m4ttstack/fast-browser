@@ -312,6 +312,29 @@ test('reports a Chrome Web Store install as fromWebStore', async () => {
   assert.equal(profile.fromWebStore, true);
 });
 
+// Chrome disables a store copy it finds corrupted, and that content check is
+// what a store pass relies on, so a disabled record is never a store install.
+test('never reports a disabled, unpacked, or unresolved record as fromWebStore', async () => {
+  const cases = [
+    { record: { location: 1, from_webstore: true, state: 0, manifest: { version: '0.2.11' } }, installedDir: true },
+    { record: { location: 1, from_webstore: true, disable_reasons: [1], manifest: { version: '0.2.11' } }, installedDir: true },
+    { record: { location: 1, from_webstore: true, disable_reasons: 1, manifest: { version: '0.2.11' } }, installedDir: true },
+    { record: { location: 4, from_webstore: true, manifest: { version: '0.2.11' } }, installedDir: true },
+    { record: { location: 1, from_webstore: true }, installedDir: false },
+  ];
+  for (const { record, installedDir } of cases) {
+    const root = await tempChromeRoot();
+    const profileDirectory = path.join(root, 'Default');
+    if (installedDir) {
+      await writeUnpackedManifest(path.join(profileDirectory, 'Extensions', extensionId, '0.2.11_0'), '0.2.11');
+    }
+    await writeProfileJson(profileDirectory, 'Secure Preferences', { extensions: { settings: { [extensionId]: record } } });
+
+    const [profile] = await detectChromeExtension({ extensionId, chromeUserDataDir: root });
+    assert.equal(profile.fromWebStore, false, JSON.stringify(record));
+  }
+});
+
 // An unpacked record whose directory now carries the key for another id is a
 // leftover: Chrome cannot run that directory under the recorded id.
 test('treats an unpacked record whose manifest key derives a different id as not installed', async () => {
