@@ -210,6 +210,14 @@ run the printed remediation and repeat the check. A check that knows no
 specific fix reports a null remediation and names the underlying cause in its
 message instead.
 
+A caller that needs only some checks can name them, and doctor runs just
+those, in the usual order. The full run includes a live Codex agent smoke
+test that takes several seconds; a narrow selection skips it:
+
+```bash
+$ fast-browser doctor --checks runtime-checksum,extension-loaded,pairing --json
+```
+
 From here, Fast Browser's tools show up directly inside Claude Code and Codex.
 There is no separate client to run: point either agent at a task that needs a
 browser, and it drives the Chrome you just wired up.
