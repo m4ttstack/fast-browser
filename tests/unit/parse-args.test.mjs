@@ -18,6 +18,7 @@ test('parses a two-host full setup', () => {
       recordSessions: null,
       retentionDays: null,
       runtimeLock: null,
+      checks: null,
       palette: null,
       config: null,
       video: null,
@@ -59,6 +60,7 @@ test('defaults setup to detected hosts and no profile choice', () => {
     recordSessions: null,
     retentionDays: null,
     runtimeLock: null,
+    checks: null,
     palette: null,
     config: null,
     video: null,
@@ -160,6 +162,29 @@ test('migrate accepts --source, like setup', () => {
 
 test('doctor still rejects --source', () => {
   assert.throws(() => parseArgs(['doctor', '--source', '/repo/mattstack']), /--source/);
+});
+
+test('doctor --checks selects check ids from a comma-separated list', () => {
+  assert.equal(parseArgs(['doctor']).checks, null);
+  assert.deepEqual(
+    parseArgs(['doctor', '--checks', 'runtime-checksum,extension-loaded,pairing', '--json']).checks,
+    ['runtime-checksum', 'extension-loaded', 'pairing'],
+  );
+});
+
+test('doctor --checks refuses an unknown or empty id without echoing it', () => {
+  for (const value of ['runtime-checksum,/Users/secret', 'pairing,', '']) {
+    assert.throws(
+      () => parseArgs(['doctor', '--checks', value]),
+      (error) => error instanceof UsageError
+        && /invalid value for --checks/.test(error.message)
+        && !error.message.includes('secret'),
+    );
+  }
+});
+
+test('--checks is only valid for doctor', () => {
+  assert.throws(() => parseArgs(['setup', '--checks', 'pairing']), /--checks.*not valid.*setup/i);
 });
 
 test('--palette is accepted for configure and validated', () => {

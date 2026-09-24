@@ -117,6 +117,48 @@ test('doctor returns every stable check in order and catches individual failures
   assert.doesNotMatch(JSON.stringify(report), /Users|secret/);
 });
 
+test('doctor with checks runs only the selected checks, in stable order', async () => {
+  const ran = [];
+  const checks = Object.fromEntries(DOCTOR_CHECK_IDS.map((id) => [
+    id,
+    async () => {
+      ran.push(id);
+      return { status: id === 'retired-extension' ? 'fail' : 'pass', message: `${id} ran.`, remediation: null };
+    },
+  ]));
+
+  const report = await doctor(
+    { profile: 'full', checks: ['pairing', 'runtime-checksum', 'extension-loaded'] },
+    { checks },
+  );
+
+  assert.deepEqual(ran, ['runtime-checksum', 'extension-loaded', 'pairing']);
+  assert.deepEqual(report.checks.map(({ id }) => id), ['runtime-checksum', 'extension-loaded', 'pairing']);
+  assert.equal(report.ok, true, 'ok covers only the checks that ran');
+});
+
+test('doctor with checks also runs a selected check\'s prerequisite', async () => {
+  const ran = [];
+  const checks = {
+    'mcp-handshake': async (context) => {
+      ran.push('mcp-handshake');
+      context.tools = ['browser_navigate'];
+      return { status: 'pass', message: 'handshake ran.', remediation: null };
+    },
+    'tool-contract': async (context) => {
+      ran.push('tool-contract');
+      return context.tools
+        ? { status: 'pass', message: 'catalog read.', remediation: null }
+        : { status: 'fail', message: 'no catalog.', remediation: null };
+    },
+  };
+
+  const report = await doctor({ profile: 'full', checks: ['tool-contract'] }, { checks });
+
+  assert.deepEqual(ran, ['mcp-handshake', 'tool-contract']);
+  assert.equal(report.ok, true);
+});
+
 // The bug this covers: `preflightCodexUninstall` throws instead of returning
 // `{installed: false}` when `codex plugin list` exits non-zero, so the
 // codex-plugin check's own "Codex does not have Fast Browser installed"
