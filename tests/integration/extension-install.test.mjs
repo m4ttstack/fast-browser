@@ -297,6 +297,7 @@ test('detects exact IDs only in Default and Profile <N> without returning prefer
     {
       profile: 'Default',
       installed: true,
+      fromWebStore: false,
       manifestVersion: '0.2.1',
       versionSource: 'chrome',
       path: defaultManifest,
@@ -305,6 +306,7 @@ test('detects exact IDs only in Default and Profile <N> without returning prefer
     {
       profile: 'Profile 2',
       installed: true,
+      fromWebStore: false,
       manifestVersion: '0.2.2',
       versionSource: 'chrome',
       path: null,
@@ -313,6 +315,7 @@ test('detects exact IDs only in Default and Profile <N> without returning prefer
     {
       profile: 'Profile 3',
       installed: false,
+      fromWebStore: false,
       manifestVersion: null,
       versionSource: null,
       path: null,
