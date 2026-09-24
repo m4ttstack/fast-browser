@@ -177,7 +177,7 @@ test('doctor --checks refuses an unknown or empty id without echoing it', () => 
     assert.throws(
       () => parseArgs(['doctor', '--checks', value]),
       (error) => error instanceof UsageError
-        && /--checks/.test(error.message)
+        && /invalid value for --checks/.test(error.message)
         && !error.message.includes('secret'),
     );
   }
