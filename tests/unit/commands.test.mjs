@@ -1060,29 +1060,29 @@ test('extension-installed passes a Chrome Web Store install of the pinned versio
 // clears. Telling it "not installed, load unpacked" would swap it for a copy
 // that never auto-updates.
 test('extension-installed names the version gap for a Chrome Web Store install at another version', async () => {
-  const { extensionDir, lock } = await setupManagedExtension('1.0.0', {
-    'manifest.json': '{"version":"1.0.0"}',
+  const { extensionDir, lock } = await setupManagedExtension('1.0.10', {
+    'manifest.json': '{"version":"1.0.10"}',
   });
 
   const status = await extensionInstalledStatus({
     extensionDir,
     lock,
-    profiles: [{ profile: 'Default', installed: true, manifestVersion: '0.9.0', path: '/store/0.9.0_0', fromWebStore: true }],
+    profiles: [{ profile: 'Default', installed: true, manifestVersion: '1.0.9', path: '/store/1.0.9_0', fromWebStore: true }],
   });
 
   assert.deepEqual(status, {
     id: 'extension-installed',
     status: 'fail',
-    message: 'The Chrome Web Store copy is at 0.9.0; this Fast Browser pins 1.0.0.',
-    remediation: 'Chrome updates it once the store has 1.0.0. To check now, open chrome://extensions, turn on Developer mode, and click Update.',
+    message: 'The Chrome Web Store copy is at 1.0.9; this Fast Browser pins 1.0.10.',
+    remediation: 'Chrome updates it once the store has 1.0.10. To check now, open chrome://extensions, turn on Developer mode, and click Update.',
   });
 });
 
 // Chrome auto-updates a store copy within hours and never downgrades, so a
 // Fast Browser that lags the store has to move forward itself.
 test('extension-installed tells a Fast Browser behind its store copy to update itself', async () => {
-  const { extensionDir, lock } = await setupManagedExtension('1.0.0', {
-    'manifest.json': '{"version":"1.0.0"}',
+  const { extensionDir, lock } = await setupManagedExtension('1.0.9', {
+    'manifest.json': '{"version":"1.0.9"}',
   });
 
   const status = await extensionInstalledStatus({
@@ -1094,7 +1094,7 @@ test('extension-installed tells a Fast Browser behind its store copy to update i
   assert.deepEqual(status, {
     id: 'extension-installed',
     status: 'fail',
-    message: 'The Chrome Web Store copy (1.0.10) is newer than the 1.0.0 this Fast Browser pins.',
+    message: 'The Chrome Web Store copy (1.0.10) is newer than the 1.0.9 this Fast Browser pins.',
     remediation: 'Update Fast Browser, then run doctor again.',
   });
 });
