@@ -1078,6 +1078,27 @@ test('extension-installed names the version gap for a Chrome Web Store install a
   });
 });
 
+// Chrome auto-updates a store copy within hours and never downgrades, so a
+// Fast Browser that lags the store has to move forward itself.
+test('extension-installed tells a Fast Browser behind its store copy to update itself', async () => {
+  const { extensionDir, lock } = await setupManagedExtension('1.0.0', {
+    'manifest.json': '{"version":"1.0.0"}',
+  });
+
+  const status = await extensionInstalledStatus({
+    extensionDir,
+    lock,
+    profiles: [{ profile: 'Default', installed: true, manifestVersion: '1.0.10', path: '/store/1.0.10_0', fromWebStore: true }],
+  });
+
+  assert.deepEqual(status, {
+    id: 'extension-installed',
+    status: 'fail',
+    message: 'The Chrome Web Store copy (1.0.10) is newer than the 1.0.0 this Fast Browser pins.',
+    remediation: 'Update Fast Browser, then run doctor again.',
+  });
+});
+
 test('extension-installed fails on content drift even though the version string still matches the lock', async () => {
   const { extensionDir, unpacked, lock } = await setupManagedExtension('1.0.0', {
     'manifest.json': '{"version":"1.0.0"}',
