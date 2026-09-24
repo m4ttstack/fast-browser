@@ -210,8 +210,8 @@ run the printed remediation and repeat the check. A check that knows no
 specific fix reports a null remediation and names the underlying cause in its
 message instead.
 
-A caller that needs only some checks can name them, and doctor runs just
-those, in the usual order. The full run includes a live Codex agent smoke
+A caller that needs only some checks can name them, and doctor runs those
+(plus any check they depend on) in the usual order. The full run includes a live Codex agent smoke
 test that takes several seconds; a narrow selection skips it:
 
 ```bash
