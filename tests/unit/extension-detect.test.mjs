@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import { detectChromeExtension } from '../../lib/extension/detect.mjs';
+import { detectChromeExtension, extensionIdFromKey } from '../../lib/extension/detect.mjs';
 
 const extensionId = 'abcdefghijklmnopabcdefghijklmnop';
 
@@ -43,6 +43,7 @@ test('detects an unpacked extension listed only in Secure Preferences by reading
     {
       profile: 'Default',
       installed: true,
+      fromWebStore: false,
       manifestVersion: '0.2.1',
       versionSource: 'disk',
       path: unpackedDirectory,
@@ -70,6 +71,7 @@ test('treats a Secure Preferences entry with state 0 as not installed even with 
     {
       profile: 'Default',
       installed: false,
+      fromWebStore: false,
       manifestVersion: null,
       versionSource: null,
       path: null,
@@ -90,6 +92,7 @@ test('reports not installed when the extension is absent from both Preferences a
     {
       profile: 'Default',
       installed: false,
+      fromWebStore: false,
       manifestVersion: null,
       versionSource: null,
       path: null,
@@ -111,6 +114,7 @@ test('resolves an unreadable or malformed Secure Preferences file to not install
     {
       profile: 'Default',
       installed: false,
+      fromWebStore: false,
       manifestVersion: null,
       versionSource: null,
       path: null,
@@ -136,6 +140,7 @@ test('still detects an extension recorded only in Preferences exactly as before'
     {
       profile: 'Default',
       installed: true,
+      fromWebStore: false,
       manifestVersion: '0.2.2',
       versionSource: 'chrome',
       path: null,
@@ -170,6 +175,7 @@ test('prefers a Preferences version over a differing Secure Preferences version 
     {
       profile: 'Default',
       installed: true,
+      fromWebStore: false,
       manifestVersion: '0.2.2',
       versionSource: 'chrome',
       path: null,
@@ -196,6 +202,7 @@ test('resolves a Secure Preferences entry whose path has no readable manifest.js
     {
       profile: 'Default',
       installed: false,
+      fromWebStore: false,
       manifestVersion: null,
       versionSource: null,
       path: null,
@@ -276,4 +283,60 @@ test('reports loadedAt null when Chrome recorded no usable timestamp', async () 
     assert.equal(profile.installed, true);
     assert.equal(profile.loadedAt, null);
   }
+});
+
+// The public key the shipped extension manifest carries; Chrome derives the
+// extension id from it.
+const SHIPPED_KEY = 'MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAp+qIRnFkCPWtYEVqsEHRRYn5ptU2rxkMnaq4u0skIdr2uOesgqQRHSvGL68UWw84Mbt/sDZsKeVgbuIjqYSgaXMowC5ak2xEx88jW/DKg+l9cpx6trE8iZ4qdUr7Rn+Hv42soaEDi6YFY5IlW/3PX234ZsL34zSx4RM0NGGNcpPUrHBk76O+TITQG3AaHTVblVswArIQ0y27j3Zk7enmxl7EsOSfq49wx4U9GweNXDfyll8INY7brqcwqLjb402Hw8Hof7DDgf/q+sXNF8jpn2WwMScAxti4oOILNNS5GAeLn4BUCWVTI/MXNL9nwFBNnu49zew7QcQ1ukojLfILEQIDAQAB';
+const SHIPPED_ID = 'fnfikoifhimpdedpdepehibjjkcfbacm';
+
+test('derives the extension id Chrome assigns from a manifest key', () => {
+  assert.equal(extensionIdFromKey(SHIPPED_KEY), SHIPPED_ID);
+});
+
+test('reports a Chrome Web Store install as fromWebStore', async () => {
+  const root = await tempChromeRoot();
+  const profileDirectory = path.join(root, 'Default');
+  await writeUnpackedManifest(path.join(profileDirectory, 'Extensions', extensionId, '0.2.11_0'), '0.2.11');
+  await writeProfileJson(profileDirectory, 'Secure Preferences', {
+    extensions: {
+      settings: {
+        [extensionId]: { location: 1, from_webstore: true, manifest: { version: '0.2.11' } },
+      },
+    },
+  });
+
+  const [profile] = await detectChromeExtension({ extensionId, chromeUserDataDir: root });
+  assert.equal(profile.installed, true);
+  assert.equal(profile.manifestVersion, '0.2.11');
+  assert.equal(profile.fromWebStore, true);
+});
+
+// An unpacked record whose directory now carries the key for another id is a
+// leftover: Chrome cannot run that directory under the recorded id.
+test('treats an unpacked record whose manifest key derives a different id as not installed', async () => {
+  const root = await tempChromeRoot();
+  const unpackedDirectory = path.join(root, 'unpacked-extension');
+  await mkdir(unpackedDirectory, { recursive: true });
+  await writeFile(path.join(unpackedDirectory, 'manifest.json'), JSON.stringify({ version: '0.2.11', key: SHIPPED_KEY }));
+  await writeProfileJson(path.join(root, 'Default'), 'Secure Preferences', {
+    extensions: { settings: { [extensionId]: { location: 4, path: unpackedDirectory } } },
+  });
+
+  const [profile] = await detectChromeExtension({ extensionId, chromeUserDataDir: root });
+  assert.equal(profile.installed, false);
+});
+
+test('still detects an unpacked record whose manifest key derives the recorded id', async () => {
+  const root = await tempChromeRoot();
+  const unpackedDirectory = path.join(root, 'unpacked-extension');
+  await mkdir(unpackedDirectory, { recursive: true });
+  await writeFile(path.join(unpackedDirectory, 'manifest.json'), JSON.stringify({ version: '0.2.11', key: SHIPPED_KEY }));
+  await writeProfileJson(path.join(root, 'Default'), 'Secure Preferences', {
+    extensions: { settings: { [SHIPPED_ID]: { location: 4, path: unpackedDirectory } } },
+  });
+
+  const [profile] = await detectChromeExtension({ extensionId: SHIPPED_ID, chromeUserDataDir: root });
+  assert.equal(profile.installed, true);
+  assert.equal(profile.fromWebStore, false);
 });

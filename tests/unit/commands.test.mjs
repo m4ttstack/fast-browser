@@ -1031,6 +1031,46 @@ test('extension-installed fails, unchanged, when the extension is absent entirel
   });
 });
 
+// Chrome rewrites a store install (it adds _metadata and update_url), so its
+// bytes never match the unpacked artifact; the pinned id and version are what
+// identify it.
+test('extension-installed passes a Chrome Web Store install of the pinned version', async () => {
+  const { extensionDir, lock } = await setupManagedExtension('1.0.0', {
+    'manifest.json': '{"version":"1.0.0"}',
+    'lib/background.mjs': 'export const x = 1;\n',
+  });
+  const storeCopy = await mkdtemp(path.join(tmpdir(), 'fast-browser-ext-store-'));
+  await writeFile(path.join(storeCopy, 'manifest.json'), '{"version":"1.0.0","update_url":"https://clients2.google.com/service/update2/crx"}');
+
+  const status = await extensionInstalledStatus({
+    extensionDir,
+    lock,
+    profiles: [{ profile: 'Default', installed: true, manifestVersion: '1.0.0', path: storeCopy, fromWebStore: true }],
+  });
+
+  assert.deepEqual(status, {
+    id: 'extension-installed',
+    status: 'pass',
+    message: 'The pinned Chrome extension is installed from the Chrome Web Store.',
+    remediation: null,
+  });
+});
+
+test('extension-installed still fails a Chrome Web Store install at another version', async () => {
+  const { extensionDir, lock } = await setupManagedExtension('1.0.0', {
+    'manifest.json': '{"version":"1.0.0"}',
+  });
+
+  const status = await extensionInstalledStatus({
+    extensionDir,
+    lock,
+    profiles: [{ profile: 'Default', installed: true, manifestVersion: '0.9.0', path: '/store/0.9.0_0', fromWebStore: true }],
+  });
+
+  assert.equal(status.status, 'fail');
+  assert.equal(status.message, 'The pinned Chrome extension is not installed.');
+});
+
 test('extension-installed fails on content drift even though the version string still matches the lock', async () => {
   const { extensionDir, unpacked, lock } = await setupManagedExtension('1.0.0', {
     'manifest.json': '{"version":"1.0.0"}',
