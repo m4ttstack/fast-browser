@@ -101,7 +101,7 @@ digraph review_flow_queue {
     "Any reviewable flows?" -> "Render each reviewable flow's steps" [label="yes"];
     "Any reviewable flows?" -> "Print reject commands for dead-origin and superseded" [label="no"];
     "Any reviewable flows?" -> "STOP: approval needs the human's own terminal" [label="tempted to run approve from this shell"];
-    "STOP: approval needs the human's own terminal" -> "Print the approve command for each reviewable flow";
+    "STOP: approval needs the human's own terminal" -> "Render each reviewable flow's steps";
     "Render each reviewable flow's steps" -> "Print the approve command for each reviewable flow";
     "Print the approve command for each reviewable flow" -> "Print reject commands for dead-origin and superseded";
     "Print reject commands for dead-origin and superseded" -> "Report ready flows whose lastHealed is not null";
@@ -160,7 +160,8 @@ Sort every pending flow into exactly one bucket, first match wins:
 Coverage: B covers A when A's ordered sequence of `(op, target role, target
 name)` triples appears as a subsequence of B's. B wins the tiebreak when it has
 more steps, or the same number of steps and a name that sorts first in plain
-byte order.
+byte order. When the step counts and names are both equal, which happens only
+across tiers, the ready flow wins.
 
 B may come from either tier. `flows list --json` returns both tiers, and an
 already-approved flow that covers a pending one is the clearest case of all:
@@ -274,11 +275,6 @@ the artifact already read:
 Print the command directly beneath that flow's rendered steps, never on its
 own. A bare approve command with no steps beside it asks the human to trust
 exactly what this skill exists to show them.
-
-Arriving from `STOP: approval needs the human's own terminal`, the steps are
-not rendered yet: render each reviewable flow's steps first, as
-`### Render each reviewable flow's steps` lists them, then print each command
-beneath its flow.
 
 ```
 fast-browser flows approve <name>
