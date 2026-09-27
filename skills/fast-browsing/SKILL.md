@@ -22,7 +22,7 @@ digraph fast_browsing {
     "Runnable candidate?" [shape=diamond];
     "STOP: never run a candidate with runnable: false" [shape=octagon style=filled fillcolor=red fontcolor=white];
     "Tell the human what unblocks the flow" [shape=box];
-    "browser_run_code_unsafe {filename, args}: the candidate's invocation verbatim" [shape=plaintext];
+    "browser_run_code_unsafe {filename, args}: the candidate's invocation, arg values filled in" [shape=plaintext];
     "Flow result?" [shape=diamond];
     "STOP: a failed flow is never retried or hand-edited" [shape=octagon style=filled fillcolor=red fontcolor=white];
     "A completed flow step mutated?" [shape=diamond];
@@ -51,7 +51,7 @@ digraph fast_browsing {
     "STOP: explore by scouting, then batching" [shape=octagon style=filled fillcolor=red fontcolor=white];
     "Drive the journey with discrete tool calls" [shape=box];
     "Journey result?" [shape=diamond];
-    "Journey failures = 4?" [shape=diamond];
+    "Journey failures >= 4?" [shape=diamond];
     "Same call failed twice?" [shape=diamond];
     "Scout the page cheaply" [shape=box];
     "Scout found what the batch needs?" [shape=diamond];
@@ -61,7 +61,7 @@ digraph fast_browsing {
     "Batch result?" [shape=diamond];
     "Same scripted step failed twice?" [shape=diamond];
     "Do the failing step with one single-step tool" [shape=box];
-    "Batch rounds = 6?" [shape=diamond];
+    "Batch rounds >= 6?" [shape=diamond];
     "Read narrowly for the next batch" [shape=box];
 
     "Login screens this task = 2?" [shape=diamond];
@@ -106,14 +106,14 @@ digraph fast_browsing {
 
     "Trigger: a browser task to drive" -> "fast-browser flows find --intent \"<task>\" --origin <origin> --json";
     "fast-browser flows find --intent \"<task>\" --origin <origin> --json" -> "Runnable candidate?";
-    "Runnable candidate?" -> "browser_run_code_unsafe {filename, args}: the candidate's invocation verbatim" [label="yes"];
+    "Runnable candidate?" -> "browser_run_code_unsafe {filename, args}: the candidate's invocation, arg values filled in" [label="yes"];
     "Runnable candidate?" -> "Tell the human what unblocks the flow" [label="only runnable: false ones"];
     "Runnable candidate?" -> "Read {file_path: ~/.fast-browser/macros/MACROS.md}" [label="none, or the command errored"];
     "Runnable candidate?" -> "STOP: never run a candidate with runnable: false" [label="tempted to run a runnable: false candidate"];
     "STOP: never run a candidate with runnable: false" -> "Tell the human what unblocks the flow";
     "Tell the human what unblocks the flow" -> "Read {file_path: ~/.fast-browser/macros/MACROS.md}";
 
-    "browser_run_code_unsafe {filename, args}: the candidate's invocation verbatim" -> "Flow result?";
+    "browser_run_code_unsafe {filename, args}: the candidate's invocation, arg values filled in" -> "Flow result?";
     "Flow result?" -> "Did the task use 3+ discrete calls with no flow or macro?" [label="ok"];
     "Flow result?" -> "A completed flow step mutated?" [label="FLOW_RUNNER_FAILURE"];
     "Flow result?" -> "Read stepsCompleted and recovery from the SIDECAR_LOST payload" [label="SIDECAR_LOST"];
@@ -164,9 +164,9 @@ digraph fast_browsing {
     "Drive the journey with discrete tool calls" -> "Journey result?";
     "Journey result?" -> "Did the task use 3+ discrete calls with no flow or macro?" [label="done"];
     "Journey result?" -> "Login screens this task = 2?" [label="a login screen"];
-    "Journey result?" -> "Journey failures = 4?" [label="a call failed"];
-    "Journey failures = 4?" -> "Same call failed twice?" [label="no"];
-    "Journey failures = 4?" -> "Off-script gate: the discrete journey keeps failing" [label="yes: budget spent"];
+    "Journey result?" -> "Journey failures >= 4?" [label="a call failed"];
+    "Journey failures >= 4?" -> "Same call failed twice?" [label="no"];
+    "Journey failures >= 4?" -> "Off-script gate: the discrete journey keeps failing" [label="yes: budget spent"];
     "Same call failed twice?" -> "Drive the journey with discrete tool calls" [label="no: try it once more"];
     "Same call failed twice?" -> "Off-script gate: a discrete call failed twice" [label="yes"];
 
@@ -179,13 +179,13 @@ digraph fast_browsing {
     "browser_run_code_unsafe {code}: the batched remainder" -> "Batch result?";
     "Batch result?" -> "Did the task use 3+ discrete calls with no flow or macro?" [label="done"];
     "Batch result?" -> "Login screens this task = 2?" [label="a login screen"];
-    "Batch result?" -> "Batch rounds = 6?" [label="the next step needs what the page shows"];
+    "Batch result?" -> "Batch rounds >= 6?" [label="the next step needs what the page shows"];
     "Batch result?" -> "Same scripted step failed twice?" [label="a step failed"];
-    "Same scripted step failed twice?" -> "Batch rounds = 6?" [label="no"];
+    "Same scripted step failed twice?" -> "Batch rounds >= 6?" [label="no"];
     "Same scripted step failed twice?" -> "Do the failing step with one single-step tool" [label="yes"];
-    "Do the failing step with one single-step tool" -> "Batch rounds = 6?";
-    "Batch rounds = 6?" -> "Read narrowly for the next batch" [label="no"];
-    "Batch rounds = 6?" -> "Off-script gate: batch rounds spent" [label="yes: budget spent"];
+    "Do the failing step with one single-step tool" -> "Batch rounds >= 6?";
+    "Batch rounds >= 6?" -> "Read narrowly for the next batch" [label="no"];
+    "Batch rounds >= 6?" -> "Off-script gate: batch rounds spent" [label="yes: budget spent"];
     "Read narrowly for the next batch" -> "browser_run_code_unsafe {code}: the batched remainder";
 
     "Login screens this task = 2?" -> "Secrets file and operator-named secrets for this site?" [label="no"];
@@ -271,8 +271,17 @@ the login block does not excuse skipping it. Read the `candidates` array in its
 JSON output.
 
 A candidate with `runnable: true` runs in exactly one `browser_run_code_unsafe`
-call built from its `invocation` field verbatim:
-`invocation.arguments.filename` and `invocation.arguments.args`, unedited.
+call built from its `invocation` field: `invocation.arguments.filename` and
+`invocation.arguments.args` unedited, except the arg values.
+
+Those values sit in `invocation.arguments.args.args`, and `find` writes a
+placeholder there for each, `<REQUIRED: string>` or `<OPTIONAL: string>`. The
+runner types whatever string it gets, so a placeholder left in place is typed
+or submitted on the real site. Replace each one with this task's own value.
+When the task does not give a required value, ask the human for it before the
+call (see `## Asking the human`); never guess it and never run the
+placeholder. Drop an optional arg the task does not give. Never put a
+credential in an arg.
 
 ### Tell the human what unblocks the flow
 
@@ -302,12 +311,17 @@ prefix:
 | `failedStep` | the step that failed |
 | `error` | its error |
 | `url` | where the page was |
-| `stepsCompleted` | the steps that ran before it |
+| `stepsCompleted` | how many steps ran before it |
 | `locatorFallbacks` | the fallbacks the runner tried |
 | `candidates` | on a locator miss only: what the page actually offered at that step |
 
-For `A completed flow step mutated?`, compare `stepsCompleted` against the
-flow's `sideEffects`. Never retry the flow and never hand-edit its artifact:
+For `A completed flow step mutated?`, read the steps from the invocation you
+ran, `invocation.arguments.args.flow.steps`. The completed ones are the first
+`stepsCompleted` of them, and one mutated when its `mutating` is `true`, the
+same per-step flag the runner reads to choose the SIDECAR_LOST `recovery`. The
+flow-level `sideEffects` says only that some step mutates, not which.
+
+Never retry the flow and never hand-edit its artifact:
 the next `flows compile` sweep reads this same evidence and heals the artifact
 on its own when the fix is unambiguous. A flow that keeps failing quarantines
 on its own; re-record it instead.
@@ -337,12 +351,13 @@ blindly, submits the order again.
 
 ### Verify the mutating step's effect on the site
 
-Read the site narrowly where the mutating step's effect would show (the order
-list, the saved record): `browser_navigate` there and `browser_find` the
-marker, such as the order number. It landed when the marker is present, and
-nothing landed when the place it would show is readable and the marker is
-absent. Anything else is `unsure`, which stops and reports rather than
-re-running the flow.
+The mutating step is the completed step whose `mutating` is `true`, read as
+`### Flow result?` describes. Read the site narrowly where its effect would
+show (the order list, the saved record): `browser_navigate` there and
+`browser_find` the marker, such as the order number. It landed when the
+marker is present, and nothing landed when the place it would show is readable
+and the marker is absent. Anything else is `unsure`, which stops and reports
+rather than re-running the flow.
 
 ### Report SIDECAR_LOST and stop
 
@@ -378,8 +393,11 @@ non-empty:
 - For a multi-page plan, run `fast-browser sites show <origin> --json` and read
   `edges` for the route graph.
 
-An unknown origin, or an errored command, scouts normally. The fields are in
-`## Site record fields`.
+An unknown origin, or an errored command, has no record to apply: go on to
+`Repeatable journey with no matching flow?` without one. A repeatable journey
+then reads narrowly between discrete calls and never runs `page-affordances`,
+which goes through `browser_run_code_unsafe` and would compile into the flow
+as an opaque `js` step. The fields are in `## Site record fields`.
 
 ### Drive the journey with discrete tool calls
 
@@ -638,7 +656,7 @@ distilled result and returns, which is the hand back edge (see
 
 ### Off-script gate: a flow step mutated before FLOW_RUNNER_FAILURE
 
-Quote `failedStep`, `error`, and the completed steps whose `sideEffects` mutate.
+Quote `failedStep`, `error`, and the completed steps that mutated, as `### Flow result?` reads them.
 - **Finish the rest by hand** (take, recommended): I do only the steps after the mutation, so nothing repeats.
 - **You undo it, I redo** (iterate): you reverse the effect on the site, and I redo the whole task from MACROS.md.
 - **Hold, nothing moved** (hold): I stop here and change nothing further.
@@ -664,8 +682,8 @@ scout-and-batch or discrete calls as its graph directs.
 
 ### Off-script gate: the discrete journey keeps failing
 
-Quote the four failed calls with their errors and the page URL.
-- **Hand back what is done** (hand back, recommended): four different failures mean the plan is off, so I report where the journey stands.
+Quote the failed calls with their errors and the page URL.
+- **Hand back what is done** (hand back, recommended): four or more failures mean the plan is off, so I report where the journey stands.
 - **You fix the cause** (iterate): you clear what blocks the page, and I resume the journey.
 - **You do the blocking step** (take): you make the move you name in Chrome, and I read the journey's result and carry on.
 - **Hold, nothing moved** (hold): I stop here and change nothing further.
@@ -680,7 +698,7 @@ Quote the call, its arguments and both errors.
 
 ### Off-script gate: batch rounds spent
 
-Quote the six rounds' last result and what the page still needs.
+Quote the last round's result and what the page still needs.
 - **Name the next move** (take, recommended): you name one move, I make it once and read the batch result.
 - **You fix the cause** (iterate): you clear what keeps the page changing, and I run one more narrow read and batch.
 - **Hold, nothing moved** (hold): I stop here and change nothing further.
@@ -724,7 +742,8 @@ From `fast-browser sites affordances --url <url> --json`, plus `edges` from
 | `quirks` | Recorded hazards for this pattern and origin-wide ones (a cookie banner that eats the first click, an overlay to dismiss): apply before the first interaction |
 | `edges` | The route graph between patterns, for a multi-page plan |
 
-`found` false with an empty `inventory` is an unknown origin: scout normally.
+`found` false with an empty `inventory` is an unknown origin: there is nothing
+to apply.
 
 ## Reporting flywheel health
 
@@ -751,7 +770,7 @@ credentials or log in for the user.
 | Situation | Action |
 |---|---|
 | Any task | `flows find` first, then MACROS.md |
-| Replayable flow exists | Run its `invocation` once through flow-runner |
+| Replayable flow exists | Run its `invocation` once through flow-runner, with the task's own arg values |
 | Only `runnable: false` candidates | Say what unblocks it, then continue with macros |
 | `FLOW_RUNNER_FAILURE` | Never retry or hand-edit; check for a mutated step, then macros |
 | `SIDECAR_LOST` from flow-runner | Follow its `recovery` field; never repeat the call |
