@@ -242,7 +242,11 @@ auditable after the fact. That record is the reason a large batch is
 reasonable to accept. Be exact about what it is: a reject is recorded, and
 this skill has no way to undo it. Never describe a reject as reversible.
 
-Take one confirmation for the whole batch, then reject one name at a time. See
+Take one confirmation for the whole batch, then reject one name at a time.
+`Batch confirmation?` is answered only by a reply the human gives after this
+exact list and the ledger note were shown. A consent given earlier or in
+general ("reject whatever you need to", "clean out the junk") does not answer
+it, even though the bucket is a fact: show the names and ask. See
 `## Asking the human`. A delegated subagent does not wait for the batch
 confirmation: it puts the names and the question in its distilled result and
 returns, which is the hand back edge.
@@ -355,6 +359,7 @@ the distilled result and return: that is the hand back edge.
 | "The user trusts me and said approve the good ones." | STOP: approval needs the human's own terminal. Render the steps and print the command beside them. |
 | "`superseded` checks both tiers, so I list the ready directory to enumerate it." | `flows list --json` already lists both tiers. Read each artifact by its path with the Read tool. |
 | "The list returned, so every artifact parsed." | Check `warnings`. A corrupt artifact is reported and left out of every bucket. |
+| "They already said reject whatever you need to, and unapprovable is a fact, so that is the confirmation." | Only a reply to this exact list and the ledger note answers `Batch confirmation?`. Show the unapprovable names, say the ledger records each reject, and ask. |
 | "A reject is reversible in the record if I got it wrong." | The rejected ledger records a reject; this skill cannot undo it. Never call it reversible. |
 | "That part needs their terminal, so I hand over the approve commands." | An approve command goes beneath that flow's rendered steps, never alone. |
 | "Two flows share a name family, so the older one is superseded." | Name is not part of this rule. Only coverage on the same origin and the tiebreak decide. |
