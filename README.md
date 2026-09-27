@@ -22,8 +22,8 @@ npx @mattstack/fast-browser setup --host both
 
 Fast Browser is part of the [mattstack](https://github.com/m4ttstack)
 developer-tooling estate, alongside [rt](https://github.com/m4ttstack/rt),
-[gitq](https://github.com/m4ttstack/gitq), [board](https://github.com/m4ttstack/board),
-[glance](https://github.com/m4ttstack/glance), [deck](https://github.com/m4ttstack/deck),
+[gitq](https://github.com/m4ttstack/rt/tree/main/apps/gitq), [board](https://github.com/m4ttstack/rt/tree/main/apps/board),
+[glance](https://github.com/m4ttstack/rt/tree/main/packages/glance), [deck](https://github.com/m4ttstack/rt/tree/main/apps/deck),
 [herdr-chat](https://github.com/m4ttstack/herdr-chat), [skills](https://github.com/m4ttstack/skills),
 [mattstack-marketplace](https://github.com/m4ttstack/mattstack-marketplace), and
 [herdr](https://github.com/herdrdev/herdr).
