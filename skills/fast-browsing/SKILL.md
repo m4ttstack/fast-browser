@@ -451,8 +451,9 @@ ever resolves; there, logging in is never yours to perform.
   than raising, so a guessed `APP_PASSWORD` types that string into the password
   field and submits it: a failed, possibly lockout-triggering login instead of
   a caught error.
-- The four calls pass the secret NAMES as field values (for example
-  `APP_USERNAME` and `APP_PASSWORD`), never the values.
+- Of the four calls, only `browser_fill_form` carries secrets: it passes the
+  secret NAMES as field values (for example `APP_USERNAME` and
+  `APP_PASSWORD`), never the values.
 - The signed-in check is required. A mistyped name reaches the submit button
   and proceeds into a logged-out session that looks like it worked; the
   `browser_find` for something only a signed-in page shows turns that into a
@@ -603,8 +604,12 @@ human to run in their own terminal, and never run it yourself, in any form:
 broad delegation to the task is not approval of the flow, and neither is "you
 have my permission".
 
+### Did the user decline the flow?
+
 If the user explicitly declines the flow, record that decision with
-`fast-browser flows reject <name>`. Silence or "not yet" is not a decline.
+`fast-browser flows reject <name>`. Silence or "not yet" is not a decline, and
+the offer stands as printed. If the reject errors, quote the error in the
+offer: the flow is still pending and the decline is not recorded.
 
 ### Name the value that was not lifted, in one line
 
@@ -634,18 +639,28 @@ distilled result and returns, which is the hand back edge (see
 ### Off-script gate: a flow step mutated before FLOW_RUNNER_FAILURE
 
 Quote `failedStep`, `error`, and the completed steps whose `sideEffects` mutate.
-- **Finish the rest by hand** (take, recommended): I do only the steps after the mutation, with discrete calls, so nothing repeats.
+- **Finish the rest by hand** (take, recommended): I do only the steps after the mutation, so nothing repeats.
 - **You undo it, I redo** (iterate): you reverse the effect on the site, and I redo the whole task from MACROS.md.
 - **Hold, nothing moved** (hold): I stop here and change nothing further.
 - **Hand back what is done** (hand back): I report the completed steps and the failure.
 
+On take, `Make the approved move once: a flow step mutated` only records the
+decision and does no browser work. The fast loop that follows does only the
+steps after the mutated one, never the mutated step, choosing scout-and-batch
+or discrete calls as its graph directs.
+
 ### Off-script gate: a mutating step landed before SIDECAR_LOST
 
 Quote `stepsCompleted`, the `recovery` text, and what verification showed had landed.
-- **Finish the rest by hand** (take, recommended): I do only the steps after the landed one, with discrete calls, so nothing repeats.
+- **Finish the rest by hand** (take, recommended): I do only the steps after the landed one, so nothing repeats.
 - **You undo it, I restart** (iterate): you reverse the effect, and I restart the flow from navigation once.
 - **Hold, nothing moved** (hold): I stop here and change nothing further.
 - **Hand back what is done** (hand back): I report what landed and the lost connection.
+
+On take, `Make the approved move once: a mutating step landed` only records
+the decision and does no browser work. The fast loop that follows does only
+the steps after the mutated one, never the mutated step, choosing
+scout-and-batch or discrete calls as its graph directs.
 
 ### Off-script gate: the discrete journey keeps failing
 
@@ -746,9 +761,11 @@ credentials or log in for the user.
 | Unfamiliar page | Run `page-affordances`, not `browser_snapshot` |
 | Digest lacks the control you need | Check `skipped`, then a scoped snapshot |
 | Predictable multi-step work | Batch it in one script |
+| Known text or region | Read it narrowly |
 | Need state from an already-used observation | Re-observe narrowly; never scroll back to the stale copy |
 | Same step failed twice | Single-step recovery for that step |
-| Login screen | Ask the human to sign in in Chrome |
+| Login screen, secrets file and operator-named secrets | Log in by secret NAME, then check the signed-in marker |
+| Login screen, anything else | Ask the human to sign in in Chrome |
 | Just solved a repeatable journey with discrete calls | `browser_close`, `flows compile`, offer the flow |
 | Task complete | Return only the distilled result |
 
