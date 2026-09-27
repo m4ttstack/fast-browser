@@ -29,7 +29,7 @@ digraph capture_flow {
     rankdir=TB;
 
     "Trigger: motion is the evidence" [shape=ellipse];
-    "Recording attempts = 3?" [shape=diamond];
+    "Recording attempts >= 3?" [shape=diamond];
     "Recording on since before this session started?" [shape=diamond];
     "fast-browser configure --video 1280x720" [shape=plaintext];
     "configure result?" [shape=diamond];
@@ -55,7 +55,7 @@ digraph capture_flow {
     "Use the bare name inside the videos directory" [shape=box];
     "Watch the output GIF yourself" [shape=box];
     "What does the GIF show?" [shape=diamond];
-    "Conversions = 3?" [shape=diamond];
+    "Conversions >= 3?" [shape=diamond];
     "How to keep the PII out?" [shape=diamond];
     "STOP: never deliver motion evidence containing PII" [shape=octagon style=filled fillcolor=red fontcolor=white];
     "Capture annotated stills with annotating-screenshots" [shape=box];
@@ -83,9 +83,9 @@ digraph capture_flow {
     "Stills delivered instead of motion" [shape=doublecircle];
     "GIF delivered" [shape=doublecircle style=filled fillcolor=lightgreen];
 
-    "Trigger: motion is the evidence" -> "Recording attempts = 3?";
-    "Recording attempts = 3?" -> "Recording on since before this session started?" [label="no"];
-    "Recording attempts = 3?" -> "Off-script gate: recording attempts spent" [label="yes: budget spent"];
+    "Trigger: motion is the evidence" -> "Recording attempts >= 3?";
+    "Recording attempts >= 3?" -> "Recording on since before this session started?" [label="no"];
+    "Recording attempts >= 3?" -> "Off-script gate: recording attempts spent" [label="yes: budget spent"];
     "Recording on since before this session started?" -> "browser_tabs {action: new, url: <where the flow starts>}" [label="yes"];
     "Recording on since before this session started?" -> "fast-browser configure --video 1280x720" [label="no, or unsure"];
     "fast-browser configure --video 1280x720" -> "configure result?";
@@ -108,12 +108,12 @@ digraph capture_flow {
     "Login answer?" -> "browser_tabs {action: close}: the broken recording" [label="signed in: re-record clean"];
     "Login answer?" -> "Handed back with what is done" [label="will not sign in"];
     "Login answer?" -> "STOP: never log in for the user" [label="tempted to type the password they pasted"];
-    "browser_tabs {action: close}: the broken recording" -> "Recording attempts = 3?";
+    "browser_tabs {action: close}: the broken recording" -> "Recording attempts >= 3?";
 
     "browser_tabs {action: close}: the finished recording" -> "ls -t ~/.fast-browser/output/videos/*.webm";
     "ls -t ~/.fast-browser/output/videos/*.webm" -> "Newest .webm is this flow's, complete?";
     "Newest .webm is this flow's, complete?" -> "fast-browser gif <name>.webm --fps <8 first> --width <800 first>" [label="yes"];
-    "Newest .webm is this flow's, complete?" -> "Recording attempts = 3?" [label="none appeared, or tiny or unreadable"];
+    "Newest .webm is this flow's, complete?" -> "Recording attempts >= 3?" [label="none appeared, or tiny or unreadable"];
 
     "fast-browser gif <name>.webm --fps <8 first> --width <800 first>" -> "gif result?";
     "gif result?" -> "Watch the output GIF yourself" [label="ok"];
@@ -129,14 +129,14 @@ digraph capture_flow {
 
     "Watch the output GIF yourself" -> "What does the GIF show?";
     "What does the GIF show?" -> "Deliver the GIF" [label="the whole flow, clean, sane size"];
-    "What does the GIF show?" -> "Conversions = 3?" [label="too heavy"];
-    "What does the GIF show?" -> "Recording attempts = 3?" [label="part of the flow missing"];
+    "What does the GIF show?" -> "Conversions >= 3?" [label="too heavy"];
+    "What does the GIF show?" -> "Recording attempts >= 3?" [label="part of the flow missing"];
     "What does the GIF show?" -> "How to keep the PII out?" [label="PII in a frame"];
     "What does the GIF show?" -> "STOP: never deliver motion evidence containing PII" [label="tempted to deliver it anyway"];
     "STOP: never deliver motion evidence containing PII" -> "How to keep the PII out?";
-    "Conversions = 3?" -> "fast-browser gif <name>.webm --fps <8 first> --width <800 first>" [label="no: lower fps or width"];
-    "Conversions = 3?" -> "Off-script gate: GIF still too heavy" [label="yes"];
-    "How to keep the PII out?" -> "Recording attempts = 3?" [label="a cleaner re-record"];
+    "Conversions >= 3?" -> "fast-browser gif <name>.webm --fps <8 first> --width <800 first>" [label="no: lower fps or width"];
+    "Conversions >= 3?" -> "Off-script gate: GIF still too heavy" [label="yes"];
+    "How to keep the PII out?" -> "Recording attempts >= 3?" [label="a cleaner re-record"];
     "How to keep the PII out?" -> "Capture annotated stills with annotating-screenshots" [label="annotated stills"];
     "Capture annotated stills with annotating-screenshots" -> "Deliver the stills, saying why";
     "Deliver the stills, saying why" -> "Stills delivered instead of motion";
@@ -213,7 +213,7 @@ closing its tab loses the recording. Close the finished recording's tab before
 collecting anything from it. A take that broke midway is closed too, so it
 finalizes and never passes for the newest complete recording.
 
-Every path back through `Recording attempts = 3?` re-drives the flow in a
+Every path back through `Recording attempts >= 3?` re-drives the flow in a
 fresh tab. When the flow mutates the real site, each re-record repeats that
 effect: a checkout re-driven places another order. For a mutating flow, ask
 for the human's go-ahead and clean test data at the result that sends the flow
@@ -222,7 +222,7 @@ missing, a cleaner re-record), before `browser_tabs {action: new ...}` opens
 the next tab, since that tab records from the moment it opens; see
 `## Asking the human`.
 
-- Go-ahead given: the flow goes back through `Recording attempts = 3?` as the
+- Go-ahead given: the flow goes back through `Recording attempts >= 3?` as the
   graph shows.
 - Declined: close any broken recording tab so it finalizes, then end at
   `Handed back with what is done`. From the PII branch, choose annotated stills
@@ -341,11 +341,11 @@ distilled result and returns, which is the hand back edge (see
 
 ### Off-script gate: recording attempts spent
 
-Quote what ended each of the three takes (broke midway, a login screen, no complete `.webm`, part of the flow missing, PII).
+Quote what ended each take (broke midway, a login screen, no complete `.webm`, part of the flow missing, PII).
 - **You fix the cause** (iterate, recommended): you clear what keeps breaking the takes, and I record again from the recording check.
 - **One more recording** (take): I record the flow once more in a fresh tab, as you direct.
 - **Hold, nothing moved** (hold): I stop here and change nothing further.
-- **Hand back what is done** (hand back): I report the three takes and why each failed.
+- **Hand back what is done** (hand back): I report the takes and why each failed.
 
 ### Off-script gate: configure refused the video setting
 
@@ -373,7 +373,7 @@ Quote the `gif` command and its refusal after the bare name was already tried.
 
 ### Off-script gate: GIF still too heavy
 
-Quote the GIF's size after three conversions and the `--fps` and `--width` each one used.
+Quote the GIF's size and the `--fps` and `--width` each conversion used.
 - **Deliver it at this size** (take, recommended): you accept the size, and I deliver the GIF as it is.
 - **Set new limits** (iterate): you name the fps, width or size to aim for, and I convert again.
 - **Hold, nothing moved** (hold): I stop here and change nothing further.
