@@ -215,25 +215,41 @@ finalizes and never passes for the newest complete recording.
 
 Every path back through `Recording attempts = 3?` re-drives the flow in a
 fresh tab. When the flow mutates the real site, each re-record repeats that
-effect: a checkout re-driven places another order. Before any re-record of a
-mutating flow, get the human's go-ahead and clean test data; see
-`## Asking the human`. A delegated subagent does not wait for that answer: it
-puts the question in its distilled result and returns, which is the hand back
-edge. Never re-drive a mutating flow unasked, whatever the deadline.
+effect: a checkout re-driven places another order. For a mutating flow, ask
+for the human's go-ahead and clean test data at the result that sends the flow
+back (broke midway, the login answer, no complete `.webm`, part of the flow
+missing, a cleaner re-record), before `browser_tabs {action: new ...}` opens
+the next tab, since that tab records from the moment it opens; see
+`## Asking the human`.
+
+- Go-ahead given: the flow goes back through `Recording attempts = 3?` as the
+  graph shows.
+- Declined: close any broken recording tab so it finalizes, then end at
+  `Handed back with what is done`. From the PII branch, choose annotated stills
+  instead.
+
+A delegated subagent does not wait for that answer: it puts the question in its
+distilled result and returns, which is the hand back edge. Never re-drive a
+mutating flow unasked, whatever the deadline.
 
 ### Ask the human to log in in Chrome
 
 Never log in for the user and never type a credential. A password they paste
 into the conversation is still never typed. Ask them to complete the login in
-their real Chrome window; see `## Asking the human`. A delegated subagent does
-not wait for the login: it puts the ask in its distilled result and returns,
-which is the hand back edge.
+their real Chrome window, in a tab Fast Browser does not control, never the
+recorded tab: that tab is still open and recording, so a login typed there
+lands in its `.webm`. See `## Asking the human`. A delegated subagent does not
+wait for the login: it puts the ask in its distilled result and returns, which
+is the hand back edge.
 
-Logging in inside the recorded tab puts the login in the recording. Never
-resume in the recorded tab. After the human signs in, the broken recording tab
-closes and the flow re-records clean in a fresh tab, which is the
-`signed in: re-record clean` edge. The login screen already in that broken
+Never resume in the recorded tab. After the human signs in, the broken
+recording tab closes and the flow re-records clean in a fresh tab, which is
+the `signed in: re-record clean` edge. The login screen already in that broken
 recording is one more reason it is never delivered.
+
+On `will not sign in`, close the broken recording tab before handing back, so
+no recording tab is left open. Name any recording that holds the login screen
+or the sign-in as withheld, by its path in `~/.fast-browser/output/videos/`.
 
 ### Use the bare name inside the videos directory
 
@@ -306,20 +322,21 @@ newest `.webm` there is the recording that just finished. The GIF lands in
 
 ## Off-script gates
 
-Each gate quotes its evidence in one line and offers four answers:
+Each gate quotes its evidence and offers four answers:
 
-- **take**: `Make the approved move once: <origin>` means make exactly the move
-  the human named, once. When the human made the move themselves, it means
-  confirm once that their move took effect instead. Either way, then follow the
-  edge out of that box.
+- **take**: the human names a move. `Make the approved move once: <origin>`
+  means make exactly the move the human named, once. When the human made the
+  move themselves, it means confirm once that their move took effect instead.
+  Either way, then follow the edge out of that box.
 - **iterate**: the human fixed the cause. Pass the gate's `Off-script rounds =
-  2: <origin>?` counter, then retry the refused step. That step's own counter
-  is not reset, so a second refusal returns to the gate.
+  2: <origin>?` counter, then retry the refused step. That step's own counter is
+  not reset, so a second refusal returns to the gate.
 - **hold**: end with nothing further moved.
 - **hand back**: report what is done and stop.
 
-A delegated subagent does not wait at a gate: it puts the quote and the four
-options in its distilled result and returns, which is the hand back edge (see
+Option descriptions are written as the human reads them. A delegated subagent
+does not wait at a gate: it puts the quote and the four options in its
+distilled result and returns, which is the hand back edge (see
 `## Asking the human`).
 
 ### Off-script gate: recording attempts spent
