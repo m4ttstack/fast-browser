@@ -23,8 +23,8 @@ keystrokes with a terminal-automation tool. Print the command for the human to
 run in their own terminal; do not run it yourself. The graph marks the
 temptation with `STOP: approval needs the human's own terminal`.
 
-Everything here moves flows toward less runnable, never more. That is what
-makes acting without asking safe, and why the one automatic reject covers
+Everything here moves flows toward less runnable, never more. That is why one
+confirmation can cover a whole batch, and why the one automatic reject covers
 only a fact about a file, never an inference (the graph marks that temptation
 with `STOP: inferred buckets are only proposed`).
 
@@ -232,9 +232,10 @@ the hand back edge.
 Only `unapprovable` is rejected automatically. It is a fact about the file's
 content, checkable by reading it.
 
-`dead-origin` and `superseded` are inferences. Propose, never act: they never
-join this batch, whatever the human said about clearing out junk. An inference
-that is wrong deletes a recording someone wanted.
+`dead-origin` and `superseded` are inferences. Propose, never act: this skill
+never runs their reject; it prints the command for the human, whatever the
+human said about clearing out junk. An inference that is wrong deletes a
+recording someone wanted.
 
 Show every name in the batch and say, before asking, that every rejection is
 recorded by the CLI in its rejected ledger with the date, so cleaning stays
@@ -274,6 +275,11 @@ Print the command directly beneath that flow's rendered steps, never on its
 own. A bare approve command with no steps beside it asks the human to trust
 exactly what this skill exists to show them.
 
+Arriving from `STOP: approval needs the human's own terminal`, the steps are
+not rendered yet: render each reviewable flow's steps first, as
+`### Render each reviewable flow's steps` lists them, then print each command
+beneath its flow.
+
 ```
 fast-browser flows approve <name>
 ```
@@ -307,9 +313,11 @@ deliverable; there is no re-approval path to offer.
 
 ### Report the review
 
-One report: what was rejected, any reject that failed and why, the approve
-commands printed with their steps, the reject proposals, the healed ready
-flows, and any corrupt artifacts left alone.
+One report: what was rejected, any reject that failed and why, any
+`unapprovable` flows kept when the batch was declined (still pending, and
+needing re-recording to ever run), the approve commands printed with their
+steps, the reject proposals, the healed ready flows, and any corrupt artifacts
+left alone.
 
 ### Name the flow whose name collided
 
@@ -320,12 +328,12 @@ error does not make that obvious.
 
 ## Off-script gates
 
-The gate quotes its evidence in one line and offers four answers:
+The gate quotes its evidence and offers four answers:
 
-- **take**: `Make the approved move once: <origin>` means make exactly the move
-  the human named, once. When the human made the move themselves, it means
-  confirm once that their move took effect instead. Either way, then follow the
-  edge out of that box.
+- **take**: the human names a move. `Make the approved move once: <origin>`
+  means make exactly the move the human named, once. When the human made the
+  move themselves, it means confirm once that their move took effect instead.
+  Either way, then follow the edge out of that box.
 - **iterate**: the human fixed the cause. Pass the gate's `Off-script rounds =
   2: <origin>?` counter, then retry the refused step. A second failure returns
   to the gate.
