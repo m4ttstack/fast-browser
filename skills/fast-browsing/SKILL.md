@@ -470,6 +470,9 @@ In a sandbox with a secrets file but no names for this site, ask the operator
 to name the secrets instead; `the operator named the secrets` then runs the
 name-only login.
 
+A delegated subagent has no one to answer: it puts the ask in its distilled
+result and returns, which is the hand back edge (see `## Asking the human`).
+
 ### Distill the session after an ad hoc solve
 
 This box runs `## The distill graph` below, once, and then returns here.
@@ -614,15 +617,19 @@ line and never hand-edit the artifact to add it.
 Each gate quotes its evidence and offers four answers:
 
 - **take**: the human names a move. `Make the approved move once: <origin>`
-  means make exactly the move the human named, once, then follow the edge out
-  of that box.
+  means make exactly the move the human named, once. When the human made the
+  move themselves (in Chrome, say), it means confirm once that their move took
+  effect instead. Either way, then follow the edge out of that box.
 - **iterate**: the human fixed the cause. Pass the gate's `Off-script rounds =
   2: <origin>?` counter, then retry the refused step. That step's own counter is
   not reset, so a second refusal returns to the gate.
 - **hold**: end with nothing further moved.
 - **hand back**: report what is done and stop.
 
-Option descriptions are written as the human reads them.
+Option descriptions are written as the human reads them. A delegated subagent
+does not wait at a gate: it puts the quote and the four options in its
+distilled result and returns, which is the hand back edge (see
+`## Asking the human`).
 
 ### Off-script gate: a flow step mutated before FLOW_RUNNER_FAILURE
 
