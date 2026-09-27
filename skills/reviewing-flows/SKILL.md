@@ -133,12 +133,18 @@ the Read tool:
 ~/.fast-browser/flows/<name>.flow.json
 ```
 
-The list already names every flow in both tiers, so never list either
-directory with a shell command. Only pending flows get bucketed, but the
-`superseded` rule compares against ready flows too, so read both tiers.
+When the list succeeded, it already names every flow in both tiers, so take
+the names from it and never list either directory with a shell command. Check
+its `warnings` here: a `.flow.json` that will not parse shows up there, and it
+is set aside before bucketing (see the next section).
 
-Check the list's `warnings` here: a `.flow.json` that will not parse shows up
-there, and it is set aside before bucketing (see the next section).
+When you arrive by the gate's take edge, the list failed and the human
+approved reading the directories directly: enumerate both directories once,
+read each `.flow.json` in them, and treat any file that will not parse as
+corrupt.
+
+Only pending flows get bucketed, but the `superseded` rule compares against
+ready flows too, so read both tiers.
 
 ### Bucket every pending flow, first match wins
 
@@ -288,8 +294,8 @@ ledger and cannot be undone here.
 
 ### Report ready flows whose lastHealed is not null
 
-From the same `flows list --json`, name every ready-tier flow whose
-`lastHealed` is not null.
+Name every ready-tier flow whose `provenance.lastHealed` is not null, read
+from each ready artifact already read.
 
 A heal rewrites an approved artifact without re-entering the gate, so consent
 covered content that has since changed. Naming those flows is the whole
