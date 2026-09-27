@@ -213,6 +213,14 @@ closing its tab loses the recording. Close the finished recording's tab before
 collecting anything from it. A take that broke midway is closed too, so it
 finalizes and never passes for the newest complete recording.
 
+Every path back through `Recording attempts = 3?` re-drives the flow in a
+fresh tab. When the flow mutates the real site, each re-record repeats that
+effect: a checkout re-driven places another order. Before any re-record of a
+mutating flow, get the human's go-ahead and clean test data; see
+`## Asking the human`. A delegated subagent does not wait for that answer: it
+puts the question in its distilled result and returns, which is the hand back
+edge. Never re-drive a mutating flow unasked, whatever the deadline.
+
 ### Ask the human to log in in Chrome
 
 Never log in for the user and never type a credential. A password they paste
@@ -247,7 +255,8 @@ re-record. When any frame shows PII, go to `## PII in motion`.
 The recording tab is closed, so the stills need the pages again: reach each
 key step of the flow and capture it with the annotating-screenshots skill,
 blurring what needs blurring there. For a flow that mutates, stop short of the
-mutating step unless the human gave the go-ahead (see `## PII in motion`), and
+mutating step unless the human gave the go-ahead (see
+`### Drive exactly the one flow being shown`), and
 say which step the stills leave out.
 
 ### Deliver the stills, saying why
@@ -273,11 +282,10 @@ When the flow you recorded shows PII, do not deliver the recording. Either
 re-record a cleaner flow that keeps the PII out of frame (test data, a
 narrower window, a different case), or fall back to annotated stills.
 
-Re-driving a flow that mutates repeats its effect on the real site: a checkout
-re-driven places another order. For a mutating flow, choose `a cleaner
-re-record` only with the human's go-ahead and clean test data; otherwise
-choose annotated stills. Never re-drive a mutating flow unasked, whatever the
-deadline.
+`a cleaner re-record` is a re-record like any other, so a flow that mutates
+the real site first needs the go-ahead in
+`### Drive exactly the one flow being shown`; without it, choose annotated
+stills.
 
 Say plainly which you did, and name the recording that was not delivered.
 Never deliver motion evidence containing PII on the promise that nobody will
