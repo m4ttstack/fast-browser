@@ -41,16 +41,17 @@ mutated when its `mutating` is `true`. The failed step
 `invocation.arguments.args.flow.steps[failedStep]` counts too when its own
 `mutating` is `true`: it may have landed before it threw. When any of them did,
 redoing the task could repeat it, so do not go on to macros: hand back, quoting
-`failedStep`, `error` and the steps that mutated, with four options for the
-caller to relay, written as the human reads them: finish the rest by hand (take:
-I do only the steps the flow did not complete, so nothing repeats), you undo it
-and I redo the whole task from MACROS.md (iterate), hold with nothing moved
-(hold), or hand back what is done (hand back). When a task says an earlier flow
-run may have mutated the site before it failed, skip `flows find` and never
-rerun that flow: after finish the rest by hand, do only the steps the flow did
-not complete, never a completed step, and check a mutating failed step's effect
-on the site before redoing it; after you undo it and I redo, start from
-MACROS.md.
+`failedStep`, `stepsCompleted`, `error`, the steps that mutated, and one line
+for each step from `failedStep` on, with four options for the caller to relay,
+written as the human reads them: finish the rest by hand (take: I do only the
+steps the flow did not complete, so nothing repeats), you undo it and I redo the
+whole task from MACROS.md (iterate), hold with nothing moved (hold), or hand
+back what is done (hand back). When a task says an earlier flow run may have
+mutated the site before it failed, skip `flows find` and never rerun that flow:
+after finish the rest by hand, do only the steps the flow did not complete,
+never repeat a completed mutating step (redoing a completed navigation or read
+is safe when the rest needs it), and check a mutating failed step's effect on
+the site before redoing it; after you undo it and I redo, start from MACROS.md.
 
 On a `SIDECAR_LOST:` error instead, do not fall through to macros or
 affordances: the browser has no page state left, so repeating the failed call
