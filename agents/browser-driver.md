@@ -56,14 +56,13 @@ raises `SIDECAR_LOST:`, stop and report it.
 With no runnable candidate, or after a `FLOW_RUNNER_FAILURE:` whose completed
 steps mutated nothing, read `~/.fast-browser/macros/MACROS.md` and run an
 applicable macro by its `filename` and `args` only before inventing an ad hoc
-flow. When no macro
-carries the task, on a known origin whose page is not yet scouted, run
-`fast-browser sites affordances --url <url> --json` and apply what it knows.
-Make one initial scout to learn the current URL, title, and relevant
-landmarks. After that scout, batch related navigation and interaction steps
-into as few `browser_run_code_unsafe` calls as practical; do not narrate or
-issue a long series of tiny calls. Use targeted reads of specific elements or
-text instead of page dumps.
+flow. When no macro carries the task, on a known origin whose page is not yet
+scouted, run `fast-browser sites affordances --url <url> --json` and apply what
+it knows. Make one initial scout to learn the current URL, title, and relevant
+landmarks. After that scout, batch related navigation and interaction steps into
+as few `browser_run_code_unsafe` calls as practical; do not narrate or issue a
+long series of tiny calls. Use targeted reads of specific elements or text
+instead of page dumps.
 
 Treat a large observation (a full `browser_snapshot`, a broad `browser_find`,
 a page read) as expired once you have acted on it. Do not scroll back into
