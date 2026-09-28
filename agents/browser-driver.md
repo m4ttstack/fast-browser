@@ -37,16 +37,20 @@ your result, then go on to macros.
 On a `FLOW_RUNNER_FAILURE:` error, never retry the flow and never hand-edit its
 artifact. Parse the JSON payload after the prefix. The completed steps are the
 first `stepsCompleted` of `invocation.arguments.args.flow.steps`, and one
-mutated when its `mutating` is `true`. When one did, redoing the task would
-repeat it, so do not go on to macros: hand back, quoting `failedStep`, `error`
-and the completed steps that mutated, with four options for the caller to relay,
-written as the human reads them: finish the rest by hand (take: I do only the
-steps after the mutation, so nothing repeats), you undo it and I redo the whole
-task from MACROS.md (iterate), hold with nothing moved (hold), or hand back what
-is done (hand back). When a task says an earlier flow run already completed a
-mutating step, skip `flows find` and never rerun that flow: after finish the
-rest by hand, do only the steps after the mutated one, never the mutated step;
-after you undo it and I redo, start from MACROS.md.
+mutated when its `mutating` is `true`. The failed step
+`invocation.arguments.args.flow.steps[failedStep]` counts too when its own
+`mutating` is `true`: it may have landed before it threw. When any of them did,
+redoing the task could repeat it, so do not go on to macros: hand back, quoting
+`failedStep`, `error` and the steps that mutated, with four options for the
+caller to relay, written as the human reads them: finish the rest by hand (take:
+I do only the steps the flow did not complete, so nothing repeats), you undo it
+and I redo the whole task from MACROS.md (iterate), hold with nothing moved
+(hold), or hand back what is done (hand back). When a task says an earlier flow
+run may have mutated the site before it failed, skip `flows find` and never
+rerun that flow: after finish the rest by hand, do only the steps the flow did
+not complete, never a completed step, and check a mutating failed step's effect
+on the site before redoing it; after you undo it and I redo, start from
+MACROS.md.
 
 On a `SIDECAR_LOST:` error instead, do not fall through to macros or
 affordances: the browser has no page state left, so repeating the failed call
@@ -59,13 +63,13 @@ than re-running. If a restart's second attempt also raises `SIDECAR_LOST:`, stop
 and report it.
 
 With no runnable candidate, or after a `FLOW_RUNNER_FAILURE:` whose completed
-steps mutated nothing, read `~/.fast-browser/macros/MACROS.md` and run an
-applicable macro by its `filename` and `args` only (never inline code), before
-inventing an ad hoc flow. When no macro carries the task and you have not yet
-scouted this page, run `fast-browser sites affordances --url <url> --json` and
-apply what it knows; an unknown origin returns no record to apply. Make one
-initial scout to learn the current URL, title, and relevant landmarks. After
-that scout, batch related navigation and interaction steps into as few
+steps and failed step mutated nothing, read `~/.fast-browser/macros/MACROS.md`
+and run an applicable macro by its `filename` and `args` only (never inline
+code), before inventing an ad hoc flow. When no macro carries the task and you
+have not yet scouted this page, run `fast-browser sites affordances --url <url>
+--json` and apply what it knows; an unknown origin returns no record to apply.
+Make one initial scout to learn the current URL, title, and relevant landmarks.
+After that scout, batch related navigation and interaction steps into as few
 `browser_run_code_unsafe` calls as practical; do not narrate or issue a long
 series of tiny calls. Use targeted reads of specific elements or text instead of
 page dumps.

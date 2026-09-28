@@ -526,13 +526,16 @@ test('the browser-driver hands back when a failed flow already mutated the site,
     assert.match(rule, /stepsCompleted/, host);
     assert.match(rule, /invocation\.arguments\.args\.flow\.steps/, host);
     assert.match(rule, /mutating`?\s+is\s+`?true/, host);
+    assert.match(rule, /flow\.steps\[failedStep\]`?\s+counts\s+too/, host);
+    assert.match(rule, /only\s+the\s+steps\s+the\s+flow\s+did\s+not\s+complete/, host);
+    assert.match(rule, /check\s+a\s+mutating\s+failed\s+step's\s+effect/, host);
     assert.match(rule, /do\s+not\s+go\s+on\s+to\s+macros/, host);
     assert.match(rule, /hand back/, host);
     assert.match(rule, /finish the rest\s+by\s+hand/, host);
     assert.match(rule, /redo\s+the\s+whole\s+task\s+from\s+MACROS\.md/, host);
     assert.match(rule, /hold\s+with\s+nothing\s+moved/, host);
-    assert.match(text, /after a `?FLOW_RUNNER_FAILURE:?`? whose completed\s+steps\s+mutated nothing/, host);
-    assert.match(text, /already\s+completed\s+a\s+mutating\s+step,\s+skip\s+`?flows\s+find`?/, host);
+    assert.match(text, /after\s+a\s+`?FLOW_RUNNER_FAILURE:?`?\s+whose\s+completed\s+steps\s+and\s+failed\s+step\s+mutated\s+nothing/, host);
+    assert.match(text, /may\s+have\s+mutated\s+the\s+site\s+before\s+it\s+failed,\s+skip\s+`?flows\s+find`?/, host);
   }
 });
 
