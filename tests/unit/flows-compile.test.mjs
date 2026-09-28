@@ -1638,3 +1638,84 @@ test('MAT-336: every compiled target with a role and name carries more than one 
     );
   }
 });
+
+const APP = 'https://app.example.com';
+const LOGIN = 'https://login.example.com';
+
+function savedLoginTrace({ identifierFirst = false, endsOnLogin = false } = {}) {
+  const records = [
+    record({ seq: 1, tool: 'browser_navigate', params: { url: `${APP}/cases` }, urlBefore: 'about:blank', urlAfter: `${APP}/cases` }),
+    record({ seq: 2, tool: 'browser_click', targets: [traceTarget({ name: 'Open case' })], urlBefore: `${APP}/cases`, urlAfter: `${APP}/cases/1` }),
+    record({ seq: 3, tool: 'browser_click', targets: [traceTarget({ name: 'Documents' })], urlBefore: `${APP}/cases/1`, urlAfter: `${LOGIN}/u/login` }),
+    record({
+      seq: 4,
+      tool: 'browser_fill_form',
+      targets: [traceTarget({ name: 'Email', role: 'textbox' })].concat(identifierFirst ? [] : [traceTarget({ name: 'Password', role: 'textbox' })]),
+      params: {
+        fields: [{ name: 'Email', type: 'textbox', value: 'devlogin:login.example.com:email' }].concat(
+          identifierFirst ? [] : [{ name: 'Password', type: 'textbox', value: 'devlogin:login.example.com:password' }],
+        ),
+      },
+      urlBefore: `${LOGIN}/u/login`,
+      urlAfter: `${LOGIN}/u/login`,
+    }),
+  ];
+  let seq = 5;
+  if (identifierFirst) {
+    records.push(record({ seq: seq++, tool: 'browser_click', targets: [traceTarget({ name: 'Continue' })], urlBefore: `${LOGIN}/u/login`, urlAfter: `${LOGIN}/u/login/password` }));
+    records.push(record({
+      seq: seq++,
+      tool: 'browser_type',
+      targets: [traceTarget({ name: 'Password', role: 'textbox' })],
+      params: { text: 'devlogin:login.example.com:password' },
+      urlBefore: `${LOGIN}/u/login/password`,
+      urlAfter: `${LOGIN}/u/login/password`,
+    }));
+  }
+  if (endsOnLogin) return records;
+  records.push(record({ seq: seq++, tool: 'browser_click', targets: [traceTarget({ name: 'Continue' })], urlBefore: `${LOGIN}/u/login`, urlAfter: `${APP}/cases/1/documents` }));
+  records.push(record({ seq: seq++, tool: 'browser_click', targets: [traceTarget({ name: 'Upload' })], urlBefore: `${APP}/cases/1/documents`, urlAfter: `${APP}/cases/1/documents` }));
+  records.push(record({ seq: seq++, tool: 'browser_click', targets: [traceTarget({ name: 'Save' })], urlBefore: `${APP}/cases/1/documents`, urlAfter: `${APP}/cases/1/documents` }));
+  return records;
+}
+
+function stepValues(flows) {
+  return flows.flatMap((flow) => flow.steps).map((step) => JSON.stringify(step));
+}
+
+test('a saved-login segment is dropped whole, from the arriving click through the submit', () => {
+  const result = compileSession({ records: savedLoginTrace(), meta, traceDir: '/t' });
+  assert.deepEqual(
+    result.report.skipped.filter((s) => s.reason === 'saved-login'),
+    [{ reason: 'saved-login', seqRange: [3, 5] }],
+  );
+  for (const step of stepValues(result.flows)) {
+    assert.ok(!step.includes('devlogin:'), `a devlogin placeholder reached a flow: ${step}`);
+    assert.ok(!step.includes('login.example.com'), `a login-page step reached a flow: ${step}`);
+  }
+});
+
+test('identifier-first logins drop both screens and the submit', () => {
+  const result = compileSession({ records: savedLoginTrace({ identifierFirst: true }), meta, traceDir: '/t' });
+  assert.deepEqual(
+    result.report.skipped.filter((s) => s.reason === 'saved-login'),
+    [{ reason: 'saved-login', seqRange: [3, 7] }],
+  );
+  for (const step of stepValues(result.flows)) assert.ok(!step.includes('devlogin:'));
+});
+
+test('a trace that ends on the login page drops to the end', () => {
+  const result = compileSession({ records: savedLoginTrace({ endsOnLogin: true }), meta, traceDir: '/t' });
+  assert.deepEqual(
+    result.report.skipped.filter((s) => s.reason === 'saved-login'),
+    [{ reason: 'saved-login', seqRange: [3, 4] }],
+  );
+});
+
+test('a bare-name secrets login (no devlogin prefix) compiles as before', () => {
+  const records = savedLoginTrace().map((r) => (r.tool === 'browser_fill_form'
+    ? { ...r, params: { fields: r.params.fields.map((f) => ({ ...f, value: f.value.replace(/^devlogin:login\.example\.com:/, 'APP_').toUpperCase() })) } }
+    : r));
+  const result = compileSession({ records, meta, traceDir: '/t' });
+  assert.equal(result.report.skipped.filter((s) => s.reason === 'saved-login').length, 0);
+});
