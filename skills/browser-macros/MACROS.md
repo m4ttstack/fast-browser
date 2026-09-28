@@ -195,14 +195,15 @@ check (`ENOENT` or "outside allowed roots").
   error surfaces and has no page state left, so repeating the call would run
   against a blank browser and produce output that looks successful and is
   wrong. Whether it is then safe to just restart from navigation depends on
-  whether an earlier step already mutated something -- blindly restarting a
-  flow that submitted an order at step 2 and lost the sidecar at step 4
-  submits the order again -- which is exactly why `recovery` is qualified
-  instead of a single instruction: when no completed step was mutating it
+  whether an earlier or in-flight step already mutated something -- blindly
+  restarting a flow that submitted an order at step 2 and lost the sidecar at
+  step 4 submits the order again, and a submit click can land before the
+  connection drops -- which is exactly why `recovery` is qualified instead of
+  a single instruction: when no completed or in-flight step was mutating it
   reads `restart the flow from navigation; do not repeat this call`; when one
-  was, it instead reads `do not repeat this call; a completed step was
-  mutating -- verify its effect on the site before deciding whether to
-  continue; when in doubt, stop and report instead of re-running the flow`.
+  was, it instead reads `do not repeat this call; a completed or in-flight
+  step was mutating -- verify its effect on the site before deciding whether
+  to continue; when in doubt, stop and report instead of re-running the flow`.
   Always follow whichever string is actually present rather than assuming
   the first form.
 - Target: Any page; site-specific per invocation, driven entirely by

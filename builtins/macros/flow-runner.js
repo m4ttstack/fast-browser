@@ -35,10 +35,11 @@ async (page, args) => {
   // and that instruction is qualified, not one fixed string (fix round,
   // review finding): a GENUINE disconnect carries the identical double-mutate
   // risk a false-positive classification does whenever a mutating step
-  // already completed, because an unconditional "restart from navigation"
-  // is itself an instruction to re-run every step, mutating ones included.
-  // `hasCompletedMutatingStep` below checks `stepsCompleted` against the
-  // compiled flow's own per-step `mutating` flag (see rule 5's replay-loop
+  // already completed or was in flight when the connection dropped, because
+  // an unconditional "restart from navigation" is itself an instruction to
+  // re-run every step, mutating ones included. `mayHaveMutated` below checks
+  // the completed steps and the in-flight one against the compiled flow's
+  // own per-step `mutating` flag (see rule 5's replay-loop
   // comment above for what that flag guarantees) and `fail` picks between
   // two fixed strings on that basis, so a caller reading `recovery` is told
   // exactly what this file already knows about the run, not left to assume
@@ -149,21 +150,22 @@ async (page, args) => {
     const firstLine = text.split('\n', 1)[0];
     return SIDECAR_SIGNATURES.some((signature) => firstLine.includes(signature));
   };
-  // A completed step is "safe to have happened again" only when it was
-  // never mutating: a step this walk never reached (index >= stepsCompleted)
-  // cannot have run at all, and every reached index below that is exactly
-  // one of the compiled flow's own steps -- `flow.steps[i].mutating` is set
-  // by `flows compile` (see artifact.mjs), not derived here, so this reads
-  // it rather than re-inferring it. Guarded against a malformed/absent
-  // `flow.steps` (the same shape this file's own top-of-try validation can
-  // reject) since a caller building a SIDECAR_LOST payload for an invalid
-  // flow must never throw a SECOND error out of failure-shape construction.
-  const hasCompletedMutatingStep = (stepsCompleted) => {
+  // A restart is safe only when no step that may have touched the site was
+  // mutating. That is every completed step (index < stepsCompleted) plus the
+  // in-flight one at `failedStep`: a click or fill can land before the
+  // connection drops. A step past `failedStep` never ran. `flow.steps[i]
+  // .mutating` is set by `flows compile` (see artifact.mjs), not derived
+  // here. Guarded against a malformed/absent `flow.steps` (the same shape
+  // this file's own top-of-try validation can reject) since a caller
+  // building a SIDECAR_LOST payload for an invalid flow must never throw a
+  // SECOND error out of failure-shape construction.
+  const mayHaveMutated = (shape) => {
     const flowSteps = flow && Array.isArray(flow.steps) ? flow.steps : [];
-    for (let i = 0; i < stepsCompleted && i < flowSteps.length; i += 1) {
-      if (flowSteps[i] && flowSteps[i].mutating === true) return true;
+    const isMutating = (i) => Boolean(flowSteps[i] && flowSteps[i].mutating === true);
+    for (let i = 0; i < shape.stepsCompleted && i < flowSteps.length; i += 1) {
+      if (isMutating(i)) return true;
     }
-    return false;
+    return Number.isInteger(shape.failedStep) && isMutating(shape.failedStep);
   };
 
   const fail = (shape) => {
@@ -174,13 +176,13 @@ async (page, args) => {
       // single fixed string it replaces. When no completed step was
       // mutating, an unconditional restart is genuinely safe (rule 5's
       // replay-loop comment above: every step ran at most once, so nothing
-      // downstream of `stepsCompleted` has mutated anything yet). When one
-      // was, telling the caller to restart anyway is the double-mutate this
-      // whole fix round exists to prevent, so the instruction shifts to
-      // verify-before-acting instead.
-      const recovery = hasCompletedMutatingStep(shape.stepsCompleted)
-        ? 'do not repeat this call; a completed step was mutating -- verify '
-          + 'its effect on the site before deciding whether to continue; '
+      // downstream of the in-flight step has mutated anything yet). When a
+      // completed or in-flight step was mutating, telling the caller to
+      // restart anyway is the double-mutate this exists to prevent, so the
+      // instruction shifts to verify-before-acting instead.
+      const recovery = mayHaveMutated(shape)
+        ? 'do not repeat this call; a completed or in-flight step was mutating '
+          + '-- verify its effect on the site before deciding whether to continue; '
           + 'when in doubt, stop and report instead of re-running the flow'
         : 'restart the flow from navigation; do not repeat this call';
       throw new Error(`SIDECAR_LOST: ${JSON.stringify({ ...shape, recovery })}`);
