@@ -492,6 +492,7 @@ test('the browser-driver fills flow arg placeholders and checks macros before af
     assert.match(text, /put the question in\s+your\s+distilled result/, host);
     assert.match(text, /Never put a credential in an arg/, host);
     assert.match(text, /contains js step: not replayable in v1/, host);
+    assert.match(text, /When only[^.]*come back, never run one/, host);
 
     const find = text.indexOf('flows find --intent');
     const macros = text.indexOf('~/.fast-browser/macros/MACROS.md');
@@ -512,8 +513,9 @@ test('the browser-driver hands back when a failed flow already mutated the site,
   );
 
   for (const [host, text] of [['claude', claude], ['codex', codex]]) {
-    const start = text.indexOf('On a `FLOW_RUNNER_FAILURE:` error') !== -1
-      ? text.indexOf('On a `FLOW_RUNNER_FAILURE:` error')
+    const claudeStart = text.indexOf('On a `FLOW_RUNNER_FAILURE:` error');
+    const start = claudeStart !== -1
+      ? claudeStart
       : text.indexOf('On a FLOW_RUNNER_FAILURE error');
     const end = text.indexOf('SIDECAR_LOST', start);
     assert.ok(start !== -1 && end > start, host);
@@ -524,7 +526,7 @@ test('the browser-driver hands back when a failed flow already mutated the site,
     assert.match(rule, /invocation\.arguments\.args\.flow\.steps/, host);
     assert.match(rule, /mutating`?\s+is\s+`?true/, host);
     assert.match(rule, /hand back/, host);
-    assert.match(rule, /finish the rest\s+by\s+hand/, host);
+    assert.match(rule, /you finish the rest\s+by\s+hand/, host);
     assert.match(rule, /hold\s+with\s+nothing\s+moved/, host);
     assert.match(text, /after a `?FLOW_RUNNER_FAILURE:?`? whose completed\s+steps\s+mutated nothing/, host);
   }
