@@ -502,6 +502,34 @@ test('the browser-driver fills flow arg placeholders and checks macros before af
   }
 });
 
+// Going on to macros after a flow step already mutated the site redoes the
+// whole task, repeating that mutation (a second order, a second submit).
+test('the browser-driver hands back when a failed flow already mutated the site, in both hosts', async () => {
+  const claude = await readFile(path.join(pluginRoot, 'agents/browser-driver.md'), 'utf8');
+  const codex = await readFile(
+    path.join(pluginRoot, 'templates/codex/browser_driver.toml'),
+    'utf8',
+  );
+
+  for (const [host, text] of [['claude', claude], ['codex', codex]]) {
+    const start = text.indexOf('On a `FLOW_RUNNER_FAILURE:` error') !== -1
+      ? text.indexOf('On a `FLOW_RUNNER_FAILURE:` error')
+      : text.indexOf('On a FLOW_RUNNER_FAILURE error');
+    const end = text.indexOf('SIDECAR_LOST', start);
+    assert.ok(start !== -1 && end > start, host);
+    const rule = text.slice(start, end);
+
+    assert.match(rule, /never retry the flow and never hand-edit/, host);
+    assert.match(rule, /stepsCompleted/, host);
+    assert.match(rule, /invocation\.arguments\.args\.flow\.steps/, host);
+    assert.match(rule, /mutating`?\s+is\s+`?true/, host);
+    assert.match(rule, /hand back/, host);
+    assert.match(rule, /finish the rest\s+by\s+hand/, host);
+    assert.match(rule, /hold\s+with\s+nothing\s+moved/, host);
+    assert.match(text, /after a `?FLOW_RUNNER_FAILURE:?`? whose completed\s+steps\s+mutated nothing/, host);
+  }
+});
+
 // WS4b Task 10: the registry exists now (push/pull/search over compiled
 // flow artifacts), but sync with it is a HUMAN-invoked action -- `registry
 // init`, `registry push`, and `registry pull` are commands Matt runs

@@ -35,7 +35,15 @@ re-recording, not a human's approval. Say the unblocking move in one line of
 your result, then go on to macros.
 
 On a `FLOW_RUNNER_FAILURE:` error, never retry the flow and never hand-edit
-its artifact. On a `SIDECAR_LOST:` error instead, do not fall through to
+its artifact. The completed steps are the first `stepsCompleted` of
+`invocation.arguments.args.flow.steps`, and one mutated when its `mutating`
+is `true`. When one did, redoing the task would repeat it, so do not go on to
+macros: hand back, quoting `failedStep`, `error` and the mutated steps, with
+four options for the caller to relay: finish the rest by hand (only the steps
+after the mutation), the human undoes the effect and you redo the task, hold
+with nothing moved, or hand back what is done.
+
+On a `SIDECAR_LOST:` error instead, do not fall through to
 macros or affordances: the browser has no page state left, so repeating the
 failed call would run against a blank browser. Parse `stepsCompleted` and
 `recovery` from the payload and do exactly what `recovery` says: restart the
@@ -45,7 +53,8 @@ step's effect on the site before deciding whether to continue, and stop and
 report if unsure rather than re-running. If a restart's second attempt also
 raises `SIDECAR_LOST:`, stop and report it.
 
-With no runnable candidate, or after a `FLOW_RUNNER_FAILURE:`, read
+With no runnable candidate, or after a `FLOW_RUNNER_FAILURE:` whose completed
+steps mutated nothing, read
 `~/.fast-browser/macros/MACROS.md` and run an applicable macro by its
 `filename` and `args` only before inventing an ad hoc flow. When no macro
 carries the task, on a known origin whose page is not yet scouted, run
