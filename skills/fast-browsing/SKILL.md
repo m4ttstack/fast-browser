@@ -320,8 +320,10 @@ invocation you ran, `invocation.arguments.args.flow.steps`. The completed ones
 are the first `stepsCompleted` of them, and one mutated when its `mutating` is
 `true`, the same per-step flag the runner reads to choose the SIDECAR_LOST
 `recovery`. The failed step `flow.steps[failedStep]` counts too when its own
-`mutating` is `true`: a click or submit can land before the step throws. The
-flow-level `sideEffects` says only that some step mutates, not which.
+`mutating` is `true`: a click or submit can land before the step throws. An
+`error` that starts `could not reach the flow's origin` means no step ran, so
+the failed step does not count. The flow-level `sideEffects` says only that some
+step mutates, not which.
 
 Never retry the flow and never hand-edit its artifact:
 the next `flows compile` sweep reads this same evidence and heals the artifact
@@ -354,12 +356,12 @@ blindly, submits the order again.
 ### Verify the mutating step's effect on the site
 
 The mutating step is the completed or in-flight (`failedStep`) step whose
-`mutating` is `true`, read as `### Flow result?` describes. Read the site narrowly where its effect would
-show (the order list, the saved record): `browser_navigate` there and
-`browser_find` the marker, such as the order number. It landed when the
-marker is present, and nothing landed when the place it would show is readable
-and the marker is absent. Anything else is `unsure`, which stops and reports
-rather than re-running the flow.
+`mutating` is `true`, read as `### Flow result?` describes. Read the site
+narrowly where its effect would show (the order list, the saved record):
+`browser_navigate` there and `browser_find` the marker, such as the order
+number. It landed when the marker is present, and nothing landed when the place
+it would show is readable and the marker is absent. Anything else is `unsure`,
+which stops and reports rather than re-running the flow.
 
 ### Report SIDECAR_LOST and stop
 
@@ -659,7 +661,7 @@ distilled result and returns, which is the hand back edge (see
 ### Off-script gate: a flow step mutated before FLOW_RUNNER_FAILURE
 
 Quote `failedStep`, `stepsCompleted`, `error`, and the steps that mutated (completed, or the failed one), as `### Flow result?` reads them.
-- **Finish the rest by hand** (take, recommended): I do only the steps the flow did not complete, checking the failed step's effect first, so nothing repeats.
+- **Finish the rest by hand** (take, recommended): I do only the steps the flow did not complete, checking a mutating failed step's effect first, so nothing repeats.
 - **You undo it, I redo** (iterate): you reverse the effect on the site, and I redo the whole task from MACROS.md.
 - **Hold, nothing moved** (hold): I stop here and change nothing further.
 - **Hand back what is done** (hand back): I report the completed steps and the failure.
@@ -667,10 +669,12 @@ Quote `failedStep`, `stepsCompleted`, `error`, and the steps that mutated (compl
 On take, `Make the approved move once: a flow step mutated` only records the
 decision and does no browser work. The fast loop that follows does only the
 steps the flow did not complete, starting at the failed step, and never a
-completed mutating step. When the failed step is mutating, it first reads the
-site for that step's effect as `### Verify the mutating step's effect on the
-site` does, and skips the step when it landed; `unsure` stops and reports. It
-chooses scout-and-batch or discrete calls as its graph directs.
+completed mutating step. It may redo a completed non-mutating step (navigation,
+fill, read) when the remaining steps need its page state. When the failed step
+is mutating, it first reads the site for that step's effect as `### Verify the
+mutating step's effect on the site` does, and skips the step when it landed;
+`unsure` stops and reports. It chooses scout-and-batch or discrete calls as its
+graph directs.
 
 ### Off-script gate: a mutating step landed before SIDECAR_LOST
 
@@ -680,11 +684,12 @@ Quote `stepsCompleted`, the `recovery` text, and what verification showed had la
 - **Hold, nothing moved** (hold): I stop here and change nothing further.
 - **Hand back what is done** (hand back): I report what landed and the lost connection.
 
-On take, `Make the approved move once: a mutating step landed` only records
-the decision and does no browser work. The fast loop that follows does only
-the steps the flow did not complete, never a completed mutating step, and
-skips the in-flight step when verification showed it landed. It chooses
-scout-and-batch or discrete calls as its graph directs.
+On take, `Make the approved move once: a mutating step landed` only records the
+decision and does no browser work. The fast loop that follows does only the
+steps the flow did not complete, never a completed mutating step, and skips the
+in-flight step when verification showed it landed. It may redo a completed
+non-mutating step (navigation, fill, read) when the remaining steps need its
+page state. It chooses scout-and-batch or discrete calls as its graph directs.
 
 ### Off-script gate: the discrete journey keeps failing
 

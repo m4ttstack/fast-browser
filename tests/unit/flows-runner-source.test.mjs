@@ -736,8 +736,7 @@ test('SIDECAR_LOST after a completed mutating step tells the caller to verify, n
   assert.match(message, /^SIDECAR_LOST: /);
   const shape = JSON.parse(message.slice('SIDECAR_LOST: '.length));
   assert.equal(shape.stepsCompleted, 1, 'only step 0 (the click) had completed');
-  // Exact text, read out of flow-runner.js's own `fail()` (source lines
-  // ~172-176), not re-derived: a wrong flag name or a broken comparison
+  // Exact text, read out of flow-runner.js's own `fail()`, not re-derived: a wrong flag name or a broken comparison
   // that still happened to produce SOME string would slip past a looser
   // assertion here.
   assert.equal(
@@ -801,6 +800,38 @@ test('SIDECAR_LOST still says restart when the only mutating step comes after th
   assert.match(message, /^SIDECAR_LOST: /);
   const shape = JSON.parse(message.slice('SIDECAR_LOST: '.length));
   assert.equal(shape.failedStep, 1);
+  assert.equal(shape.recovery, 'restart the flow from navigation; do not repeat this call');
+});
+
+test('SIDECAR_LOST while reaching the origin says restart, since no step ran yet', async () => {
+  const source = await readSource();
+  const macro = new Function(`"use strict"; return (${source});`)();
+  const page = {
+    url: () => 'about:blank',
+    on: () => {},
+    off: () => {},
+    goto: async () => { throw new Error('page.goto: Target page, context or browser has been closed'); },
+    locator: () => ({ waitFor: async () => {}, click: async () => {}, frames: () => [] }),
+    waitForLoadState: async () => {},
+  };
+  const flow = {
+    schemaVersion: 1,
+    name: 'precondition-probe',
+    origin: 'https://example.test',
+    steps: [
+      { op: 'click', mutating: true, target: { locators: [{ kind: 'css', selector: '#submit' }] } },
+    ],
+  };
+  let message;
+  try {
+    await macro(page, { flow });
+  } catch (error) {
+    message = error.message;
+  }
+  assert.match(message, /^SIDECAR_LOST: /);
+  const shape = JSON.parse(message.slice('SIDECAR_LOST: '.length));
+  assert.equal(shape.failedStep, 0);
+  assert.equal(shape.stepsCompleted, 0);
   assert.equal(shape.recovery, 'restart the flow from navigation; do not repeat this call');
 });
 

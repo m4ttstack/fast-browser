@@ -515,6 +515,7 @@ test('fast-browsing treats an in-flight mutating step as possibly landed and res
   assert.match(text, /"A completed or failed flow step mutated\?"/);
   assert.doesNotMatch(text, /"A completed flow step mutated\?"/);
   assert.match(text, /flow\.steps\[failedStep\]`?\s+counts\s+too/);
+  assert.match(text, /could\s+not\s+reach\s+the\s+flow's\s+origin`?\s+means\s+no\s+step\s+ran/);
   assert.match(text, /a\s+completed\s+or\s+in-flight\s+step\s+was\s+mutating/);
   assert.doesNotMatch(text, /steps\s+after\s+the\s+(mutated|landed)\s+one/);
   assert.doesNotMatch(text, /steps\s+after\s+the\s+mutation/);
@@ -529,6 +530,7 @@ test('fast-browsing treats an in-flight mutating step as possibly landed and res
     const section = text.slice(start, end);
     assert.match(section, /only\s+the\s+steps\s+the\s+flow\s+did\s+not\s+complete/, gate);
     assert.match(section, /never\s+a\s+completed\s+mutating\s+step/, gate);
+    assert.match(section, /redo\s+a\s+completed\s+non-mutating\s+step/, gate);
   }
 });
 
@@ -553,6 +555,7 @@ test('the browser-driver hands back when a failed flow already mutated the site,
     assert.match(rule, /invocation\.arguments\.args\.flow\.steps/, host);
     assert.match(rule, /mutating`?\s+is\s+`?true/, host);
     assert.match(rule, /flow\.steps\[failedStep\]`?\s+counts\s+too/, host);
+    assert.match(rule, /could\s+not\s+reach\s+the\s+flow's\s+origin`?\s+means\s+no\s+step\s+ran/, host);
     assert.match(rule, /only\s+the\s+steps\s+the\s+flow\s+did\s+not\s+complete/, host);
     assert.match(rule, /check\s+a\s+mutating\s+failed\s+step's\s+effect/, host);
     assert.match(rule, /do\s+not\s+go\s+on\s+to\s+macros/, host);
