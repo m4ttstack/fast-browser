@@ -481,22 +481,25 @@ test('the browser-driver fills flow arg placeholders and checks macros before af
 
   for (const [host, text] of [['claude', claude], ['codex', codex]]) {
     assert.doesNotMatch(
-      text.replace(/verbatim as the page showed it/g, ''),
+      text.replace(/verbatim\s+as\s+the\s+page\s+showed\s+it/g, ''),
       /verbatim/,
       host,
     );
     assert.match(text, /invocation\.arguments\.args\.args/, host);
     assert.match(text, /<REQUIRED: string>/, host);
     assert.match(text, /<OPTIONAL: string>/, host);
-    assert.match(text, /never guess it and never\s+run the placeholder/, host);
-    assert.match(text, /put the question in\s+your\s+distilled result/, host);
-    assert.match(text, /Never put a credential in an arg/, host);
+    assert.match(text, /`flows\s+find`\s+writes\s+a\s+placeholder/, host);
+    assert.match(text, /never\s+guess\s+it\s+and\s+never\s+run\s+the\s+placeholder/, host);
+    assert.match(text, /put\s+the\s+question\s+in\s+your\s+distilled\s+result/, host);
+    assert.match(text, /Never\s+put\s+a\s+credential\s+in\s+an\s+arg/, host);
     assert.match(text, /contains js step: not replayable in v1/, host);
     assert.match(text, /When only[^.]*come back, never run one/, host);
 
     const find = text.indexOf('flows find --intent');
     const macros = text.indexOf('~/.fast-browser/macros/MACROS.md');
     const affordances = text.indexOf('sites affordances --url');
+    assert.match(text, /have\s+not\s+yet\s+scouted\s+this\s+page/, host);
+    assert.match(text, /by\s+its\s+`?filename`?\s+and\s+`?args`?\s+only\s+\(never\s+inline\s+code\)/, host);
     assert.ok(find !== -1 && macros !== -1 && affordances !== -1, host);
     assert.ok(find < macros, `${host}: flows find precedes MACROS.md`);
     assert.ok(macros < affordances, `${host}: MACROS.md precedes sites affordances`);
@@ -513,22 +516,23 @@ test('the browser-driver hands back when a failed flow already mutated the site,
   );
 
   for (const [host, text] of [['claude', claude], ['codex', codex]]) {
-    const claudeStart = text.indexOf('On a `FLOW_RUNNER_FAILURE:` error');
-    const start = claudeStart !== -1
-      ? claudeStart
-      : text.indexOf('On a FLOW_RUNNER_FAILURE error');
+    const start = text.search(/On a `?FLOW_RUNNER_FAILURE:?`? error/);
     const end = text.indexOf('SIDECAR_LOST', start);
     assert.ok(start !== -1 && end > start, host);
     const rule = text.slice(start, end);
 
-    assert.match(rule, /never retry the flow and never hand-edit/, host);
+    assert.match(rule, /never\s+retry\s+the\s+flow\s+and\s+never\s+hand-edit/, host);
+    assert.match(rule, /Parse\s+the\s+JSON\s+payload\s+after\s+the\s+prefix/, host);
     assert.match(rule, /stepsCompleted/, host);
     assert.match(rule, /invocation\.arguments\.args\.flow\.steps/, host);
     assert.match(rule, /mutating`?\s+is\s+`?true/, host);
+    assert.match(rule, /do\s+not\s+go\s+on\s+to\s+macros/, host);
     assert.match(rule, /hand back/, host);
-    assert.match(rule, /you finish the rest\s+by\s+hand/, host);
+    assert.match(rule, /finish the rest\s+by\s+hand/, host);
+    assert.match(rule, /redo\s+the\s+whole\s+task\s+from\s+MACROS\.md/, host);
     assert.match(rule, /hold\s+with\s+nothing\s+moved/, host);
     assert.match(text, /after a `?FLOW_RUNNER_FAILURE:?`? whose completed\s+steps\s+mutated nothing/, host);
+    assert.match(text, /already\s+completed\s+a\s+mutating\s+step,\s+skip\s+`?flows\s+find`?/, host);
   }
 });
 
