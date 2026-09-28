@@ -65,8 +65,21 @@ digraph fast_browsing {
     "Read narrowly for the next batch" [shape=box];
 
     "Login screens this task = 2?" [shape=diamond];
+    "Saved login for this origin?" [shape=diamond];
+    "STOP: never type a credential yourself; only devlogin: names" [shape=octagon style=filled fillcolor=red fontcolor=white];
+    "Page shows 2FA, a captcha or an account chooser?" [shape=diamond];
+    "browser_fill_form {fields: devlogin: names for the fields shown}" [shape=plaintext];
+    "Fill answer?" [shape=diamond];
+    "browser_click {target: <submit>}: the saved login" [shape=plaintext];
+    "A password screen on the same origin, after an email-only fill?" [shape=diamond];
+    "browser_find {text: <what only a signed-in page shows>}: after the saved login" [shape=plaintext];
+    "Left the login origin and signed in?" [shape=diamond];
+    "browser_navigate {url: <the page's own url>}: reload once" [shape=plaintext];
+    "browser_find {text: <what only a signed-in page shows>}: after the reload" [shape=plaintext];
+    "Signed in after the reload?" [shape=diamond];
+    "Hand back the login outcome" [shape=box];
     "Secrets file and operator-named secrets for this site?" [shape=diamond];
-    "STOP: never log in for the user or type a credential" [shape=octagon style=filled fillcolor=red fontcolor=white];
+    "STOP: never type a credential value; only secret NAMES" [shape=octagon style=filled fillcolor=red fontcolor=white];
     "STOP: never guess a secret name; ask for it" [shape=octagon style=filled fillcolor=red fontcolor=white];
     "Ask the human to log in in Chrome" [shape=box];
     "Login answer?" [shape=diamond];
@@ -188,19 +201,41 @@ digraph fast_browsing {
     "Batch rounds >= 6?" -> "Off-script gate: batch rounds spent" [label="yes: budget spent"];
     "Read narrowly for the next batch" -> "browser_run_code_unsafe {code}: the batched remainder";
 
-    "Login screens this task = 2?" -> "Secrets file and operator-named secrets for this site?" [label="no"];
+    "Login screens this task = 2?" -> "Saved login for this origin?" [label="no"];
+    "Saved login for this origin?" -> "Secrets file and operator-named secrets for this site?" [label="no: rt missing, or the origin is not listed"];
+    "Saved login for this origin?" -> "Page shows 2FA, a captcha or an account chooser?" [label="yes"];
+    "Saved login for this origin?" -> "STOP: never type a credential yourself; only devlogin: names" [label="tempted to type a value, or a name rt logins list did not print"];
+    "STOP: never type a credential yourself; only devlogin: names" -> "Ask the human to log in in Chrome";
+    "Page shows 2FA, a captcha or an account chooser?" -> "Ask the human to log in in Chrome" [label="yes: needs-human"];
+    "Page shows 2FA, a captcha or an account chooser?" -> "browser_fill_form {fields: devlogin: names for the fields shown}" [label="no"];
+    "browser_fill_form {fields: devlogin: names for the fields shown}" -> "Fill answer?";
+    "Fill answer?" -> "browser_click {target: <submit>}: the saved login" [label="filled"];
+    "Fill answer?" -> "browser_navigate {url: <the page's own url>}: reload once" [label="refused: limited"];
+    "Fill answer?" -> "Ask the human to log in in Chrome" [label="refused: unknown or unavailable: no-saved-login"];
+    "Fill answer?" -> "Ask the human to log in in Chrome" [label="refused: mismatch: needs-human"];
+    "browser_click {target: <submit>}: the saved login" -> "A password screen on the same origin, after an email-only fill?";
+    "A password screen on the same origin, after an email-only fill?" -> "browser_fill_form {fields: devlogin: names for the fields shown}" [label="yes, the first time: fill the password screen"];
+    "A password screen on the same origin, after an email-only fill?" -> "browser_find {text: <what only a signed-in page shows>}: after the saved login" [label="no"];
+    "browser_find {text: <what only a signed-in page shows>}: after the saved login" -> "Left the login origin and signed in?";
+    "Left the login origin and signed in?" -> "Known origin, page not yet scouted?" [label="yes"];
+    "Left the login origin and signed in?" -> "Hand back the login outcome" [label="no: saved-login-failed, never retry"];
+    "browser_navigate {url: <the page's own url>}: reload once" -> "browser_find {text: <what only a signed-in page shows>}: after the reload";
+    "browser_find {text: <what only a signed-in page shows>}: after the reload" -> "Signed in after the reload?";
+    "Signed in after the reload?" -> "Known origin, page not yet scouted?" [label="yes: another run logged in"];
+    "Signed in after the reload?" -> "Hand back the login outcome" [label="no: login-limited, with until"];
+    "Hand back the login outcome" -> "Handed back with what is done";
     "Login screens this task = 2?" -> "Handed back with what is done" [label="yes: budget spent"];
     "Secrets file and operator-named secrets for this site?" -> "Ask the human to log in in Chrome" [label="no: a local install, or no names given"];
     "Secrets file and operator-named secrets for this site?" -> "browser_navigate {url: <login url>}" [label="yes"];
-    "Secrets file and operator-named secrets for this site?" -> "STOP: never log in for the user or type a credential" [label="tempted to log in yourself or type a credential value"];
+    "Secrets file and operator-named secrets for this site?" -> "STOP: never type a credential value; only secret NAMES" [label="tempted to log in yourself or type a credential value"];
     "Secrets file and operator-named secrets for this site?" -> "STOP: never guess a secret name; ask for it" [label="tempted to guess a secret name"];
-    "STOP: never log in for the user or type a credential" -> "Ask the human to log in in Chrome";
+    "STOP: never type a credential value; only secret NAMES" -> "Ask the human to log in in Chrome";
     "STOP: never guess a secret name; ask for it" -> "Ask the human to log in in Chrome";
     "Ask the human to log in in Chrome" -> "Login answer?";
     "Login answer?" -> "Known origin, page not yet scouted?" [label="signed in"];
     "Login answer?" -> "Secrets file and operator-named secrets for this site?" [label="the operator named the secrets"];
     "Login answer?" -> "Handed back with what is done" [label="will not sign in"];
-    "Login answer?" -> "STOP: never log in for the user or type a credential" [label="tempted to type the password they pasted"];
+    "Login answer?" -> "STOP: never type a credential value; only secret NAMES" [label="tempted to type the password they pasted"];
     "browser_navigate {url: <login url>}" -> "browser_fill_form {fields: secret NAMES as values}";
     "browser_fill_form {fields: secret NAMES as values}" -> "browser_click {target: <submit>}";
     "browser_click {target: <submit>}" -> "browser_find {text: <what only a signed-in page shows>}";
@@ -457,6 +492,50 @@ When the same scripted step failed twice, perform that one step with a
 single-step tool (`browser_click`, `browser_type`, `browser_select_option`),
 then resume batching the rest.
 
+### Saved login for this origin?
+
+Run `rt logins list --json` and look for an entry whose `origin` is exactly the
+login page's origin. Yes only on an exact match. A missing `rt`, a command
+error, or no matching entry is `no`, which falls through to today's path.
+
+A matching entry gives the two names to use, `fields.email` and
+`fields.password`. Both start with `devlogin:`. They are the only credential
+text you ever put in a tool call, and only in `browser_fill_form` or a plain
+`browser_type` (never with `slowly`). The runtime swaps in the value on the
+right origin and refuses anywhere else; you never see it.
+
+### Page shows 2FA, a captcha or an account chooser?
+
+A saved login covers email and password only. A code prompt, a captcha, or a
+list of accounts to pick from is `needs-human`: go to the human with that word
+and the origin.
+
+### Fill answer?
+
+Fill every field the page shows, in one `browser_fill_form`: the email field
+with `fields.email`, the password field with `fields.password`. An
+identifier-first page shows only the email field; fill it, submit, and fill
+the password screen once when it appears on the same origin.
+
+- `filled`: submit, then run the signed-in check.
+- `refused: limited`: another run on this machine tried this login in the last
+  few minutes and its session may already cover you. Reload once and run the
+  signed-in check; never fill again.
+- `refused: unknown` or `unavailable`: rt has no login for this name, or is not
+  running. That is `no-saved-login`.
+- `refused: mismatch`: the field is not on the saved origin (a frame, a
+  lookalike). That is `needs-human`.
+
+A failed signed-in check after a fill is `saved-login-failed`. Never retry it:
+a second wrong password is a step toward locking the account.
+
+### Hand back the login outcome
+
+Stop the task and return the outcome word with the origin and what is done so
+far: `saved-login-failed`, or `login-limited` with the `until` time the fill
+refusal named. A calling skill turns the word into its own question for the
+human; when there is no caller, say it to the human in one sentence.
+
 ### Secrets file and operator-named secrets for this site?
 
 Yes only when both hold: the runtime was started with a secrets file
@@ -469,8 +548,9 @@ ever resolves; there, logging in is never yours to perform.
   and slider fields) and `browser_type`. Nothing else reaches them, so a login
   step cannot be a macro or a replayed flow: `flow-runner` fills through the
   page directly and would type a placeholder literally.
-- Never guess a secret name. An unmatched name is filled in literally rather
-  than raising, so a guessed `APP_PASSWORD` types that string into the password
+- Never guess a secret name. An unmatched bare name is filled in literally
+  (a `devlogin:` name never is; the runtime refuses it instead) rather than
+  raising, so a guessed `APP_PASSWORD` types that string into the password
   field and submits it: a failed, possibly lockout-triggering login instead of
   a caught error.
 - Of the four calls, only `browser_fill_form` carries secrets: it passes the
@@ -495,6 +575,10 @@ name-only login.
 
 A delegated subagent has no one to answer: it puts the ask in its distilled
 result and returns, which is the hand back edge (see `## Asking the human`).
+
+When you arrive here from the saved-login path, lead with the outcome word
+(`no-saved-login` or `needs-human`) and the origin, so a calling skill can
+offer to save a login for that origin.
 
 ### Distill the session after an ad hoc solve
 
@@ -812,7 +896,7 @@ credentials or log in for the user.
 | "Doing the macro's job by hand, clicking the known button is enough." | The fallback does the whole task the macro did, every one of its `args` included. |
 | "One call per click is simpler for exploring." | STOP: explore by scouting, then batching. |
 | "A full snapshot first, to be safe." | STOP: no full-page snapshot while a scoped read will do. A full tree costs 5k to 35k tokens and stays in context. |
-| "They pasted the password and said just log in." | STOP: never log in for the user or type a credential. Ask them to sign in in Chrome. |
+| "They pasted the password and said just log in." | STOP: never type a credential value; only secret NAMES. Ask them to sign in in Chrome. |
 | "The secret is probably `APP_PASSWORD`." | STOP: never guess a secret name; ask for it. An unmatched name is typed literally and submitted. |
 | "The batched script did 3 or more calls' worth of work, so I'll distill it." | Only discrete tool calls count. A scripted run compiles to an opaque `js` step and never meets the floor. |
 | "You have my permission, approve it for me." | STOP: approving a flow is the human's move. Delegation to the task is not approval of the flow. |

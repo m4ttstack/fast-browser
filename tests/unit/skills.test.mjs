@@ -828,3 +828,15 @@ test('every skill ships a Codex parity file with a populated interface', async (
     assert.match(parity, /default_prompt: "[^"]+"/, `${name}: no default_prompt`);
   }
 });
+
+test('fast-browsing runs a saved dev login by devlogin names only and returns the contract outcomes', async () => {
+  const text = await readFile(path.join(pluginRoot, 'skills/fast-browsing/SKILL.md'), 'utf8');
+  assert.match(text, /`rt logins list --json`/);
+  assert.match(text, /`devlogin:`/);
+  for (const outcome of ['no-saved-login', 'saved-login-failed', 'login-limited', 'needs-human']) {
+    assert.match(text, new RegExp(`\`${outcome}\``), `missing outcome ${outcome}`);
+  }
+  assert.match(text, /"Saved login for this origin\?" \[shape=diamond\]/);
+  assert.match(text, /reload once/);
+  assert.doesNotMatch(text, /\u2014|\u2013/);
+});
