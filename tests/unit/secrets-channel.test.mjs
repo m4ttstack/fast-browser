@@ -112,6 +112,8 @@ test('frames split across chunks and several frames in one chunk are each answer
   runtime.write(a.slice(0, 10));
   runtime.write(`${a.slice(10)}\n${b}\n`);
   await until(() => replies.length === 2);
+  await new Promise((r) => setTimeout(r, 50));
+  assert.equal(replies.length, 2);
   assert.deepEqual(replies.map((r) => r.id).sort(), ['a', 'b']);
 });
 
@@ -130,16 +132,33 @@ test('concurrent requests answered out of order keep their own id and name', asy
   assert.equal(replies[1].name, PASSWORD);
 });
 
-test('a runtime that exits mid-call drops the late answer without throwing', async (t) => {
+test('a runtime that exits mid-call drops the late answer without an uncaught error', async (t) => {
+  const dir = await mkdtemp('/tmp/fb-sc-');
+  const socketPath = path.join(dir, 's.sock');
   let release;
   const fetchFill = () => new Promise((resolve) => { release = resolve; });
-  const { runtime, relaySide } = await channelPair(t, { fetchFill });
+  const server = net.createServer({ allowHalfOpen: true }, (socket) => {
+    attachSecretsChannel({ socket, fetchFill });
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  const uncaught = [];
+  const capture = (error) => uncaught.push(error);
+  process.on('uncaughtException', capture);
+  t.after(async () => {
+    process.off('uncaughtException', capture);
+    server.close();
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  const runtime = net.connect(socketPath);
+  await new Promise((resolve) => runtime.once('connect', resolve));
   runtime.write(`${JSON.stringify(request())}\n`);
   await until(() => typeof release === 'function');
   runtime.destroy();
-  await until(() => relaySide.destroyed);
+  await new Promise((r) => setTimeout(r, 30));
   release({ origin: ORIGIN, kind: 'password', value: CANARY });
-  await new Promise((r) => setTimeout(r, 50));
+  await new Promise((r) => setTimeout(r, 100));
+  assert.deepEqual(uncaught.map((e) => e.code ?? e.message), []);
 });
 
 test('no log line ever carries a value, and unparseable frames are logged without their content', async (t) => {
