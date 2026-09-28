@@ -1719,3 +1719,100 @@ test('a bare-name secrets login (no devlogin prefix) compiles as before', () => 
   const result = compileSession({ records, meta, traceDir: '/t' });
   assert.equal(result.report.skipped.filter((s) => s.reason === 'saved-login').length, 0);
 });
+
+test('a login typed only with browser_type is dropped through the submit', () => {
+  const records = [
+    record({ seq: 1, tool: 'browser_navigate', params: { url: `${APP}/cases` }, urlBefore: 'about:blank', urlAfter: `${APP}/cases` }),
+    record({ seq: 2, tool: 'browser_click', targets: [traceTarget({ name: 'Open case' })], urlBefore: `${APP}/cases`, urlAfter: `${APP}/cases/1` }),
+    record({ seq: 3, tool: 'browser_click', targets: [traceTarget({ name: 'Documents' })], urlBefore: `${APP}/cases/1`, urlAfter: `${LOGIN}/u/login` }),
+    record({ seq: 4, tool: 'browser_type', targets: [traceTarget({ name: 'Email', role: 'textbox' })], params: { text: 'devlogin:login.example.com:email' }, urlBefore: `${LOGIN}/u/login`, urlAfter: `${LOGIN}/u/login` }),
+    record({ seq: 5, tool: 'browser_type', targets: [traceTarget({ name: 'Password', role: 'textbox' })], params: { text: 'devlogin:login.example.com:password' }, urlBefore: `${LOGIN}/u/login`, urlAfter: `${LOGIN}/u/login` }),
+    record({ seq: 6, tool: 'browser_click', targets: [traceTarget({ name: 'Continue' })], urlBefore: `${LOGIN}/u/login`, urlAfter: `${APP}/cases/1/documents` }),
+    record({ seq: 7, tool: 'browser_click', targets: [traceTarget({ name: 'Upload' })], urlBefore: `${APP}/cases/1/documents`, urlAfter: `${APP}/cases/1/documents` }),
+  ];
+  const result = compileSession({ records, meta, traceDir: '/t' });
+  assert.deepEqual(
+    result.report.skipped.filter((s) => s.reason === 'saved-login'),
+    [{ reason: 'saved-login', seqRange: [3, 6] }],
+  );
+  for (const step of stepValues(result.flows)) assert.ok(!step.includes('devlogin:'), `a devlogin placeholder reached a flow: ${step}`);
+});
+
+test('a login page on the app origin drops from the start of the trace to the end', () => {
+  const records = [
+    record({ seq: 1, tool: 'browser_navigate', params: { url: `${APP}/cases` }, urlBefore: 'about:blank', urlAfter: `${APP}/cases` }),
+    record({ seq: 2, tool: 'browser_click', targets: [traceTarget({ name: 'Sign in' })], urlBefore: `${APP}/cases`, urlAfter: `${APP}/login` }),
+    record({
+      seq: 3,
+      tool: 'browser_fill_form',
+      targets: [traceTarget({ name: 'Email', role: 'textbox' }), traceTarget({ name: 'Password', role: 'textbox' })],
+      params: {
+        fields: [
+          { name: 'Email', type: 'textbox', value: 'devlogin:app.example.com:email' },
+          { name: 'Password', type: 'textbox', value: 'devlogin:app.example.com:password' },
+        ],
+      },
+      urlBefore: `${APP}/login`,
+      urlAfter: `${APP}/login`,
+    }),
+    record({ seq: 4, tool: 'browser_click', targets: [traceTarget({ name: 'Sign in' })], urlBefore: `${APP}/login`, urlAfter: `${APP}/cases` }),
+    record({ seq: 5, tool: 'browser_click', targets: [traceTarget({ name: 'Open case' })], urlBefore: `${APP}/cases`, urlAfter: `${APP}/cases/1` }),
+  ];
+  const result = compileSession({ records, meta, traceDir: '/t' });
+  assert.deepEqual(
+    result.report.skipped.filter((s) => s.reason === 'saved-login'),
+    [{ reason: 'saved-login', seqRange: [1, 5] }],
+  );
+  for (const step of stepValues(result.flows)) assert.ok(!step.includes('devlogin:'), `a devlogin placeholder reached a flow: ${step}`);
+});
+
+test('a submit whose urlAfter is still the login origin ends the segment when the next record starts on the app', () => {
+  const records = savedLoginTrace().map((r) => (r.seq === 5 ? { ...r, urlAfter: `${LOGIN}/u/login` } : r));
+  const result = compileSession({ records, meta, traceDir: '/t' });
+  assert.deepEqual(
+    result.report.skipped.filter((s) => s.reason === 'saved-login'),
+    [{ reason: 'saved-login', seqRange: [3, 5] }],
+  );
+  assert.ok(stepValues(result.flows).some((step) => step.includes('Upload')), 'the first app step after the login must survive');
+});
+
+test('two saved-login segments in one trace are both dropped and the span between compiles alone', () => {
+  const loginFill = (seq) => record({
+    seq,
+    tool: 'browser_fill_form',
+    targets: [traceTarget({ name: 'Email', role: 'textbox' }), traceTarget({ name: 'Password', role: 'textbox' })],
+    params: {
+      fields: [
+        { name: 'Email', type: 'textbox', value: 'devlogin:login.example.com:email' },
+        { name: 'Password', type: 'textbox', value: 'devlogin:login.example.com:password' },
+      ],
+    },
+    urlBefore: `${LOGIN}/u/login`,
+    urlAfter: `${LOGIN}/u/login`,
+  });
+  const appClick = (seq, name) => record({ seq, tool: 'browser_click', targets: [traceTarget({ name })], urlBefore: `${APP}/cases/1/documents`, urlAfter: `${APP}/cases/1/documents` });
+  const records = [
+    record({ seq: 1, tool: 'browser_navigate', params: { url: `${APP}/cases` }, urlBefore: 'about:blank', urlAfter: `${APP}/cases` }),
+    record({ seq: 2, tool: 'browser_click', targets: [traceTarget({ name: 'Documents' })], urlBefore: `${APP}/cases`, urlAfter: `${LOGIN}/u/login` }),
+    loginFill(3),
+    record({ seq: 4, tool: 'browser_click', targets: [traceTarget({ name: 'Continue' })], urlBefore: `${LOGIN}/u/login`, urlAfter: `${APP}/cases/1/documents` }),
+    appClick(5, 'Upload'),
+    appClick(6, 'Rename'),
+    appClick(7, 'Save'),
+    record({ seq: 8, tool: 'browser_click', targets: [traceTarget({ name: 'Reports' })], urlBefore: `${APP}/cases/1/documents`, urlAfter: `${LOGIN}/u/login` }),
+    loginFill(9),
+    record({ seq: 10, tool: 'browser_click', targets: [traceTarget({ name: 'Continue' })], urlBefore: `${LOGIN}/u/login`, urlAfter: `${APP}/reports` }),
+  ];
+  const result = compileSession({ records, meta, traceDir: '/t' });
+  assert.deepEqual(
+    result.report.skipped.filter((s) => s.reason === 'saved-login'),
+    [
+      { reason: 'saved-login', seqRange: [2, 4] },
+      { reason: 'saved-login', seqRange: [8, 10] },
+    ],
+  );
+  const steps = stepValues(result.flows);
+  assert.equal(result.flows.length, 1, 'only the span between the logins compiles');
+  for (const name of ['Upload', 'Rename', 'Save']) assert.ok(steps.some((step) => step.includes(name)), `${name} must compile`);
+  for (const step of steps) assert.ok(!step.includes('devlogin:'));
+});
