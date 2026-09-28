@@ -469,6 +469,79 @@ test('the codex template matches the Claude agent on flow-first, site-affordance
   }
 });
 
+// `flows find` writes `<REQUIRED: ...>` placeholders into the invocation's
+// arg values and the runner types whatever string it gets, so a driver that
+// replays the invocation unedited types the placeholder on the real site.
+test('the browser-driver fills flow arg placeholders and checks macros before affordances, in both hosts', async () => {
+  const claude = await readFile(path.join(pluginRoot, 'agents/browser-driver.md'), 'utf8');
+  const codex = await readFile(
+    path.join(pluginRoot, 'templates/codex/browser_driver.toml'),
+    'utf8',
+  );
+
+  for (const [host, text] of [['claude', claude], ['codex', codex]]) {
+    assert.doesNotMatch(
+      text.replace(/verbatim\s+as\s+the\s+page\s+showed\s+it/g, ''),
+      /verbatim/,
+      host,
+    );
+    assert.match(text, /invocation\.arguments\.args\.args/, host);
+    assert.match(text, /<REQUIRED: string>/, host);
+    assert.match(text, /<OPTIONAL: string>/, host);
+    assert.match(text, /`flows\s+find`\s+writes\s+a\s+placeholder/, host);
+    assert.match(text, /never\s+guess\s+it\s+and\s+never\s+run\s+the\s+placeholder/, host);
+    assert.match(text, /put\s+the\s+question\s+in\s+your\s+distilled\s+result/, host);
+    assert.match(text, /Never\s+put\s+a\s+credential\s+in\s+an\s+arg/, host);
+    assert.match(text, /contains js step: not replayable in v1/, host);
+    assert.match(text, /When only[^.]*come back, never run one/, host);
+
+    const find = text.indexOf('flows find --intent');
+    const macros = text.indexOf('~/.fast-browser/macros/MACROS.md');
+    const affordances = text.indexOf('sites affordances --url');
+    assert.match(text, /have\s+not\s+yet\s+scouted\s+this\s+page/, host);
+    assert.match(text, /by\s+its\s+`?filename`?\s+and\s+`?args`?\s+only\s+\(never\s+inline\s+code\)/, host);
+    assert.ok(find !== -1 && macros !== -1 && affordances !== -1, host);
+    assert.ok(find < macros, `${host}: flows find precedes MACROS.md`);
+    assert.ok(macros < affordances, `${host}: MACROS.md precedes sites affordances`);
+  }
+});
+
+// Going on to macros after a flow step already mutated the site redoes the
+// whole task, repeating that mutation (a second order, a second submit).
+test('the browser-driver hands back when a failed flow already mutated the site, in both hosts', async () => {
+  const claude = await readFile(path.join(pluginRoot, 'agents/browser-driver.md'), 'utf8');
+  const codex = await readFile(
+    path.join(pluginRoot, 'templates/codex/browser_driver.toml'),
+    'utf8',
+  );
+
+  for (const [host, text] of [['claude', claude], ['codex', codex]]) {
+    const start = text.search(/On a `?FLOW_RUNNER_FAILURE:?`? error/);
+    const end = text.indexOf('SIDECAR_LOST', start);
+    assert.ok(start !== -1 && end > start, host);
+    const rule = text.slice(start, end);
+
+    assert.match(rule, /never\s+retry\s+the\s+flow\s+and\s+never\s+hand-edit/, host);
+    assert.match(rule, /Parse\s+the\s+JSON\s+payload\s+after\s+the\s+prefix/, host);
+    assert.match(rule, /stepsCompleted/, host);
+    assert.match(rule, /invocation\.arguments\.args\.flow\.steps/, host);
+    assert.match(rule, /mutating`?\s+is\s+`?true/, host);
+    assert.match(rule, /flow\.steps\[failedStep\]`?\s+counts\s+too/, host);
+    assert.match(rule, /only\s+the\s+steps\s+the\s+flow\s+did\s+not\s+complete/, host);
+    assert.match(rule, /check\s+a\s+mutating\s+failed\s+step's\s+effect/, host);
+    assert.match(rule, /do\s+not\s+go\s+on\s+to\s+macros/, host);
+    assert.match(rule, /hand\s+back/, host);
+    assert.match(rule, /finish\s+the\s+rest\s+by\s+hand/, host);
+    assert.match(rule, /one\s+line\s+for\s+each\s+step\s+from\s+`?failedStep`?\s+on/, host);
+    assert.match(rule, /never\s+repeat\s+a\s+completed\s+mutating\s+step/, host);
+    assert.doesNotMatch(rule, /steps\s+after\s+the\s+mutat/, host);
+    assert.match(rule, /redo\s+the\s+whole\s+task\s+from\s+MACROS\.md/, host);
+    assert.match(rule, /hold\s+with\s+nothing\s+moved/, host);
+    assert.match(text, /after\s+a\s+`?FLOW_RUNNER_FAILURE:?`?\s+whose\s+completed\s+steps\s+and\s+failed\s+step\s+mutated\s+nothing/, host);
+    assert.match(text, /may\s+have\s+mutated\s+the\s+site\s+before\s+it\s+failed,\s+skip\s+`?flows\s+find`?/, host);
+  }
+});
+
 // WS4b Task 10: the registry exists now (push/pull/search over compiled
 // flow artifacts), but sync with it is a HUMAN-invoked action -- `registry
 // init`, `registry push`, and `registry pull` are commands Matt runs
