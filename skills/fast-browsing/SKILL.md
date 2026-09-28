@@ -71,10 +71,10 @@ digraph fast_browsing {
     "browser_fill_form {fields: devlogin: names for the fields shown}" [shape=plaintext];
     "Fill answer?" [shape=diamond];
     "browser_click {target: <submit>}: the saved login" [shape=plaintext];
-    "A password screen on the same origin, after an email-only fill?" [shape=diamond];
     "browser_find {text: <what only a signed-in page shows>}: after the saved login" [shape=plaintext];
     "Left the login origin and signed in?" [shape=diamond];
-    "browser_navigate {url: <the page's own url>}: reload once" [shape=plaintext];
+    "What does the page show instead of the signed-in marker?" [shape=diamond];
+    "browser_navigate {url: <the task's page that bounced to the login>}: reload once" [shape=plaintext];
     "browser_find {text: <what only a signed-in page shows>}: after the reload" [shape=plaintext];
     "Signed in after the reload?" [shape=diamond];
     "Hand back the login outcome" [shape=box];
@@ -202,7 +202,7 @@ digraph fast_browsing {
     "Read narrowly for the next batch" -> "browser_run_code_unsafe {code}: the batched remainder";
 
     "Login screens this task = 2?" -> "Saved login for this origin?" [label="no"];
-    "Saved login for this origin?" -> "Secrets file and operator-named secrets for this site?" [label="no: rt missing, or the origin is not listed"];
+    "Saved login for this origin?" -> "Secrets file and operator-named secrets for this site?" [label="no: no-saved-login; rt missing, or the origin is not listed"];
     "Saved login for this origin?" -> "Page shows 2FA, a captcha or an account chooser?" [label="yes"];
     "Saved login for this origin?" -> "STOP: never type a credential yourself; only devlogin: names" [label="tempted to type a value, or a name rt logins list did not print"];
     "STOP: never type a credential yourself; only devlogin: names" -> "Ask the human to log in in Chrome";
@@ -210,16 +210,17 @@ digraph fast_browsing {
     "Page shows 2FA, a captcha or an account chooser?" -> "browser_fill_form {fields: devlogin: names for the fields shown}" [label="no"];
     "browser_fill_form {fields: devlogin: names for the fields shown}" -> "Fill answer?";
     "Fill answer?" -> "browser_click {target: <submit>}: the saved login" [label="filled"];
-    "Fill answer?" -> "browser_navigate {url: <the page's own url>}: reload once" [label="refused: limited"];
+    "Fill answer?" -> "browser_navigate {url: <the task's page that bounced to the login>}: reload once" [label="refused: limited"];
     "Fill answer?" -> "Ask the human to log in in Chrome" [label="refused: unknown or unavailable: no-saved-login"];
     "Fill answer?" -> "Ask the human to log in in Chrome" [label="refused: mismatch: needs-human"];
-    "browser_click {target: <submit>}: the saved login" -> "A password screen on the same origin, after an email-only fill?";
-    "A password screen on the same origin, after an email-only fill?" -> "browser_fill_form {fields: devlogin: names for the fields shown}" [label="yes, the first time: fill the password screen"];
-    "A password screen on the same origin, after an email-only fill?" -> "browser_find {text: <what only a signed-in page shows>}: after the saved login" [label="no"];
+    "browser_click {target: <submit>}: the saved login" -> "browser_find {text: <what only a signed-in page shows>}: after the saved login";
     "browser_find {text: <what only a signed-in page shows>}: after the saved login" -> "Left the login origin and signed in?";
     "Left the login origin and signed in?" -> "Known origin, page not yet scouted?" [label="yes"];
-    "Left the login origin and signed in?" -> "Hand back the login outcome" [label="no: saved-login-failed, never retry"];
-    "browser_navigate {url: <the page's own url>}: reload once" -> "browser_find {text: <what only a signed-in page shows>}: after the reload";
+    "Left the login origin and signed in?" -> "What does the page show instead of the signed-in marker?" [label="no"];
+    "What does the page show instead of the signed-in marker?" -> "browser_fill_form {fields: devlogin: names for the fields shown}" [label="a password screen on the same origin after an email-only fill, the first time"];
+    "What does the page show instead of the signed-in marker?" -> "Ask the human to log in in Chrome" [label="2FA, a captcha, an account chooser or anything else: needs-human"];
+    "What does the page show instead of the signed-in marker?" -> "Hand back the login outcome" [label="the login form again: saved-login-failed, never retry"];
+    "browser_navigate {url: <the task's page that bounced to the login>}: reload once" -> "browser_find {text: <what only a signed-in page shows>}: after the reload";
     "browser_find {text: <what only a signed-in page shows>}: after the reload" -> "Signed in after the reload?";
     "Signed in after the reload?" -> "Known origin, page not yet scouted?" [label="yes: another run logged in"];
     "Signed in after the reload?" -> "Hand back the login outcome" [label="no: login-limited, with until"];
@@ -494,9 +495,14 @@ then resume batching the rest.
 
 ### Saved login for this origin?
 
+A page is a login screen, on every `a login screen` edge, when it shows a
+visible password field, or a visible email field on an origin
+`rt logins list --json` lists (the identifier-first case).
+
 Run `rt logins list --json` and look for an entry whose `origin` is exactly the
 login page's origin. Yes only on an exact match. A missing `rt`, a command
-error, or no matching entry is `no`, which falls through to today's path.
+error, or no matching entry is `no`: that is `no-saved-login`, and the path
+goes on to `Secrets file and operator-named secrets for this site?`.
 
 A matching entry gives the two names to use, `fields.email` and
 `fields.password`. Both start with `devlogin:`. They are the only credential
@@ -508,26 +514,39 @@ right origin and refuses anywhere else; you never see it.
 
 A saved login covers email and password only. A code prompt, a captcha, or a
 list of accounts to pick from is `needs-human`: go to the human with that word
-and the origin.
+and the origin. The same pages after a submit are `needs-human` too (see
+`What does the page show instead of the signed-in marker?`).
 
 ### Fill answer?
 
 Fill every field the page shows, in one `browser_fill_form`: the email field
 with `fields.email`, the password field with `fields.password`. An
-identifier-first page shows only the email field; fill it, submit, and fill
-the password screen once when it appears on the same origin.
+identifier-first page shows only the email field; fill it and submit. The
+password screen that follows is the first answer of
+`What does the page show instead of the signed-in marker?`.
 
 - `filled`: submit, then run the signed-in check.
 - `refused: limited`: another run on this machine tried this login in the last
-  few minutes and its session may already cover you. Reload once and run the
-  signed-in check; never fill again.
+  few minutes and its session may already cover you. Reload once by
+  navigating to the task's page that bounced to the login (the app URL you
+  were heading to), not the login page's own URL, which only renders the form
+  again. Then run the signed-in check; never fill again.
 - `refused: unknown` or `unavailable`: rt has no login for this name, or is not
   running. That is `no-saved-login`.
 - `refused: mismatch`: the field is not on the saved origin (a frame, a
   lookalike). That is `needs-human`.
 
-A failed signed-in check after a fill is `saved-login-failed`. Never retry it:
-a second wrong password is a step toward locking the account.
+### What does the page show instead of the signed-in marker?
+
+- A password screen on the same origin, after an email-only fill: fill it once
+  with `fields.password`. A password screen after the password was filled is
+  the login form again.
+- A code prompt, a captcha, an account chooser, or anything that is not the
+  login form: the password may have been right, so this is `needs-human`,
+  never `saved-login-failed`.
+- The login form again, with or without an error message: that is
+  `saved-login-failed`. Never retry it: a second wrong password is a step
+  toward locking the account.
 
 ### Hand back the login outcome
 
@@ -565,9 +584,10 @@ ever resolves; there, logging in is never yours to perform.
 
 ### Ask the human to log in in Chrome
 
-Never enter credentials or log in for the user. Ask the human to complete the
-login in the real Chrome window, then continue from the answer. A password they
-paste into the conversation is still never typed.
+Never type a credential yourself: the only credential text you send is a
+name, a saved login's `devlogin:` names or an operator-named secret. Ask the
+human to complete the login in the real Chrome window, then continue from the
+answer. A password they paste into the conversation is still never typed.
 
 In a sandbox with a secrets file but no names for this site, ask the operator
 to name the secrets instead; `the operator named the secrets` then runs the
@@ -857,8 +877,10 @@ commands the human runs by hand, and an agent must never push or pull on its own
 
 Fast Browser drives the real Chrome instance connected through its extension.
 Do not claim access to arbitrary existing windows, Incognito windows, other
-profiles, non-Chrome browsers, or a separate isolated browser. Never enter
-credentials or log in for the user.
+profiles, non-Chrome browsers, or a separate isolated browser. Never type a
+credential yourself; a login goes by name only (a saved login's `devlogin:`
+names, or an operator-named secret), and anything else is the human's to do in
+Chrome.
 
 ## Quick reference
 
@@ -878,6 +900,7 @@ credentials or log in for the user.
 | Known text or region | Read it narrowly |
 | Need state from an already-used observation | Re-observe narrowly; never scroll back to the stale copy |
 | Same step failed twice | Single-step recovery for that step |
+| Login screen, origin listed by `rt logins list --json` | Fill its `devlogin:` names, submit, check the signed-in marker; hand back the outcome word otherwise |
 | Login screen, secrets file and operator-named secrets | Log in by secret NAME, then check the signed-in marker |
 | Login screen, anything else | Ask the human to sign in in Chrome |
 | Just solved a repeatable journey with discrete calls | `browser_close`, `flows compile`, offer the flow |
