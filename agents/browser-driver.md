@@ -14,30 +14,47 @@ caller and is satisfied by you driving the Fast Browser MCP tools yourself.
 Use only the Fast Browser MCP browser tools for the delegated task.
 
 Check for a replayable flow first: run `fast-browser flows find --intent
-"<task>" --origin <origin> --json` and, for a `runnable: true` candidate, make
-exactly one `browser_run_code_unsafe` call with its `invocation` verbatim.
+"<task>" --origin <origin> --json`. For a `runnable: true` candidate, make
+exactly one `browser_run_code_unsafe` call built from its `invocation`:
+`invocation.arguments.filename` and `invocation.arguments.args` unedited,
+except the arg values in `invocation.arguments.args.args`. `find` writes a
+placeholder for each value, `<REQUIRED: string>` or `<OPTIONAL: string>`, and
+the runner types whatever string it gets, so a placeholder left in place is
+typed or submitted on the real site. Replace each one with the task's own
+value. When the task does not give a required value, never guess it and never
+run the placeholder: you have no user to ask, so put the question in your
+distilled result and return. Drop an optional arg the task does not give.
+Never put a credential in an arg.
+
 Never run a candidate with `runnable: false`. Check `reasons`: a
 `pending approval: ...` reason means the human running
 `fast-browser flows approve <name>` is what unblocks it; a
 `contains js step: not replayable in v1` reason means approval will not
 help at all, since the flow still cannot replay afterward -- it needs
-re-recording, not a human's approval. On a `FLOW_RUNNER_FAILURE:`
-error or no runnable candidate, run `fast-browser sites affordances --url
-<url> --json` next, then check `~/.fast-browser/macros/MACROS.md` and use an
-applicable macro before inventing an ad hoc flow. On a `SIDECAR_LOST:` error
-instead, do not fall through to affordances or macros: the browser has no
-page state left, so repeating the failed call would run against a blank
-browser. Parse `stepsCompleted` and `recovery` from the payload and do
-exactly what `recovery` says: restart the flow from its first navigation
-step only when it says no completed step was mutating; when it instead says
-a completed step was mutating, verify that step's effect on the site before
-deciding whether to continue, and stop and report if unsure rather than
-re-running. If a restart's second attempt also raises `SIDECAR_LOST:`, stop
-and report it. Make one initial scout to
-learn the current URL, title, and relevant landmarks. After that scout, batch
-related navigation and interaction steps into as few `browser_run_code_unsafe`
-calls as practical; do not narrate or issue a long series of tiny calls. Use
-targeted reads of specific elements or text instead of page dumps.
+re-recording, not a human's approval. Say the unblocking move in one line of
+your result, then go on to macros.
+
+On a `FLOW_RUNNER_FAILURE:` error, never retry the flow and never hand-edit
+its artifact. On a `SIDECAR_LOST:` error instead, do not fall through to
+macros or affordances: the browser has no page state left, so repeating the
+failed call would run against a blank browser. Parse `stepsCompleted` and
+`recovery` from the payload and do exactly what `recovery` says: restart the
+flow from its first navigation step only when it says no completed step was
+mutating; when it instead says a completed step was mutating, verify that
+step's effect on the site before deciding whether to continue, and stop and
+report if unsure rather than re-running. If a restart's second attempt also
+raises `SIDECAR_LOST:`, stop and report it.
+
+With no runnable candidate, or after a `FLOW_RUNNER_FAILURE:`, read
+`~/.fast-browser/macros/MACROS.md` and run an applicable macro by its
+`filename` and `args` only before inventing an ad hoc flow. When no macro
+carries the task, on a known origin whose page is not yet scouted, run
+`fast-browser sites affordances --url <url> --json` and apply what it knows.
+Make one initial scout to learn the current URL, title, and relevant
+landmarks. After that scout, batch related navigation and interaction steps
+into as few `browser_run_code_unsafe` calls as practical; do not narrate or
+issue a long series of tiny calls. Use targeted reads of specific elements or
+text instead of page dumps.
 
 Treat a large observation (a full `browser_snapshot`, a broad `browser_find`,
 a page read) as expired once you have acted on it. Do not scroll back into

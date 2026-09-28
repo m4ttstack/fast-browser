@@ -469,6 +469,39 @@ test('the codex template matches the Claude agent on flow-first, site-affordance
   }
 });
 
+// `flows find` writes `<REQUIRED: ...>` placeholders into the invocation's
+// arg values and the runner types whatever string it gets, so a driver that
+// replays the invocation unedited types the placeholder on the real site.
+test('the browser-driver fills flow arg placeholders and checks macros before affordances, in both hosts', async () => {
+  const claude = await readFile(path.join(pluginRoot, 'agents/browser-driver.md'), 'utf8');
+  const codex = await readFile(
+    path.join(pluginRoot, 'templates/codex/browser_driver.toml'),
+    'utf8',
+  );
+
+  for (const [host, text] of [['claude', claude], ['codex', codex]]) {
+    assert.doesNotMatch(
+      text.replace(/verbatim as the page showed it/g, ''),
+      /verbatim/,
+      host,
+    );
+    assert.match(text, /invocation\.arguments\.args\.args/, host);
+    assert.match(text, /<REQUIRED: string>/, host);
+    assert.match(text, /<OPTIONAL: string>/, host);
+    assert.match(text, /never guess it and never\s+run the placeholder/, host);
+    assert.match(text, /put the question in\s+your\s+distilled result/, host);
+    assert.match(text, /Never put a credential in an arg/, host);
+    assert.match(text, /contains js step: not replayable in v1/, host);
+
+    const find = text.indexOf('flows find --intent');
+    const macros = text.indexOf('~/.fast-browser/macros/MACROS.md');
+    const affordances = text.indexOf('sites affordances --url');
+    assert.ok(find !== -1 && macros !== -1 && affordances !== -1, host);
+    assert.ok(find < macros, `${host}: flows find precedes MACROS.md`);
+    assert.ok(macros < affordances, `${host}: MACROS.md precedes sites affordances`);
+  }
+});
+
 // WS4b Task 10: the registry exists now (push/pull/search over compiled
 // flow artifacts), but sync with it is a HUMAN-invoked action -- `registry
 // init`, `registry push`, and `registry pull` are commands Matt runs

@@ -21,14 +21,14 @@ test('renders the preferred model only when requested and never leaves the token
 test('rendered agent encodes the complete delegated browser-driving contract', () => {
   const rendered = renderCodexAgent({ usePreferredModel: true });
 
-  assert.match(rendered, /Check ~\/\.fast-browser\/macros\/MACROS\.md first\./);
+  assert.match(rendered, /read ~\/\.fast-browser\/macros\/MACROS\.md and run an applicable macro/);
   assert.match(rendered, /one initial scout/i);
   assert.match(rendered, /batch.*browser_run_code_unsafe/i);
   assert.match(rendered, /targeted reads/i);
   assert.match(rendered, /fails twice/i);
   assert.match(rendered, /real Chrome/i);
   assert.match(rendered, /Never log in on the user's behalf/i);
-  assert.match(rendered, /SIDECAR_LOST error instead, do not fall through to affordances or macros/i);
+  assert.match(rendered, /SIDECAR_LOST error instead, do not fall through to macros or affordances/i);
   assert.match(rendered, /restart the flow from its first navigation step/i);
   assert.match(rendered, /at most one sentence of caveat/i);
 });
