@@ -506,6 +506,32 @@ test('the browser-driver fills flow arg placeholders and checks macros before af
   }
 });
 
+// A click or submit can land before its step throws or the connection drops,
+// so the step in flight counts as possibly mutated, and a resume that skips
+// only "after the mutated one" can repeat a later completed mutation.
+test('fast-browsing treats an in-flight mutating step as possibly landed and resumes only unfinished steps', async () => {
+  const text = await readFile(path.join(pluginRoot, 'skills/fast-browsing/SKILL.md'), 'utf8');
+
+  assert.match(text, /"A completed or failed flow step mutated\?"/);
+  assert.doesNotMatch(text, /"A completed flow step mutated\?"/);
+  assert.match(text, /flow\.steps\[failedStep\]`?\s+counts\s+too/);
+  assert.match(text, /a\s+completed\s+or\s+in-flight\s+step\s+was\s+mutating/);
+  assert.doesNotMatch(text, /steps\s+after\s+the\s+(mutated|landed)\s+one/);
+  assert.doesNotMatch(text, /steps\s+after\s+the\s+mutation/);
+
+  for (const gate of [
+    '### Off-script gate: a flow step mutated before FLOW_RUNNER_FAILURE',
+    '### Off-script gate: a mutating step landed before SIDECAR_LOST',
+  ]) {
+    const start = text.indexOf(gate);
+    const end = text.indexOf('\n### ', start + gate.length);
+    assert.ok(start !== -1 && end > start, gate);
+    const section = text.slice(start, end);
+    assert.match(section, /only\s+the\s+steps\s+the\s+flow\s+did\s+not\s+complete/, gate);
+    assert.match(section, /never\s+a\s+completed\s+mutating\s+step/, gate);
+  }
+});
+
 // Going on to macros after a flow step already mutated the site redoes the
 // whole task, repeating that mutation (a second order, a second submit).
 test('the browser-driver hands back when a failed flow already mutated the site, in both hosts', async () => {

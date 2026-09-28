@@ -57,11 +57,11 @@ On a `SIDECAR_LOST:` error instead, do not fall through to macros or
 affordances: the browser has no page state left, so repeating the failed call
 would run against a blank browser. Parse `stepsCompleted` and `recovery` from
 the payload and do exactly what `recovery` says: restart the flow from its first
-navigation step only when it says no completed step was mutating; when it
-instead says a completed step was mutating, verify that step's effect on the
-site before deciding whether to continue, and stop and report if unsure rather
-than re-running. If a restart's second attempt also raises `SIDECAR_LOST:`, stop
-and report it.
+navigation step only when it says no completed or in-flight step was mutating;
+when it instead says a completed or in-flight step was mutating, verify that
+step's effect on the site before deciding whether to continue, and stop and
+report if unsure rather than re-running. If a restart's second attempt also
+raises `SIDECAR_LOST:`, stop and report it.
 
 With no runnable candidate, or after a `FLOW_RUNNER_FAILURE:` whose completed
 steps and failed step mutated nothing, read `~/.fast-browser/macros/MACROS.md`
