@@ -1025,8 +1025,6 @@ test('extension-installed fails with the Web Store install first when the extens
     id: 'extension-installed',
     status: 'fail',
     message: 'The pinned Chrome extension is not installed.',
-    // The Web Store copy auto-updates, so it leads; the unpacked load stays
-    // only as the path for a build the store does not carry.
     remediation: 'Install Fast Browser from the Chrome Web Store:'
       + ' https://chromewebstore.google.com/detail/extension-id, then run doctor again.'
       + ' To run a local or unpublished build instead, open chrome://extensions,'
@@ -4056,6 +4054,16 @@ test('retired-extension passes when no profile holds a retired id', async () => 
   ]);
 
   assert.equal(status.status, 'pass');
+});
+
+test('retired-extension warns, rather than passing, when Chrome profiles cannot be read', async () => {
+  const status = await retiredExtensionStatus(async () => [
+    { profile: null, installed: false, manifestVersion: null, unreadable: true },
+  ]);
+
+  assert.equal(status.status, 'warn');
+  assert.match(status.message, /can't be read/);
+  assert.match(status.remediation, /Full Disk Access/);
 });
 
 test('CLI main dispatches to the flows command and renders JSON', async () => {

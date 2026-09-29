@@ -400,6 +400,36 @@ test('reports a profile it was refused permission to read as unreadable, not mer
   assert.equal(profile.unreadable, true);
 });
 
+test('a readable Extensions dir without the id stays not installed even when Preferences are refused', async (t) => {
+  const root = await tempChromeRoot();
+  const profileDirectory = path.join(root, 'Default');
+  await writeProfileJson(profileDirectory, 'Preferences', { extensions: { settings: {} } });
+  await writeProfileJson(profileDirectory, 'Secure Preferences', { extensions: { settings: {} } });
+  await mkdir(path.join(profileDirectory, 'Extensions'), { recursive: true });
+  await denyReads(
+    t,
+    path.join(profileDirectory, 'Preferences'),
+    path.join(profileDirectory, 'Secure Preferences'),
+  );
+
+  const [profile] = await detectChromeExtension({ extensionId, chromeUserDataDir: root });
+
+  assert.equal(profile.installed, false);
+  assert.equal(profile.unreadable, false);
+});
+
+test('refused Preferences read as unreadable when the Extensions dir held the id but no usable version', async (t) => {
+  const root = await tempChromeRoot();
+  const profileDirectory = path.join(root, 'Default');
+  await writeProfileJson(profileDirectory, 'Preferences', { extensions: { settings: {} } });
+  await mkdir(path.join(profileDirectory, 'Extensions', extensionId), { recursive: true });
+  await denyReads(t, path.join(profileDirectory, 'Preferences'));
+
+  const [profile] = await detectChromeExtension({ extensionId, chromeUserDataDir: root });
+
+  assert.equal(profile.unreadable, true);
+});
+
 test('reports an unreadable Chrome user data directory as one unreadable entry', async (t) => {
   const root = await tempChromeRoot();
   await mkdir(path.join(root, 'Default'), { recursive: true });

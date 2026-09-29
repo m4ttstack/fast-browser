@@ -8,7 +8,7 @@ import { resolvePaths } from '../../lib/core/paths.mjs';
 import { buildContentManifestDigest } from '../../lib/core/content-manifest.mjs';
 import { runtimeLockIdentity } from '../../lib/runtime/lock.mjs';
 import { extensionInstallLocation } from '../../lib/extension/install.mjs';
-import { classifyLockUpgrade, isExplainedByLockUpgrade } from '../../lib/commands/upgrade.mjs';
+import { classifyLockUpgrade, countsAsDrift, isExplainedByLockUpgrade } from '../../lib/commands/upgrade.mjs';
 
 function lockFor(productVersion, extensionVersion) {
   return {
@@ -524,4 +524,27 @@ test('classifyLockUpgrade explains nothing when no extension is installed at all
     }),
     { explained: false, unverifiable: false },
   );
+});
+
+// An unreadable Chrome profile makes extension-installed (and
+// retired-extension) warn; that is this process's view, not the install.
+test('countsAsDrift ignores an unreadable-profile warn but still counts a failing extension-installed', () => {
+  assert.equal(countsAsDrift({ id: 'extension-installed', status: 'warn' }), false);
+  assert.equal(countsAsDrift({ id: 'retired-extension', status: 'warn' }), false);
+  assert.equal(countsAsDrift({ id: 'extension-installed', status: 'fail' }), true);
+  assert.equal(countsAsDrift({ id: 'runtime-checksum', status: 'warn' }), true);
+  assert.equal(countsAsDrift({ id: 'annotate-renderer', status: 'fail' }), false);
+  assert.equal(countsAsDrift({ id: 'runtime-checksum', status: 'pass' }), false);
+});
+
+test('classifyLockUpgrade explains a genuine upgrade while extension-installed only warns', async () => {
+  const paths = await tempPaths('fast-browser-upgrade-unit-unreadable-profile-');
+  const oldLock = lockFor('0.1.0-alpha.1', '0.2.1');
+  const newLock = lockFor('0.1.0-alpha.5', '0.2.2');
+  await writeRuntimeInstall(paths, oldLock);
+  await writeExtensionInstall(paths, oldLock);
+  const report = doctorReport(['runtime-checksum', 'extension-artifact', 'mcp-handshake', 'tool-contract']);
+  report.checks.find(({ id }) => id === 'extension-installed').status = 'warn';
+
+  assert.equal(await isExplainedByLockUpgrade({ paths, lock: newLock, doctorReport: report }), true);
 });
