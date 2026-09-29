@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import test from 'node:test';
 
-import { requestLoginFill, rtPaths } from '../../lib/rt/login-fill-client.mjs';
+import { LOGIN_FILL_MAX_RESPONSE_BYTES, requestLoginFill, rtPaths } from '../../lib/rt/login-fill-client.mjs';
 
 const ORIGIN = 'https://login.example.com';
 const NAME = 'devlogin:login.example.com:password';
@@ -102,6 +102,20 @@ test('a daemon that never answers resolves unavailable within the timeout', asyn
   const started = Date.now();
   assert.deepEqual(await call(homeDir, { timeoutMs: 200 }), { refused: 'unavailable' });
   assert.ok(Date.now() - started < 2000);
+});
+
+test('a response larger than the cap is unavailable even when it is a valid success', async (t) => {
+  const homeDir = await fakeHome(t);
+  await fakeDaemon(t, homeDir, (req, res) => {
+    res.on('error', () => {});
+    res.setHeader('content-type', 'application/json');
+    const head = `{"ok":true,"data":{"origin":"${ORIGIN}","kind":"password","value":"v","pad":"`;
+    res.write(head);
+    const piece = 'x'.repeat(16 * 1024);
+    for (let sent = 0; sent <= LOGIN_FILL_MAX_RESPONSE_BYTES; sent += piece.length) res.write(piece);
+    res.end('"}}');
+  });
+  assert.deepEqual(await call(homeDir), { refused: 'unavailable' });
 });
 
 test('RT_DAEMON_SOCK overrides the socket path', () => {
