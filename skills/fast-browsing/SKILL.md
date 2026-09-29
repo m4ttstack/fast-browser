@@ -73,7 +73,7 @@ digraph fast_browsing {
     "Refilled once after slow-typing?" [shape=diamond];
     "browser_click {target: <submit>}: the saved login" [shape=plaintext];
     "browser_find {text: <what only a signed-in page shows>}: after the saved login" [shape=plaintext];
-    "Left the login origin and signed in?" [shape=diamond];
+    "Signed in after the saved login?" [shape=diamond];
     "What does the page show instead of the signed-in marker?" [shape=diamond];
     "browser_navigate {url: <the task's page that bounced to the login>}: reload once" [shape=plaintext];
     "browser_find {text: <what only a signed-in page shows>}: after the reload" [shape=plaintext];
@@ -223,9 +223,9 @@ digraph fast_browsing {
     "Refilled once after slow-typing?" -> "browser_fill_form {fields: devlogin: names for the fields shown}" [label="no: fill again, never slowly"];
     "Refilled once after slow-typing?" -> "Ask the human to log in in Chrome" [label="yes: needs-human"];
     "browser_click {target: <submit>}: the saved login" -> "browser_find {text: <what only a signed-in page shows>}: after the saved login";
-    "browser_find {text: <what only a signed-in page shows>}: after the saved login" -> "Left the login origin and signed in?";
-    "Left the login origin and signed in?" -> "Known origin, page not yet scouted?" [label="yes"];
-    "Left the login origin and signed in?" -> "What does the page show instead of the signed-in marker?" [label="no"];
+    "browser_find {text: <what only a signed-in page shows>}: after the saved login" -> "Signed in after the saved login?";
+    "Signed in after the saved login?" -> "Known origin, page not yet scouted?" [label="yes"];
+    "Signed in after the saved login?" -> "What does the page show instead of the signed-in marker?" [label="no"];
     "What does the page show instead of the signed-in marker?" -> "browser_fill_form {fields: devlogin: names for the fields shown}" [label="a password screen on the same origin after an email-only fill, the first time"];
     "What does the page show instead of the signed-in marker?" -> "Ask the human to log in in Chrome" [label="2FA, a captcha, an account chooser or anything else: needs-human"];
     "What does the page show instead of the signed-in marker?" -> "Hand back the login outcome" [label="the login form again: saved-login-failed, never retry"];
@@ -564,6 +564,14 @@ reason word.
   Fill the same names once more with `browser_fill_form` or a plain
   `browser_type`, never `slowly`. A second `slow-typing` refusal is
   `needs-human`.
+
+### Signed in after the saved login?
+
+The signed-in marker decides, on whatever origin the page is on. A login
+hosted on its own origin lands on the app, so its marker page has already left
+the login origin; a login on the app's own origin shows the marker without the
+origin changing. Both are signed in. No marker: route on what the page shows
+instead.
 
 ### What does the page show instead of the signed-in marker?
 
