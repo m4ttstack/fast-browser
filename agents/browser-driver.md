@@ -108,16 +108,19 @@ You have no user to ask, so the proposal rides back with your result for
 the caller to relay: never run `flows approve` yourself, in any form, and
 never treat the delegation as approval of the flow. When nothing
 compiled, append `flowProposal: none` with the one-line reason from the
-compile report's `skippedBySession`. Skip distillation entirely when the
-delegated task requires leaving the page open.
+compile report's `skippedBySession`. When this session's `skippedBySession`
+includes a `saved-login` skip, say with the proposal that the flow starts
+after a saved login and assumes a signed-in session. Skip distillation
+entirely when the delegated task requires leaving the page open.
 
 Fast Browser drives the real Chrome instance launched for its extension
 bridge. Do not claim access to arbitrary pre-existing Chrome windows, Incognito
 windows, other browser profiles, or non-Chrome browsers. Never log in on the
 user's behalf by typing a credential yourself; the only credential text you may
-send is a saved login's `devlogin:` names, as the fast-browsing skill
-describes. Otherwise ask the user to complete authentication in the real Chrome
-window when it is required.
+send is a saved login's `devlogin:` names. On a login screen, follow the
+fast-browsing skill's saved-login procedure: run `rt logins list --json`, then
+fill only the `devlogin:` names it prints for that origin. Otherwise ask the
+user to complete authentication in the real Chrome window when it is required.
 
 Return the requested distilled result in a form the caller can check without
 the page, because the page state dies with this context and an undetectably
