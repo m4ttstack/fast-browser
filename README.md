@@ -132,15 +132,31 @@ explicit `--host` so a second host is never changed silently.
 
 Setup defaults to `--profile safe`. It verifies and installs the pinned runtime
 and extension, installs the host plugin adapters, writes owned routing state,
-and prints the unpacked extension directory. It does not load the extension
-into Chrome for you.
+and prints the unpacked extension directory. It does not add the extension to
+Chrome for you.
 
 Setup also installs a `fast-browser` command into `~/.local/bin`, so the bare
 `fast-browser <command>` invocations used throughout this README work without
 npx. If your shell cannot find it, add
 `export PATH="$HOME/.local/bin:$PATH"` to your shell profile.
+When mattstack.app has already linked its bundled copy there, setup leaves that
+link alone and `doctor` reports the launcher as managed by mattstack.app.
 
-### Load the Chrome extension
+### Install the Chrome extension
+
+Install [Fast Browser from the Chrome Web Store](https://chromewebstore.google.com/detail/fnfikoifhimpdedpdepehibjjkcfbacm),
+then run `fast-browser doctor`. Chrome keeps the store copy up to date by
+itself. Chrome keeps extensions per profile, so add it in each Chrome profile
+where Fast Browser should operate.
+
+If `doctor` warns that Chrome's profile can't be read, your terminal lacks Full
+Disk Access (macOS protects Chrome's data from other apps). Grant it in System
+Settings > Privacy & Security > Full Disk Access, or ignore the warning if Fast
+Browser shows in `chrome://extensions`.
+
+#### Local or unpublished builds
+
+To run a build the store does not carry, load setup's copy unpacked instead:
 
 1. Open `chrome://extensions` in Google Chrome
 2. Enable **Developer mode**
@@ -151,12 +167,10 @@ npx. If your shell cannot find it, add
 You only do this once. Setup installs into that fixed directory and swaps its
 contents in place on every upgrade, so Chrome keeps pointing at the same path.
 
-Chrome keeps developer-mode extensions per profile, so load it in each Chrome
-profile where Fast Browser should operate.
-
 ### Upgrading
 
-After a setup that installs a newer version, open `chrome://extensions` and
+A Chrome Web Store copy updates itself. For an unpacked load, after a setup
+that installs a newer version, open `chrome://extensions` and
 click the reload arrow on Fast Browser. **Do not remove and re-add it**...
 removing an extension discards its stored data, including the reconnect token,
 which forces you to pair again.

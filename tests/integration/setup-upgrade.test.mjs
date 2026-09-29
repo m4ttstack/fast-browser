@@ -814,6 +814,44 @@ test('a pending extension reload alone is not drift and does not re-run setup', 
   );
 });
 
+// A terminal without Full Disk Access cannot read Chrome's profile, so
+// extension-installed and retired-extension can only warn. Nothing on disk
+// changed and setup cannot fix it, so a rerun must not call it drift.
+test('an unreadable Chrome profile (warn) is not drift and does not re-run setup', async () => {
+  const lock = lockFor('0.1.0-alpha.5', '0.2.2');
+  const paths = await fixtureHome('fast-browser-unreadable-profile-');
+  await writeRuntimeInstall(paths, lock);
+  await writeExtensionInstall(paths, lock);
+  await saveConfig(paths, configFor(lock));
+  const installCalls = [];
+  const warned = doctorReportWithFailures([]);
+  for (const check of warned.checks) {
+    if (check.id === 'extension-installed' || check.id === 'retired-extension') check.status = 'warn';
+  }
+
+  const report = await setup(baseRequest, {
+    paths,
+    checkPlatform: async () => {},
+    detectHosts: async () => ['claude'],
+    loadConfig,
+    loadRuntimeLock: async () => lock,
+    installRuntime: async () => {
+      installCalls.push('runtime');
+      return { version: lock.productVersion };
+    },
+    installExtension: async () => {
+      installCalls.push('extension');
+      return { unpacked: extensionInstallLocation(paths).unpacked };
+    },
+    ...untouchedDuringUpgrade([]),
+    saveConfig,
+    doctor: async () => warned,
+  });
+
+  assert.equal(report.changed, false);
+  assert.deepEqual(installCalls, []);
+});
+
 // The exclusion must be narrow: a pending reload alongside a real failure is
 // still drift, or the allowance would become a way to smuggle any failure
 // past the guard.

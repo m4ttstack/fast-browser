@@ -269,3 +269,130 @@ test('doctor launcher check passes either way on PATH and surfaces the export li
   // The literal $HOME, never the expanded temp home.
   assert.equal(offPath.message.includes(paths.homeDir), false);
 });
+
+// mattstack.app exposes its bundled Fast Browser at the launcher path with
+// rt's tagged wrapper (`rt deps link fast-browser`), whose line 2 names the
+// tool and whose exec line single-quotes the bundled node and entry point.
+async function fakeMattstackBundle(root, { name = '@mattstack/fast-browser' } = {}) {
+  const helpers = path.join(root, 'mattstack.app', 'Contents', 'Helpers');
+  const node = path.join(helpers, 'node', 'bin', 'node');
+  const entry = path.join(helpers, 'fast-browser', 'bin', 'fast-browser.mjs');
+  await mkdir(path.dirname(node), { recursive: true });
+  await mkdir(path.dirname(entry), { recursive: true });
+  await writeFile(node, '#!/bin/sh\n', { mode: 0o755 });
+  await writeFile(entry, '#!/usr/bin/env node\n', { mode: 0o755 });
+  await writeFile(path.join(helpers, 'fast-browser', 'package.json'), JSON.stringify({ name }));
+  return { node, entry };
+}
+
+function rtWrapperText(node, entry) {
+  const quote = (value) => `'${value.replace(/'/g, `'\\''`)}'`;
+  return `#!/bin/sh\n# mattstack-link: fast-browser\nexec ${quote(node)} ${quote(entry)} "$@"\n`;
+}
+
+async function writeRtWrapper(paths, bundleRoot, options) {
+  const { node, entry } = await fakeMattstackBundle(bundleRoot, options);
+  const text = rtWrapperText(node, entry);
+  await mkdir(paths.launcherDir, { recursive: true });
+  await writeFile(paths.launcherFile, text, { mode: 0o755 });
+  return text;
+}
+
+test('inspect reports mattstack.app\'s tagged wrapper as managed by mattstack', async (t) => {
+  const paths = await tempPaths(t);
+  await writeRtWrapper(paths, path.join(paths.homeDir, "Apps with 'quotes'"));
+
+  assert.deepEqual(await inspectLauncher(paths), { status: 'external', manager: 'mattstack' });
+});
+
+test('inspect reports a mattstack wrapper whose bundle is gone as stale, still mattstack\'s', async (t) => {
+  const paths = await tempPaths(t);
+  const bundleRoot = path.join(paths.homeDir, 'Applications');
+  await writeRtWrapper(paths, bundleRoot);
+  await rm(path.join(bundleRoot, 'mattstack.app'), { recursive: true });
+
+  assert.deepEqual(await inspectLauncher(paths), { status: 'external-stale', manager: 'mattstack' });
+});
+
+test('inspect reports a dangling symlink into a mattstack bundle as stale, still mattstack\'s', async (t) => {
+  const paths = await tempPaths(t);
+  await mkdir(paths.launcherDir, { recursive: true });
+  await symlink('/Applications/gone.app/Contents/Helpers/fast-browser/bin/fast-browser.mjs', paths.launcherFile);
+
+  assert.deepEqual(await inspectLauncher(paths), { status: 'external-stale', manager: 'mattstack' });
+  assert.deepEqual(await installLauncher(paths), { action: 'external', path: paths.launcherFile });
+  assert.equal((await lstat(paths.launcherFile)).isSymbolicLink(), true);
+});
+
+test('inspect accepts a symlink that resolves to the same product', async (t) => {
+  const paths = await tempPaths(t);
+  await mkdir(paths.launcherDir, { recursive: true });
+  const { entry } = await fakeMattstackBundle(path.join(paths.homeDir, 'Applications'));
+  await symlink(entry, paths.launcherFile);
+  assert.deepEqual(await inspectLauncher(paths), { status: 'external', manager: 'mattstack' });
+
+  const checkout = await tempPaths(t);
+  await mkdir(checkout.launcherDir, { recursive: true });
+  await symlink(path.join(REAL_PLUGIN_ROOT, 'bin', 'fast-browser.mjs'), checkout.launcherFile);
+  assert.deepEqual(await inspectLauncher(checkout), { status: 'external', manager: null });
+});
+
+test('inspect still calls a different product foreign, wrapper or symlink', async (t) => {
+  const wrapper = await tempPaths(t);
+  await writeRtWrapper(wrapper, path.join(wrapper.homeDir, 'Applications'), { name: 'somebody-else' });
+  assert.deepEqual(await inspectLauncher(wrapper), { status: 'foreign' });
+
+  const link = await tempPaths(t);
+  await mkdir(link.launcherDir, { recursive: true });
+  const elsewhere = path.join(link.homeDir, 'real-binary');
+  await writeFile(elsewhere, '#!/bin/sh\n', { mode: 0o755 });
+  await symlink(elsewhere, link.launcherFile);
+  assert.deepEqual(await inspectLauncher(link), { status: 'foreign' });
+});
+
+test('install leaves mattstack\'s wrapper byte for byte, live or stale', async (t) => {
+  const paths = await tempPaths(t);
+  const bundleRoot = path.join(paths.homeDir, 'Applications');
+  const text = await writeRtWrapper(paths, bundleRoot);
+
+  assert.deepEqual(await installLauncher(paths), { action: 'external', path: paths.launcherFile });
+  assert.equal(await readFile(paths.launcherFile, 'utf8'), text);
+
+  await rm(path.join(bundleRoot, 'mattstack.app'), { recursive: true });
+  assert.deepEqual(await installLauncher(paths), { action: 'external', path: paths.launcherFile });
+  assert.equal(await readFile(paths.launcherFile, 'utf8'), text);
+  assert.equal(launcherWasWritten({ action: 'external' }), false);
+});
+
+test('doctor launcher check passes a launcher mattstack.app manages and names the relink when it is stale', async (t) => {
+  const paths = await tempPaths(t);
+  const bundleRoot = path.join(paths.homeDir, 'Applications');
+  await writeRtWrapper(paths, bundleRoot);
+
+  assert.deepEqual(await launcherCheck(paths, { PATH: paths.launcherDir }), {
+    id: 'launcher',
+    status: 'pass',
+    message: 'The fast-browser launcher is managed by mattstack.app.',
+    remediation: null,
+  });
+
+  await rm(path.join(bundleRoot, 'mattstack.app'), { recursive: true });
+  const stale = await launcherCheck(paths, { PATH: paths.launcherDir });
+  assert.equal(stale.status, 'fail');
+  assert.equal(stale.message, 'The fast-browser launcher belongs to mattstack.app, but the copy it runs no longer exists.');
+  assert.equal(
+    stale.remediation,
+    'Open mattstack.app and choose Use mattstack\'s on the Fast Browser row, or run `rt deps link fast-browser`.',
+  );
+  assert.equal(JSON.stringify(stale).includes(paths.homeDir), false);
+
+  const checkout = await tempPaths(t);
+  await mkdir(checkout.launcherDir, { recursive: true });
+  await symlink(path.join(REAL_PLUGIN_ROOT, 'bin', 'fast-browser.mjs'), checkout.launcherFile);
+  assert.deepEqual(await launcherCheck(checkout, { PATH: checkout.launcherDir }), {
+    id: 'launcher',
+    status: 'pass',
+    message: 'The fast-browser launcher links to another Fast Browser installation.',
+    remediation: null,
+  });
+});
