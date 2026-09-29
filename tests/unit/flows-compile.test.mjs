@@ -1816,3 +1816,48 @@ test('two saved-login segments in one trace are both dropped and the span betwee
   for (const name of ['Upload', 'Rename', 'Save']) assert.ok(steps.some((step) => step.includes(name)), `${name} must compile`);
   for (const step of steps) assert.ok(!step.includes('devlogin:'));
 });
+
+function redactedAs(value, password) {
+  return value.replaceAll(password, '<secret>devlogin:login.example.com:password</secret>');
+}
+
+test('a password-only fill whose name the trace redaction garbled is still dropped', () => {
+  const records = [
+    record({ seq: 1, tool: 'browser_navigate', params: { url: `${APP}/cases` }, urlBefore: 'about:blank', urlAfter: `${APP}/cases` }),
+    record({ seq: 2, tool: 'browser_click', targets: [traceTarget({ name: 'Documents' })], urlBefore: `${APP}/cases`, urlAfter: `${LOGIN}/u/login/password` }),
+    record({
+      seq: 3,
+      tool: 'browser_type',
+      targets: [traceTarget({ name: 'Password', role: 'textbox' })],
+      params: { text: redactedAs('devlogin:login.example.com:password', 'password') },
+      urlBefore: `${LOGIN}/u/login/password`,
+      urlAfter: `${LOGIN}/u/login/password`,
+    }),
+    record({ seq: 4, tool: 'browser_click', targets: [traceTarget({ name: 'Continue' })], urlBefore: `${LOGIN}/u/login/password`, urlAfter: `${APP}/cases/documents` }),
+    record({ seq: 5, tool: 'browser_click', targets: [traceTarget({ name: 'Upload' })], urlBefore: `${APP}/cases/documents`, urlAfter: `${APP}/cases/documents` }),
+  ];
+  assert.equal(records[2].params.text, 'devlogin:login.example.com:<secret>devlogin:login.example.com:password</secret>');
+  const result = compileSession({ records, meta, traceDir: '/t' });
+  assert.deepEqual(
+    result.report.skipped.filter((s) => s.reason === 'saved-login'),
+    [{ reason: 'saved-login', seqRange: [2, 4] }],
+  );
+  for (const flow of result.flows) assert.deepEqual(flow.args ?? {}, {}, 'a redacted placeholder became a flow argument');
+  for (const step of stepValues(result.flows)) assert.ok(!step.includes('devlogin:'), `a devlogin placeholder reached a flow: ${step}`);
+});
+
+test('a fill_form whose names the trace redaction garbled at the start is still dropped', () => {
+  const records = savedLoginTrace().map((r) => (r.tool === 'browser_fill_form'
+    ? { ...r, params: { fields: r.params.fields.map((f) => ({ ...f, value: redactedAs(f.value, 'dev') })) } }
+    : r));
+  for (const field of records[3].params.fields) assert.ok(!field.value.startsWith('devlogin:'));
+  const result = compileSession({ records, meta, traceDir: '/t' });
+  assert.deepEqual(
+    result.report.skipped.filter((s) => s.reason === 'saved-login'),
+    [{ reason: 'saved-login', seqRange: [3, 5] }],
+  );
+  for (const step of stepValues(result.flows)) {
+    assert.ok(!step.includes('devlogin:'), `a devlogin placeholder reached a flow: ${step}`);
+    assert.ok(!step.includes('login.example.com'), `a login-page step reached a flow: ${step}`);
+  }
+});
