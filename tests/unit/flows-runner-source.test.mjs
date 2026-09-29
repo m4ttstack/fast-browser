@@ -2734,3 +2734,46 @@ test('MAT-336: candidate enrichment degrades to the generic scan when scoped fil
     },
   );
 });
+
+test('flow-runner.js refuses a devlogin: arg value before touching the page', async () => {
+  const source = await readSource();
+  const macro = new Function(`"use strict"; return (${source});`)();
+  const touched = [];
+  const page = {
+    url: () => 'https://app.example.com/start',
+    on: () => {},
+    off: () => {},
+    goto: async (url) => { touched.push(`goto ${url}`); },
+    locator: () => ({
+      fill: async (value) => { touched.push(`fill ${value}`); },
+      click: async () => { touched.push('click'); },
+      waitFor: async () => {},
+      frames: () => [],
+    }),
+    waitForLoadState: async () => {},
+  };
+  const flow = {
+    schemaVersion: 1,
+    name: 'probe',
+    origin: 'https://app.example.com',
+    args: { password: { required: true } },
+    steps: [
+      { op: 'goto', url: '/start' },
+      { op: 'fill', target: { locators: [{ kind: 'css', selector: '#password' }] }, value: '{password}' },
+    ],
+  };
+  for (const value of ['devlogin:login.example.com:password', 'x devlogin:login.example.com:email']) {
+    await assert.rejects(
+      () => macro(page, { flow, args: { password: value } }),
+      (error) => {
+        assert.match(error.message, /^FLOW_RUNNER_FAILURE: /);
+        const payload = JSON.parse(error.message.slice('FLOW_RUNNER_FAILURE: '.length));
+        assert.equal(payload.failedStep, 'args');
+        assert.match(payload.error, /saved login/);
+        assert.ok(!payload.error.includes(value), 'the refusal must not echo the value');
+        return true;
+      },
+    );
+  }
+  assert.deepEqual(touched, []);
+});
