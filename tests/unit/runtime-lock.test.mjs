@@ -310,27 +310,27 @@ test('bundled lock pins the intended candidate identity and immutable artifact U
 
   assert.deepEqual(lock, {
     schemaVersion: 1,
-    productVersion: '0.1.1',
-    sourceCommit: '677504c52c664b930dc4757bf608efc94675135d',
+    productVersion: '0.1.2',
+    sourceCommit: '2136981392ab38fdffa66629793ff49bd78bfdcd',
     protocolVersion: 2,
     runtime: {
       url: 'https://github.com/m4ttheweric/playwright/releases/download/'
-        + 'fast-browser-v0.1.1/fast-browser-mcp-0.1.1.tar.gz',
-      file: 'fast-browser-mcp-0.1.1.tar.gz',
-      sha256: '11c1584b5c5c2e2a93aa02bfc2e3966406efada966f391e4d0e70ae1a1c51c12',
+        + 'fast-browser-v0.1.2/fast-browser-mcp-0.1.2.tar.gz',
+      file: 'fast-browser-mcp-0.1.2.tar.gz',
+      sha256: '61b625cd8277110eae61be3187af848978da269d2777b7fd07636e855b67bebe',
       node: '>=20',
     },
     extension: {
       url: 'https://github.com/m4ttheweric/playwright/releases/download/'
-        + 'fast-browser-v0.1.1/fast-browser-extension-0.1.1.zip',
-      file: 'fast-browser-extension-0.1.1.zip',
+        + 'fast-browser-v0.1.2/fast-browser-extension-0.1.2.zip',
+      file: 'fast-browser-extension-0.1.2.zip',
       sha256: 'b6bccac5cdd19c5588b6c9f77847877a88021acb55a67ad3153085ac2efe63a7',
       id: 'fnfikoifhimpdedpdepehibjjkcfbacm',
       version: '0.2.11',
       crx: {
         url: 'https://github.com/m4ttheweric/playwright/releases/download/'
-          + 'fast-browser-v0.1.1/fast-browser-extension-0.1.1.crx',
-        file: 'fast-browser-extension-0.1.1.crx',
+          + 'fast-browser-v0.1.2/fast-browser-extension-0.1.2.crx',
+        file: 'fast-browser-extension-0.1.2.crx',
         sha256: 'b98600eb6b42a2e3d40cc4a165c02a7b64da7cfefc288e4b4214756cec8a41ca',
       },
     },
