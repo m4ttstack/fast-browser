@@ -772,3 +772,91 @@ test('launcher refuses runtime roots and CLIs that symlink outside dataDir', asy
     assert.equal(await readFile(outsideCli, 'utf8'), 'do-not-launch\n');
   }
 });
+
+test('a secrets channel adds the fd flag, a fourth pipe slot, and attaches the socket', async () => {
+  const { paths, lock, cli } = await installedLauncher();
+  const captured = [];
+  const socket = { fake: true };
+  const attached = [];
+  const spawn = (command, args, options) => {
+    captured.push({ command, args, options });
+    const child = new EventEmitter();
+    child.stdio = [null, null, null, socket];
+    process.nextTick(() => child.emit('exit', 0, null));
+    return child;
+  };
+  await launchRuntime({
+    config: launcherConfig('safe', 'manual'),
+    paths,
+    lock,
+    spawn,
+    secretsChannel: { attach: (s) => attached.push(s) },
+  });
+  assert.deepEqual(captured[0].args, [
+    cli,
+    ...runtimeArgs({ config: launcherConfig('safe', 'manual'), paths, lock }),
+    '--secrets-channel-fd=3',
+  ]);
+  assert.deepEqual(captured[0].options.stdio, ['inherit', 'inherit', 'inherit', 'pipe']);
+  assert.deepEqual(attached, [socket]);
+});
+
+test('without a secrets channel the spawn is exactly as before', async () => {
+  const { paths, lock, cli } = await installedLauncher();
+  const captured = [];
+  await launchRuntime({
+    config: launcherConfig('safe', 'manual'),
+    paths,
+    lock,
+    spawn: exitingSpawn(0, captured),
+  });
+  assert.deepEqual(captured[0].args, [cli, ...runtimeArgs({ config: launcherConfig('safe', 'manual'), paths, lock })]);
+  assert.equal(captured[0].options.stdio, 'inherit');
+});
+
+function withDebugEnv(t, value) {
+  const had = Object.hasOwn(process.env, 'DEBUG');
+  const previous = process.env.DEBUG;
+  process.env.DEBUG = value;
+  t.after(() => {
+    if (had) process.env.DEBUG = previous;
+    else delete process.env.DEBUG;
+  });
+}
+
+test('a secrets channel strips DEBUG from the runtime env without touching the launcher env', async (t) => {
+  withDebugEnv(t, 'pw:api');
+  const { paths, lock } = await installedLauncher();
+  const captured = [];
+  const spawn = (command, args, options) => {
+    captured.push({ command, args, options });
+    const child = new EventEmitter();
+    child.stdio = [null, null, null, { fake: true }];
+    process.nextTick(() => child.emit('exit', 0, null));
+    return child;
+  };
+  await launchRuntime({
+    config: launcherConfig('safe', 'manual'),
+    paths,
+    lock,
+    spawn,
+    secretsChannel: { attach: () => {} },
+  });
+  assert.equal(Object.hasOwn(captured[0].options.env, 'DEBUG'), false);
+  assert.notEqual(captured[0].options.env, process.env);
+  assert.equal(process.env.DEBUG, 'pw:api');
+});
+
+test('without a secrets channel DEBUG and the whole env pass through unchanged', async (t) => {
+  withDebugEnv(t, 'pw:api');
+  const { paths, lock } = await installedLauncher();
+  const captured = [];
+  await launchRuntime({
+    config: launcherConfig('safe', 'manual'),
+    paths,
+    lock,
+    spawn: exitingSpawn(0, captured),
+  });
+  assert.equal(captured[0].options.env, process.env);
+  assert.equal(captured[0].options.env.DEBUG, 'pw:api');
+});

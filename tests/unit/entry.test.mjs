@@ -193,3 +193,25 @@ test('the cloud path never prunes: its output dir is a pod-lifetime tmpdir', asy
 
   assert.equal(pruned, false);
 });
+
+test('the local path hands launchRuntime a secrets channel', async () => {
+  let channel;
+  await startRuntime({
+    env: {},
+    paths: { ...paths, homeDir: '/synthetic-home' },
+    lock,
+    deps: deps({ launchRuntime: async (args) => { channel = args.secretsChannel; return 0; } }),
+  });
+  assert.equal(typeof channel?.attach, 'function');
+});
+
+test('the cloud path never gets a secrets channel', async () => {
+  let sawKey = true;
+  await startRuntime({
+    env: CLOUD_ENV,
+    paths,
+    lock,
+    deps: deps({ launchRuntime: async (args) => { sawKey = 'secretsChannel' in args; return 0; } }),
+  });
+  assert.equal(sawKey, false);
+});
