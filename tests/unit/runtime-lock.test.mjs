@@ -310,27 +310,27 @@ test('bundled lock pins the intended candidate identity and immutable artifact U
 
   assert.deepEqual(lock, {
     schemaVersion: 1,
-    productVersion: '0.1.1',
-    sourceCommit: '677504c52c664b930dc4757bf608efc94675135d',
+    productVersion: '0.1.2',
+    sourceCommit: '2136981392ab38fdffa66629793ff49bd78bfdcd',
     protocolVersion: 2,
     runtime: {
       url: 'https://github.com/m4ttheweric/playwright/releases/download/'
-        + 'fast-browser-v0.1.1/fast-browser-mcp-0.1.1.tar.gz',
-      file: 'fast-browser-mcp-0.1.1.tar.gz',
-      sha256: '11c1584b5c5c2e2a93aa02bfc2e3966406efada966f391e4d0e70ae1a1c51c12',
+        + 'fast-browser-v0.1.2/fast-browser-mcp-0.1.2.tar.gz',
+      file: 'fast-browser-mcp-0.1.2.tar.gz',
+      sha256: '61b625cd8277110eae61be3187af848978da269d2777b7fd07636e855b67bebe',
       node: '>=20',
     },
     extension: {
       url: 'https://github.com/m4ttheweric/playwright/releases/download/'
-        + 'fast-browser-v0.1.1/fast-browser-extension-0.1.1.zip',
-      file: 'fast-browser-extension-0.1.1.zip',
+        + 'fast-browser-v0.1.2/fast-browser-extension-0.1.2.zip',
+      file: 'fast-browser-extension-0.1.2.zip',
       sha256: 'b6bccac5cdd19c5588b6c9f77847877a88021acb55a67ad3153085ac2efe63a7',
       id: 'fnfikoifhimpdedpdepehibjjkcfbacm',
       version: '0.2.11',
       crx: {
         url: 'https://github.com/m4ttheweric/playwright/releases/download/'
-          + 'fast-browser-v0.1.1/fast-browser-extension-0.1.1.crx',
-        file: 'fast-browser-extension-0.1.1.crx',
+          + 'fast-browser-v0.1.2/fast-browser-extension-0.1.2.crx',
+        file: 'fast-browser-extension-0.1.2.crx',
         sha256: 'b98600eb6b42a2e3d40cc4a165c02a7b64da7cfefc288e4b4214756cec8a41ca',
       },
     },
@@ -771,4 +771,92 @@ test('launcher refuses runtime roots and CLIs that symlink outside dataDir', asy
     assert.equal(spawnCalls, 0);
     assert.equal(await readFile(outsideCli, 'utf8'), 'do-not-launch\n');
   }
+});
+
+test('a secrets channel adds the fd flag, a fourth pipe slot, and attaches the socket', async () => {
+  const { paths, lock, cli } = await installedLauncher();
+  const captured = [];
+  const socket = { fake: true };
+  const attached = [];
+  const spawn = (command, args, options) => {
+    captured.push({ command, args, options });
+    const child = new EventEmitter();
+    child.stdio = [null, null, null, socket];
+    process.nextTick(() => child.emit('exit', 0, null));
+    return child;
+  };
+  await launchRuntime({
+    config: launcherConfig('safe', 'manual'),
+    paths,
+    lock,
+    spawn,
+    secretsChannel: { attach: (s) => attached.push(s) },
+  });
+  assert.deepEqual(captured[0].args, [
+    cli,
+    ...runtimeArgs({ config: launcherConfig('safe', 'manual'), paths, lock }),
+    '--secrets-channel-fd=3',
+  ]);
+  assert.deepEqual(captured[0].options.stdio, ['inherit', 'inherit', 'inherit', 'pipe']);
+  assert.deepEqual(attached, [socket]);
+});
+
+test('without a secrets channel the spawn is exactly as before', async () => {
+  const { paths, lock, cli } = await installedLauncher();
+  const captured = [];
+  await launchRuntime({
+    config: launcherConfig('safe', 'manual'),
+    paths,
+    lock,
+    spawn: exitingSpawn(0, captured),
+  });
+  assert.deepEqual(captured[0].args, [cli, ...runtimeArgs({ config: launcherConfig('safe', 'manual'), paths, lock })]);
+  assert.equal(captured[0].options.stdio, 'inherit');
+});
+
+function withDebugEnv(t, value) {
+  const had = Object.hasOwn(process.env, 'DEBUG');
+  const previous = process.env.DEBUG;
+  process.env.DEBUG = value;
+  t.after(() => {
+    if (had) process.env.DEBUG = previous;
+    else delete process.env.DEBUG;
+  });
+}
+
+test('a secrets channel strips DEBUG from the runtime env without touching the launcher env', async (t) => {
+  withDebugEnv(t, 'pw:api');
+  const { paths, lock } = await installedLauncher();
+  const captured = [];
+  const spawn = (command, args, options) => {
+    captured.push({ command, args, options });
+    const child = new EventEmitter();
+    child.stdio = [null, null, null, { fake: true }];
+    process.nextTick(() => child.emit('exit', 0, null));
+    return child;
+  };
+  await launchRuntime({
+    config: launcherConfig('safe', 'manual'),
+    paths,
+    lock,
+    spawn,
+    secretsChannel: { attach: () => {} },
+  });
+  assert.equal(Object.hasOwn(captured[0].options.env, 'DEBUG'), false);
+  assert.notEqual(captured[0].options.env, process.env);
+  assert.equal(process.env.DEBUG, 'pw:api');
+});
+
+test('without a secrets channel DEBUG and the whole env pass through unchanged', async (t) => {
+  withDebugEnv(t, 'pw:api');
+  const { paths, lock } = await installedLauncher();
+  const captured = [];
+  await launchRuntime({
+    config: launcherConfig('safe', 'manual'),
+    paths,
+    lock,
+    spawn: exitingSpawn(0, captured),
+  });
+  assert.equal(captured[0].options.env, process.env);
+  assert.equal(captured[0].options.env.DEBUG, 'pw:api');
 });

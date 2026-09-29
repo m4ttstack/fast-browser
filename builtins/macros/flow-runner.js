@@ -890,6 +890,15 @@ async (page, args) => {
       }
     }
 
+    // A saved-login name only resolves through the runtime's fill
+    // interception, which a macro bypasses, so it would be typed literally.
+    for (const name of Object.keys(suppliedArgs)) {
+      const value = suppliedArgs[name];
+      if (typeof value === 'string' && value.includes('devlogin:')) {
+        failArgs(`arg ${name} names a saved login, which a flow cannot fill`);
+      }
+    }
+
     // --- rule 2: refuse every js step up front, before any page
     // interaction -- a flow this runner is about to refuse is never
     // half-run first. ---

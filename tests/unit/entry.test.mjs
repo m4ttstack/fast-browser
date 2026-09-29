@@ -1,4 +1,8 @@
 import assert from 'node:assert/strict';
+import http from 'node:http';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import net from 'node:net';
+import path from 'node:path';
 import test from 'node:test';
 
 import { startRuntime } from '../../lib/runtime/entry.mjs';
@@ -192,4 +196,108 @@ test('the cloud path never prunes: its output dir is a pod-lifetime tmpdir', asy
   });
 
   assert.equal(pruned, false);
+});
+
+test('the local path hands launchRuntime a secrets channel', async () => {
+  let channel;
+  await startRuntime({
+    env: {},
+    paths: { ...paths, homeDir: '/synthetic-home' },
+    lock,
+    deps: deps({ launchRuntime: async (args) => { channel = args.secretsChannel; return 0; } }),
+  });
+  assert.equal(typeof channel?.attach, 'function');
+});
+
+test('the cloud path never gets a secrets channel', async () => {
+  let sawKey = true;
+  await startRuntime({
+    env: CLOUD_ENV,
+    paths,
+    lock,
+    deps: deps({ launchRuntime: async (args) => { sawKey = 'secretsChannel' in args; return 0; } }),
+  });
+  assert.equal(sawKey, false);
+});
+
+const LOGIN = 'https://login.example.com';
+const PASSWORD_NAME = 'devlogin:login.example.com:password';
+
+// A short root under /tmp keeps the daemon's unix socket path inside the
+// platform's sun_path limit, which os.tmpdir() on macOS can exceed.
+async function fakeRtHome(t, { daemonSocket } = {}) {
+  const root = await mkdtemp('/tmp/fb-entry-');
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const homeDir = path.join(root, 'home');
+  const rtDir = path.join(homeDir, '.mattstack', 'rt');
+  await mkdir(rtDir, { recursive: true });
+  await writeFile(path.join(rtDir, 'api-token'), 'tok-entry\n');
+  const seen = [];
+  const daemon = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', (c) => { body += c; });
+    req.on('end', () => {
+      seen.push(JSON.parse(body));
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({ ok: true, data: { origin: LOGIN, kind: 'password', value: 'pw-from-fake-rt' } }));
+    });
+  });
+  await new Promise((resolve) => daemon.listen(daemonSocket?.(root) ?? path.join(rtDir, 'rt.sock'), resolve));
+  t.after(() => new Promise((resolve) => daemon.close(resolve)));
+  return { root, homeDir, seen };
+}
+
+async function roundTripThroughDefaultChannel(t, { root, homeDir, env, lines }) {
+  let channel;
+  const warned = [];
+  await startRuntime({
+    env,
+    paths: { ...paths, homeDir },
+    lock,
+    deps: deps({
+      warn: (line) => warned.push(line),
+      launchRuntime: async (args) => { channel = args.secretsChannel; return 0; },
+    }),
+  });
+  const pairPath = path.join(root, 'pair.sock');
+  const server = net.createServer((socket) => channel.attach(socket));
+  await new Promise((resolve) => server.listen(pairPath, resolve));
+  const runtime = net.connect(pairPath);
+  t.after(() => { runtime.destroy(); server.close(); });
+  const reply = await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('no reply from the default secrets channel')), 5000);
+    let buffer = '';
+    runtime.setEncoding('utf8');
+    runtime.on('data', (chunk) => {
+      buffer += chunk;
+      const newline = buffer.indexOf('\n');
+      if (newline === -1) return;
+      clearTimeout(timer);
+      resolve(JSON.parse(buffer.slice(0, newline)));
+    });
+    for (const line of lines) runtime.write(`${line}\n`);
+  });
+  return { reply, warned };
+}
+
+const fillLine = JSON.stringify({ id: 'p', name: PASSWORD_NAME, frameOrigin: LOGIN, elementKind: 'password' });
+
+test('the default secrets channel relays a fill to the rt daemon under paths.homeDir and logs through warn', async (t) => {
+  const { root, homeDir, seen } = await fakeRtHome(t);
+  const { reply, warned } = await roundTripThroughDefaultChannel(t, {
+    root, homeDir, env: {}, lines: ['not json', fillLine],
+  });
+  assert.deepEqual(reply, { id: 'p', name: PASSWORD_NAME, origin: LOGIN, kind: 'password', value: 'pw-from-fake-rt' });
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].token, 'tok-entry');
+  assert.deepEqual(warned, ['fast-browser-mcp: secrets channel ignored an unparseable frame']);
+});
+
+test('the default secrets channel reaches the daemon through RT_DAEMON_SOCK from the launch env', async (t) => {
+  const { root, homeDir, seen } = await fakeRtHome(t, { daemonSocket: (dir) => path.join(dir, 'alt.sock') });
+  const { reply } = await roundTripThroughDefaultChannel(t, {
+    root, homeDir, env: { RT_DAEMON_SOCK: path.join(root, 'alt.sock') }, lines: [fillLine],
+  });
+  assert.equal(reply.value, 'pw-from-fake-rt');
+  assert.equal(seen.length, 1);
 });

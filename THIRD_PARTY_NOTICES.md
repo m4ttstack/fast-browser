@@ -6,7 +6,7 @@ that license: Playwright is licensed under the Apache License 2.0.
 
 - Playwright license: https://github.com/microsoft/playwright/blob/main/LICENSE
 - Source repository: https://github.com/m4ttheweric/playwright
-- Source commit: `677504c52c664b930dc4757bf608efc94675135d`
+- Source commit: `2136981392ab38fdffa66629793ff49bd78bfdcd`
 
 The MIT license covers this plugin's own source. The runtime and Chrome
 extension artifacts it downloads remain Apache-2.0 works of the Playwright
@@ -17,20 +17,20 @@ project and its contributors.
 The URLs in `runtime-lock.json` are immutable release coordinates: a specific
 tag, never `latest`, so the bytes behind them cannot change without the lock
 changing. The artifacts are built from that commit of the fork; publishing the
-`fast-browser-v0.1.1` tag and its release assets is part of cutting
+`fast-browser-v0.1.2` tag and its release assets is part of cutting
 the release this lock belongs to, and the installer verifies both checksums
 after download regardless.
 
-- Runtime: `fast-browser-mcp-0.1.1.tar.gz`
-  SHA-256 `11c1584b5c5c2e2a93aa02bfc2e3966406efada966f391e4d0e70ae1a1c51c12`
-  https://github.com/m4ttheweric/playwright/releases/download/fast-browser-v0.1.1/fast-browser-mcp-0.1.1.tar.gz
-- Chrome extension: `fast-browser-extension-0.1.1.zip`
+- Runtime: `fast-browser-mcp-0.1.2.tar.gz`
+  SHA-256 `61b625cd8277110eae61be3187af848978da269d2777b7fd07636e855b67bebe`
+  https://github.com/m4ttheweric/playwright/releases/download/fast-browser-v0.1.2/fast-browser-mcp-0.1.2.tar.gz
+- Chrome extension: `fast-browser-extension-0.1.2.zip`
   SHA-256 `b6bccac5cdd19c5588b6c9f77847877a88021acb55a67ad3153085ac2efe63a7`
-  https://github.com/m4ttheweric/playwright/releases/download/fast-browser-v0.1.1/fast-browser-extension-0.1.1.zip
+  https://github.com/m4ttheweric/playwright/releases/download/fast-browser-v0.1.2/fast-browser-extension-0.1.2.zip
   Extension ID `fnfikoifhimpdedpdepehibjjkcfbacm`, version `0.2.11`
-- Signed Chrome extension: `fast-browser-extension-0.1.1.crx`
+- Signed Chrome extension: `fast-browser-extension-0.1.2.crx`
   SHA-256 `b98600eb6b42a2e3d40cc4a165c02a7b64da7cfefc288e4b4214756cec8a41ca`
-  https://github.com/m4ttheweric/playwright/releases/download/fast-browser-v0.1.1/fast-browser-extension-0.1.1.crx
+  https://github.com/m4ttheweric/playwright/releases/download/fast-browser-v0.1.2/fast-browser-extension-0.1.2.crx
   The zip above wrapped in a CRX3 signature, so the two install identical
   bytes. `setup` installs the zip; the CRX is for an unattended installer that
   registers the extension with Chrome itself.
@@ -41,7 +41,7 @@ still agree; hand-editing either one alone fails that gate rather than silently
 publishing stale provenance.
 
 An unpublished local build can still be installed with a URL-free
-`fast-browser-release-0.1.1.json` beside the runtime and extension archives it
+`fast-browser-release-0.1.2.json` beside the runtime and extension archives it
 names, passed via `--runtime-lock`. That local manifest and the locked hashes provide the
 same provenance without reaching the network.
 

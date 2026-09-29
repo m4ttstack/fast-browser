@@ -1638,3 +1638,226 @@ test('MAT-336: every compiled target with a role and name carries more than one 
     );
   }
 });
+
+const APP = 'https://app.example.com';
+const LOGIN = 'https://login.example.com';
+
+function savedLoginTrace({ identifierFirst = false, endsOnLogin = false } = {}) {
+  const records = [
+    record({ seq: 1, tool: 'browser_navigate', params: { url: `${APP}/cases` }, urlBefore: 'about:blank', urlAfter: `${APP}/cases` }),
+    record({ seq: 2, tool: 'browser_click', targets: [traceTarget({ name: 'Open case' })], urlBefore: `${APP}/cases`, urlAfter: `${APP}/cases/1` }),
+    record({ seq: 3, tool: 'browser_click', targets: [traceTarget({ name: 'Documents' })], urlBefore: `${APP}/cases/1`, urlAfter: `${LOGIN}/u/login` }),
+    record({
+      seq: 4,
+      tool: 'browser_fill_form',
+      targets: [traceTarget({ name: 'Email', role: 'textbox' })].concat(identifierFirst ? [] : [traceTarget({ name: 'Password', role: 'textbox' })]),
+      params: {
+        fields: [{ name: 'Email', type: 'textbox', value: 'devlogin:login.example.com:email' }].concat(
+          identifierFirst ? [] : [{ name: 'Password', type: 'textbox', value: 'devlogin:login.example.com:password' }],
+        ),
+      },
+      urlBefore: `${LOGIN}/u/login`,
+      urlAfter: `${LOGIN}/u/login`,
+    }),
+  ];
+  let seq = 5;
+  if (identifierFirst) {
+    records.push(record({ seq: seq++, tool: 'browser_click', targets: [traceTarget({ name: 'Continue' })], urlBefore: `${LOGIN}/u/login`, urlAfter: `${LOGIN}/u/login/password` }));
+    records.push(record({
+      seq: seq++,
+      tool: 'browser_type',
+      targets: [traceTarget({ name: 'Password', role: 'textbox' })],
+      params: { text: 'devlogin:login.example.com:password' },
+      urlBefore: `${LOGIN}/u/login/password`,
+      urlAfter: `${LOGIN}/u/login/password`,
+    }));
+  }
+  if (endsOnLogin) return records;
+  records.push(record({ seq: seq++, tool: 'browser_click', targets: [traceTarget({ name: 'Continue' })], urlBefore: `${LOGIN}/u/login`, urlAfter: `${APP}/cases/1/documents` }));
+  records.push(record({ seq: seq++, tool: 'browser_click', targets: [traceTarget({ name: 'Upload' })], urlBefore: `${APP}/cases/1/documents`, urlAfter: `${APP}/cases/1/documents` }));
+  records.push(record({ seq: seq++, tool: 'browser_click', targets: [traceTarget({ name: 'Save' })], urlBefore: `${APP}/cases/1/documents`, urlAfter: `${APP}/cases/1/documents` }));
+  return records;
+}
+
+function stepValues(flows) {
+  return flows.flatMap((flow) => flow.steps).map((step) => JSON.stringify(step));
+}
+
+test('a saved-login segment is dropped whole, from the arriving click through the submit', () => {
+  const result = compileSession({ records: savedLoginTrace(), meta, traceDir: '/t' });
+  assert.deepEqual(
+    result.report.skipped.filter((s) => s.reason === 'saved-login'),
+    [{ reason: 'saved-login', seqRange: [3, 5] }],
+  );
+  for (const step of stepValues(result.flows)) {
+    assert.ok(!step.includes('devlogin:'), `a devlogin placeholder reached a flow: ${step}`);
+    assert.ok(!step.includes('login.example.com'), `a login-page step reached a flow: ${step}`);
+  }
+});
+
+test('identifier-first logins drop both screens and the submit', () => {
+  const result = compileSession({ records: savedLoginTrace({ identifierFirst: true }), meta, traceDir: '/t' });
+  assert.deepEqual(
+    result.report.skipped.filter((s) => s.reason === 'saved-login'),
+    [{ reason: 'saved-login', seqRange: [3, 7] }],
+  );
+  for (const step of stepValues(result.flows)) assert.ok(!step.includes('devlogin:'));
+});
+
+test('a trace that ends on the login page drops to the end', () => {
+  const result = compileSession({ records: savedLoginTrace({ endsOnLogin: true }), meta, traceDir: '/t' });
+  assert.deepEqual(
+    result.report.skipped.filter((s) => s.reason === 'saved-login'),
+    [{ reason: 'saved-login', seqRange: [3, 4] }],
+  );
+});
+
+test('a bare-name secrets login (no devlogin prefix) compiles as before', () => {
+  const records = savedLoginTrace().map((r) => (r.tool === 'browser_fill_form'
+    ? { ...r, params: { fields: r.params.fields.map((f) => ({ ...f, value: f.value.replace(/^devlogin:login\.example\.com:/, 'APP_').toUpperCase() })) } }
+    : r));
+  const result = compileSession({ records, meta, traceDir: '/t' });
+  assert.equal(result.report.skipped.filter((s) => s.reason === 'saved-login').length, 0);
+});
+
+test('a login typed only with browser_type is dropped through the submit', () => {
+  const records = [
+    record({ seq: 1, tool: 'browser_navigate', params: { url: `${APP}/cases` }, urlBefore: 'about:blank', urlAfter: `${APP}/cases` }),
+    record({ seq: 2, tool: 'browser_click', targets: [traceTarget({ name: 'Open case' })], urlBefore: `${APP}/cases`, urlAfter: `${APP}/cases/1` }),
+    record({ seq: 3, tool: 'browser_click', targets: [traceTarget({ name: 'Documents' })], urlBefore: `${APP}/cases/1`, urlAfter: `${LOGIN}/u/login` }),
+    record({ seq: 4, tool: 'browser_type', targets: [traceTarget({ name: 'Email', role: 'textbox' })], params: { text: 'devlogin:login.example.com:email' }, urlBefore: `${LOGIN}/u/login`, urlAfter: `${LOGIN}/u/login` }),
+    record({ seq: 5, tool: 'browser_type', targets: [traceTarget({ name: 'Password', role: 'textbox' })], params: { text: 'devlogin:login.example.com:password' }, urlBefore: `${LOGIN}/u/login`, urlAfter: `${LOGIN}/u/login` }),
+    record({ seq: 6, tool: 'browser_click', targets: [traceTarget({ name: 'Continue' })], urlBefore: `${LOGIN}/u/login`, urlAfter: `${APP}/cases/1/documents` }),
+    record({ seq: 7, tool: 'browser_click', targets: [traceTarget({ name: 'Upload' })], urlBefore: `${APP}/cases/1/documents`, urlAfter: `${APP}/cases/1/documents` }),
+  ];
+  const result = compileSession({ records, meta, traceDir: '/t' });
+  assert.deepEqual(
+    result.report.skipped.filter((s) => s.reason === 'saved-login'),
+    [{ reason: 'saved-login', seqRange: [3, 6] }],
+  );
+  for (const step of stepValues(result.flows)) assert.ok(!step.includes('devlogin:'), `a devlogin placeholder reached a flow: ${step}`);
+});
+
+test('a login page on the app origin drops from the start of the trace to the end', () => {
+  const records = [
+    record({ seq: 1, tool: 'browser_navigate', params: { url: `${APP}/cases` }, urlBefore: 'about:blank', urlAfter: `${APP}/cases` }),
+    record({ seq: 2, tool: 'browser_click', targets: [traceTarget({ name: 'Sign in' })], urlBefore: `${APP}/cases`, urlAfter: `${APP}/login` }),
+    record({
+      seq: 3,
+      tool: 'browser_fill_form',
+      targets: [traceTarget({ name: 'Email', role: 'textbox' }), traceTarget({ name: 'Password', role: 'textbox' })],
+      params: {
+        fields: [
+          { name: 'Email', type: 'textbox', value: 'devlogin:app.example.com:email' },
+          { name: 'Password', type: 'textbox', value: 'devlogin:app.example.com:password' },
+        ],
+      },
+      urlBefore: `${APP}/login`,
+      urlAfter: `${APP}/login`,
+    }),
+    record({ seq: 4, tool: 'browser_click', targets: [traceTarget({ name: 'Sign in' })], urlBefore: `${APP}/login`, urlAfter: `${APP}/cases` }),
+    record({ seq: 5, tool: 'browser_click', targets: [traceTarget({ name: 'Open case' })], urlBefore: `${APP}/cases`, urlAfter: `${APP}/cases/1` }),
+  ];
+  const result = compileSession({ records, meta, traceDir: '/t' });
+  assert.deepEqual(
+    result.report.skipped.filter((s) => s.reason === 'saved-login'),
+    [{ reason: 'saved-login', seqRange: [1, 5] }],
+  );
+  for (const step of stepValues(result.flows)) assert.ok(!step.includes('devlogin:'), `a devlogin placeholder reached a flow: ${step}`);
+});
+
+test('a submit whose urlAfter is still the login origin ends the segment when the next record starts on the app', () => {
+  const records = savedLoginTrace().map((r) => (r.seq === 5 ? { ...r, urlAfter: `${LOGIN}/u/login` } : r));
+  const result = compileSession({ records, meta, traceDir: '/t' });
+  assert.deepEqual(
+    result.report.skipped.filter((s) => s.reason === 'saved-login'),
+    [{ reason: 'saved-login', seqRange: [3, 5] }],
+  );
+  assert.ok(stepValues(result.flows).some((step) => step.includes('Upload')), 'the first app step after the login must survive');
+});
+
+test('two saved-login segments in one trace are both dropped and the span between compiles alone', () => {
+  const loginFill = (seq) => record({
+    seq,
+    tool: 'browser_fill_form',
+    targets: [traceTarget({ name: 'Email', role: 'textbox' }), traceTarget({ name: 'Password', role: 'textbox' })],
+    params: {
+      fields: [
+        { name: 'Email', type: 'textbox', value: 'devlogin:login.example.com:email' },
+        { name: 'Password', type: 'textbox', value: 'devlogin:login.example.com:password' },
+      ],
+    },
+    urlBefore: `${LOGIN}/u/login`,
+    urlAfter: `${LOGIN}/u/login`,
+  });
+  const appClick = (seq, name) => record({ seq, tool: 'browser_click', targets: [traceTarget({ name })], urlBefore: `${APP}/cases/1/documents`, urlAfter: `${APP}/cases/1/documents` });
+  const records = [
+    record({ seq: 1, tool: 'browser_navigate', params: { url: `${APP}/cases` }, urlBefore: 'about:blank', urlAfter: `${APP}/cases` }),
+    record({ seq: 2, tool: 'browser_click', targets: [traceTarget({ name: 'Documents' })], urlBefore: `${APP}/cases`, urlAfter: `${LOGIN}/u/login` }),
+    loginFill(3),
+    record({ seq: 4, tool: 'browser_click', targets: [traceTarget({ name: 'Continue' })], urlBefore: `${LOGIN}/u/login`, urlAfter: `${APP}/cases/1/documents` }),
+    appClick(5, 'Upload'),
+    appClick(6, 'Rename'),
+    appClick(7, 'Save'),
+    record({ seq: 8, tool: 'browser_click', targets: [traceTarget({ name: 'Reports' })], urlBefore: `${APP}/cases/1/documents`, urlAfter: `${LOGIN}/u/login` }),
+    loginFill(9),
+    record({ seq: 10, tool: 'browser_click', targets: [traceTarget({ name: 'Continue' })], urlBefore: `${LOGIN}/u/login`, urlAfter: `${APP}/reports` }),
+  ];
+  const result = compileSession({ records, meta, traceDir: '/t' });
+  assert.deepEqual(
+    result.report.skipped.filter((s) => s.reason === 'saved-login'),
+    [
+      { reason: 'saved-login', seqRange: [2, 4] },
+      { reason: 'saved-login', seqRange: [8, 10] },
+    ],
+  );
+  const steps = stepValues(result.flows);
+  assert.equal(result.flows.length, 1, 'only the span between the logins compiles');
+  for (const name of ['Upload', 'Rename', 'Save']) assert.ok(steps.some((step) => step.includes(name)), `${name} must compile`);
+  for (const step of steps) assert.ok(!step.includes('devlogin:'));
+});
+
+function redactedAs(value, password) {
+  return value.replaceAll(password, '<secret>devlogin:login.example.com:password</secret>');
+}
+
+test('a password-only fill whose name the trace redaction garbled is still dropped', () => {
+  const records = [
+    record({ seq: 1, tool: 'browser_navigate', params: { url: `${APP}/cases` }, urlBefore: 'about:blank', urlAfter: `${APP}/cases` }),
+    record({ seq: 2, tool: 'browser_click', targets: [traceTarget({ name: 'Documents' })], urlBefore: `${APP}/cases`, urlAfter: `${LOGIN}/u/login/password` }),
+    record({
+      seq: 3,
+      tool: 'browser_type',
+      targets: [traceTarget({ name: 'Password', role: 'textbox' })],
+      params: { text: redactedAs('devlogin:login.example.com:password', 'password') },
+      urlBefore: `${LOGIN}/u/login/password`,
+      urlAfter: `${LOGIN}/u/login/password`,
+    }),
+    record({ seq: 4, tool: 'browser_click', targets: [traceTarget({ name: 'Continue' })], urlBefore: `${LOGIN}/u/login/password`, urlAfter: `${APP}/cases/documents` }),
+    record({ seq: 5, tool: 'browser_click', targets: [traceTarget({ name: 'Upload' })], urlBefore: `${APP}/cases/documents`, urlAfter: `${APP}/cases/documents` }),
+  ];
+  assert.equal(records[2].params.text, 'devlogin:login.example.com:<secret>devlogin:login.example.com:password</secret>');
+  const result = compileSession({ records, meta, traceDir: '/t' });
+  assert.deepEqual(
+    result.report.skipped.filter((s) => s.reason === 'saved-login'),
+    [{ reason: 'saved-login', seqRange: [2, 4] }],
+  );
+  for (const flow of result.flows) assert.deepEqual(flow.args ?? {}, {}, 'a redacted placeholder became a flow argument');
+  for (const step of stepValues(result.flows)) assert.ok(!step.includes('devlogin:'), `a devlogin placeholder reached a flow: ${step}`);
+});
+
+test('a fill_form whose names the trace redaction garbled at the start is still dropped', () => {
+  const records = savedLoginTrace().map((r) => (r.tool === 'browser_fill_form'
+    ? { ...r, params: { fields: r.params.fields.map((f) => ({ ...f, value: redactedAs(f.value, 'dev') })) } }
+    : r));
+  for (const field of records[3].params.fields) assert.ok(!field.value.startsWith('devlogin:'));
+  const result = compileSession({ records, meta, traceDir: '/t' });
+  assert.deepEqual(
+    result.report.skipped.filter((s) => s.reason === 'saved-login'),
+    [{ reason: 'saved-login', seqRange: [3, 5] }],
+  );
+  for (const step of stepValues(result.flows)) {
+    assert.ok(!step.includes('devlogin:'), `a devlogin placeholder reached a flow: ${step}`);
+    assert.ok(!step.includes('login.example.com'), `a login-page step reached a flow: ${step}`);
+  }
+});
