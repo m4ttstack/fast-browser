@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -48,6 +48,7 @@ test('detects an unpacked extension listed only in Secure Preferences by reading
       versionSource: 'disk',
       path: unpackedDirectory,
       loadedAt: null,
+      unreadable: false,
     },
   ]);
 });
@@ -76,6 +77,7 @@ test('treats a Secure Preferences entry with state 0 as not installed even with 
       versionSource: null,
       path: null,
       loadedAt: null,
+      unreadable: false,
     },
   ]);
 });
@@ -97,6 +99,7 @@ test('reports not installed when the extension is absent from both Preferences a
       versionSource: null,
       path: null,
       loadedAt: null,
+      unreadable: false,
     },
   ]);
 });
@@ -119,6 +122,7 @@ test('resolves an unreadable or malformed Secure Preferences file to not install
       versionSource: null,
       path: null,
       loadedAt: null,
+      unreadable: false,
     },
   ]);
 });
@@ -145,6 +149,7 @@ test('still detects an extension recorded only in Preferences exactly as before'
       versionSource: 'chrome',
       path: null,
       loadedAt: null,
+      unreadable: false,
     },
   ]);
 });
@@ -180,6 +185,7 @@ test('prefers a Preferences version over a differing Secure Preferences version 
       versionSource: 'chrome',
       path: null,
       loadedAt: null,
+      unreadable: false,
     },
   ]);
 });
@@ -207,6 +213,7 @@ test('resolves a Secure Preferences entry whose path has no readable manifest.js
       versionSource: null,
       path: null,
       loadedAt: null,
+      unreadable: false,
     },
   ]);
 });
@@ -362,4 +369,60 @@ test('still detects an unpacked record whose manifest key derives the recorded i
   const [profile] = await detectChromeExtension({ extensionId: SHIPPED_ID, chromeUserDataDir: root });
   assert.equal(profile.installed, true);
   assert.equal(profile.fromWebStore, false);
+});
+
+// macOS app-data protection refuses a terminal without Full Disk Access with
+// EPERM; chmod 000 reproduces the same refusal (EACCES) without TCC.
+async function denyReads(t, ...targets) {
+  for (const target of targets) await chmod(target, 0o000);
+  t.after(async () => {
+    for (const target of targets) await chmod(target, 0o700).catch(() => {});
+  });
+}
+
+test('reports a profile it was refused permission to read as unreadable, not merely absent', async (t) => {
+  const root = await tempChromeRoot();
+  const profileDirectory = path.join(root, 'Default');
+  await writeProfileJson(profileDirectory, 'Preferences', { extensions: { settings: {} } });
+  await writeProfileJson(profileDirectory, 'Secure Preferences', { extensions: { settings: {} } });
+  await mkdir(path.join(profileDirectory, 'Extensions', extensionId, '0.2.11'), { recursive: true });
+  await denyReads(
+    t,
+    path.join(profileDirectory, 'Extensions'),
+    path.join(profileDirectory, 'Preferences'),
+    path.join(profileDirectory, 'Secure Preferences'),
+  );
+
+  const [profile] = await detectChromeExtension({ extensionId, chromeUserDataDir: root });
+
+  assert.equal(profile.profile, 'Default');
+  assert.equal(profile.installed, false);
+  assert.equal(profile.unreadable, true);
+});
+
+test('reports an unreadable Chrome user data directory as one unreadable entry', async (t) => {
+  const root = await tempChromeRoot();
+  await mkdir(path.join(root, 'Default'), { recursive: true });
+  await denyReads(t, root);
+
+  assert.deepEqual(await detectChromeExtension({ extensionId, chromeUserDataDir: root }), [
+    {
+      profile: null,
+      installed: false,
+      fromWebStore: false,
+      manifestVersion: null,
+      versionSource: null,
+      path: null,
+      loadedAt: null,
+      unreadable: true,
+    },
+  ]);
+});
+
+test('reports no profiles at all when the Chrome user data directory does not exist', async () => {
+  const root = await tempChromeRoot();
+  assert.deepEqual(await detectChromeExtension({
+    extensionId,
+    chromeUserDataDir: path.join(root, 'no-chrome-here'),
+  }), []);
 });

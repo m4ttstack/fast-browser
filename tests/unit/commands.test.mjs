@@ -1010,7 +1010,7 @@ test('extension-installed fails when Chrome reports a loaded path outside the ma
   });
 });
 
-test('extension-installed fails, unchanged, when the extension is absent entirely', async () => {
+test('extension-installed fails with the Web Store install first when the extension is absent entirely', async () => {
   const { extensionDir, unpacked, lock } = await setupManagedExtension('1.0.0', {
     'manifest.json': '{"version":"1.0.0"}',
   });
@@ -1025,10 +1025,53 @@ test('extension-installed fails, unchanged, when the extension is absent entirel
     id: 'extension-installed',
     status: 'fail',
     message: 'The pinned Chrome extension is not installed.',
-    // Naming the directory matters more now that it is stable: it is the one
-    // path the user ever has to load, and it never changes again afterward.
-    remediation: `Open chrome://extensions, turn on Developer mode, click Load unpacked, and choose ${unpacked}.`,
+    // The Web Store copy auto-updates, so it leads; the unpacked load stays
+    // only as the path for a build the store does not carry.
+    remediation: 'Install Fast Browser from the Chrome Web Store:'
+      + ' https://chromewebstore.google.com/detail/extension-id, then run doctor again.'
+      + ' To run a local or unpublished build instead, open chrome://extensions,'
+      + ` turn on Developer mode, click Load unpacked, and choose ${unpacked}.`,
   });
+});
+
+// A terminal without Full Disk Access is refused Chrome's profile by macOS,
+// and the extension may be installed all the same.
+test('extension-installed warns, rather than calling it missing, when Chrome profiles cannot be read', async () => {
+  const { extensionDir, lock } = await setupManagedExtension('1.0.0', {
+    'manifest.json': '{"version":"1.0.0"}',
+  });
+  const unreadable = { installed: false, manifestVersion: null, path: null, unreadable: true };
+
+  for (const profiles of [
+    [{ profile: 'Default', ...unreadable }],
+    [{ profile: null, ...unreadable }],
+    [{ profile: 'Default', ...unreadable }, { profile: 'Profile 1', installed: false, manifestVersion: null, path: null, unreadable: false }],
+  ]) {
+    assert.deepEqual(await extensionInstalledStatus({ extensionDir, lock, profiles }), {
+      id: 'extension-installed',
+      status: 'warn',
+      message: "Chrome's profile can't be read from this process (macOS privacy), so doctor cannot tell whether the extension is installed.",
+      remediation: 'Grant Full Disk Access to your terminal in System Settings > Privacy & Security,'
+        + ' or ignore this if Fast Browser shows in chrome://extensions.',
+    });
+  }
+});
+
+test('extension-installed still passes a readable install when another profile is unreadable', async () => {
+  const { extensionDir, lock } = await setupManagedExtension('1.0.0', {
+    'manifest.json': '{"version":"1.0.0"}',
+  });
+
+  const status = await extensionInstalledStatus({
+    extensionDir,
+    lock,
+    profiles: [
+      { profile: 'Default', installed: false, manifestVersion: null, path: null, unreadable: true },
+      { profile: 'Profile 1', installed: true, manifestVersion: '1.0.0', path: null, fromWebStore: true },
+    ],
+  });
+
+  assert.equal(status.status, 'pass');
 });
 
 // Chrome rewrites a store install (it adds _metadata and update_url), so its
