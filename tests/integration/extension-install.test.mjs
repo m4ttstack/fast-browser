@@ -302,6 +302,7 @@ test('detects exact IDs only in Default and Profile <N> without returning prefer
       versionSource: 'chrome',
       path: defaultManifest,
       loadedAt: null,
+      unreadable: false,
     },
     {
       profile: 'Profile 2',
@@ -311,6 +312,7 @@ test('detects exact IDs only in Default and Profile <N> without returning prefer
       versionSource: 'chrome',
       path: null,
       loadedAt: null,
+      unreadable: false,
     },
     {
       profile: 'Profile 3',
@@ -320,6 +322,7 @@ test('detects exact IDs only in Default and Profile <N> without returning prefer
       versionSource: null,
       path: null,
       loadedAt: null,
+      unreadable: false,
     },
   ]);
 });
