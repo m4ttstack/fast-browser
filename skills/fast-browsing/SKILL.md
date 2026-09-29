@@ -70,6 +70,7 @@ digraph fast_browsing {
     "Page shows 2FA, a captcha or an account chooser?" [shape=diamond];
     "browser_fill_form {fields: devlogin: names for the fields shown}" [shape=plaintext];
     "Fill answer?" [shape=diamond];
+    "Refilled once after slow-typing?" [shape=diamond];
     "browser_click {target: <submit>}: the saved login" [shape=plaintext];
     "browser_find {text: <what only a signed-in page shows>}: after the saved login" [shape=plaintext];
     "Left the login origin and signed in?" [shape=diamond];
@@ -211,8 +212,16 @@ digraph fast_browsing {
     "browser_fill_form {fields: devlogin: names for the fields shown}" -> "Fill answer?";
     "Fill answer?" -> "browser_click {target: <submit>}: the saved login" [label="filled"];
     "Fill answer?" -> "browser_navigate {url: <the task's page that bounced to the login>}: reload once" [label="refused: limited"];
-    "Fill answer?" -> "Ask the human to log in in Chrome" [label="refused: unknown or unavailable: no-saved-login"];
+    "Fill answer?" -> "Ask the human to log in in Chrome" [label="refused: unknown: no-saved-login"];
+    "Fill answer?" -> "Ask the human to log in in Chrome" [label="refused: unavailable: no-saved-login"];
+    "Fill answer?" -> "Ask the human to log in in Chrome" [label="refused: timeout: no-saved-login"];
+    "Fill answer?" -> "Ask the human to log in in Chrome" [label="refused: no-channel: no-saved-login"];
     "Fill answer?" -> "Ask the human to log in in Chrome" [label="refused: mismatch: needs-human"];
+    "Fill answer?" -> "Ask the human to log in in Chrome" [label="refused: opaque-origin: needs-human"];
+    "Fill answer?" -> "Ask the human to log in in Chrome" [label="refused: recording: needs-human, recording must be off"];
+    "Fill answer?" -> "Refilled once after slow-typing?" [label="refused: slow-typing"];
+    "Refilled once after slow-typing?" -> "browser_fill_form {fields: devlogin: names for the fields shown}" [label="no: fill again, never slowly"];
+    "Refilled once after slow-typing?" -> "Ask the human to log in in Chrome" [label="yes: needs-human"];
     "browser_click {target: <submit>}: the saved login" -> "browser_find {text: <what only a signed-in page shows>}: after the saved login";
     "browser_find {text: <what only a signed-in page shows>}: after the saved login" -> "Left the login origin and signed in?";
     "Left the login origin and signed in?" -> "Known origin, page not yet scouted?" [label="yes"];
@@ -525,7 +534,15 @@ identifier-first page shows only the email field; fill it and submit. The
 password screen that follows is the first answer of
 `What does the page show instead of the signed-in marker?`.
 
-- `filled`: submit, then run the signed-in check.
+A refusal is an error that reads `Saved login <name> refused: <reason>`,
+sometimes with `until <time>`, and ends `Nothing was typed.` Route on the
+reason word.
+
+- `filled`: submit, then run the signed-in check. Until the page leaves the
+  filled document, the runtime refuses `browser_run_code_unsafe`,
+  `browser_evaluate`, `browser_take_screenshot` and the network tools, so the
+  submit and the signed-in check are discrete tool calls (`browser_click`,
+  then `browser_find`), never a batched script.
 - `refused: limited`: another run on this machine tried this login in the last
   few minutes and its session may already cover you. Reload once by
   navigating to the task's page that bounced to the login (the app URL you
@@ -533,8 +550,20 @@ password screen that follows is the first answer of
   again. Then run the signed-in check; never fill again.
 - `refused: unknown` or `unavailable`: rt has no login for this name, or is not
   running. That is `no-saved-login`.
+- `refused: timeout` or `no-channel`: rt did not answer in time, or this
+  runtime has no channel to rt. That is `no-saved-login`.
 - `refused: mismatch`: the field is not on the saved origin (a frame, a
   lookalike). That is `needs-human`.
+- `refused: opaque-origin`: the field sits in a sandboxed or blank frame, so
+  its origin cannot be checked. That is `needs-human`.
+- `refused: recording`: a video or a recording is on (a configured video, or
+  a capture in progress), and a saved login never fills while one runs. That
+  is `needs-human`; tell the human the recording must be off for a saved
+  login.
+- `refused: slow-typing`: the fill used `slowly`, which a saved login refuses.
+  Fill the same names once more with `browser_fill_form` or a plain
+  `browser_type`, never `slowly`. A second `slow-typing` refusal is
+  `needs-human`.
 
 ### What does the page show instead of the signed-in marker?
 
