@@ -139,6 +139,8 @@ Setup also installs a `fast-browser` command into `~/.local/bin`, so the bare
 `fast-browser <command>` invocations used throughout this README work without
 npx. If your shell cannot find it, add
 `export PATH="$HOME/.local/bin:$PATH"` to your shell profile.
+When mattstack.app has already linked its bundled copy there, setup leaves that
+link alone and `doctor` reports the launcher as managed by mattstack.app.
 
 ### Install the Chrome extension
 

@@ -3603,6 +3603,7 @@ test('CLI main reports a preserved foreign launcher with the adoption remedy', a
   for (const [action, expected] of [
     ['current', null],
     ['installed', null],
+    ['external', null],
     [
       'preserved',
       'Note: an existing fast-browser command was left untouched;'
