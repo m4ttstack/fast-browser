@@ -535,6 +535,12 @@ export async function runCodexHost({
     spawnImpl,
   });
   try {
+    if (parseEventLines(processResult.stdout).some(({ event }) => (
+      ['item.started', 'item.updated', 'item.completed'].includes(event.type)
+      && event.item?.type === 'collab_tool_call'
+    ))) {
+      throw new Error('Codex delegation is forbidden in the direct host acceptance test');
+    }
     return parseCodexEvents(processResult.stdout, {
       elapsedMs: processResult.elapsedMs,
     });

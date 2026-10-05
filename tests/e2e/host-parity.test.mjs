@@ -880,6 +880,43 @@ test('host process waits for final stdout after exit until streams close', async
   assert.equal((await pending).stdout, 'final JSONL line\n');
 });
 
+async function codexHostWithEvents(events) {
+  return runCodexHost({
+    origin: 'http://127.0.0.1:43111',
+    cwd,
+    spawnImpl: () => {
+      const child = new EventEmitter();
+      child.stdout = new PassThrough();
+      child.stderr = new PassThrough();
+      child.kill = () => true;
+      queueMicrotask(() => {
+        child.stdout.write(events.map((event) => JSON.stringify(event)).join('\n'));
+        child.emit('close', 0, null);
+      });
+      return child;
+    },
+  });
+}
+
+test('runCodexHost rejects collaboration events before accepting a successful result', async () => {
+  const events = CODEX_SUCCESS.split('\n').map((line) => JSON.parse(line));
+  const collaboration = events.find((event) => event.item?.type === 'collab_tool_call');
+  for (const type of ['item.started', 'item.updated', 'item.completed']) {
+    collaboration.type = type;
+    await assert.rejects(codexHostWithEvents(events), /Codex delegation is forbidden/);
+  }
+});
+
+test('runCodexHost preserves successful direct calls and unrelated event types', async () => {
+  const events = CODEX_SUCCESS.split('\n').map((line) => JSON.parse(line))
+    .filter((event) => event.item?.type !== 'collab_tool_call');
+  events.push({ type: 'item.completed', item: { type: 'new_benign_item' } });
+  const result = await codexHostWithEvents(events);
+  assert.equal(result.ok, true);
+  assert.equal(result.orderId, 'CODEX-TEAM-5');
+  assert.equal(result.browserCalls, 3);
+});
+
 test('runClaudeHost writes host evidence to the OS tmpdir on a parse failure', async () => {
   const child = new EventEmitter();
   child.stdout = new PassThrough();
