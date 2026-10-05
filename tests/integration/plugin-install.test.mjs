@@ -152,6 +152,11 @@ test('both host adapters resolve the local catalog from isolated homes', {
     pluginVersion,
   ))).isDirectory());
 
+  // A normal standalone rerun must keep the registered catalog without
+  // requiring the user to repeat --source, and make no new installation.
+  assert.equal((await installClaude({ run: isolatedRun })).changed, false);
+  assert.equal((await installCodex({ run: isolatedRun })).changed, false);
+
   assert.equal((await uninstallClaude({ run: isolatedRun })).changed, true);
   assert.equal((await uninstallCodex({ run: isolatedRun })).changed, true);
 
@@ -159,7 +164,7 @@ test('both host adapters resolve the local catalog from isolated homes', {
     await Promise.all([
       isolatedRun('claude', ['plugin', 'list', '--available', '--json']).then(parseJson),
       isolatedRun('codex', ['plugin', 'list', '--available', '--json']).then(parseJson),
-      isolatedRun('claude', ['plugin', 'marketplace', 'list']),
+      isolatedRun('claude', ['plugin', 'marketplace', 'list', '--json']).then(parseJson),
       isolatedRun('codex', ['plugin', 'marketplace', 'list', '--json']).then(parseJson),
     ]);
 
@@ -177,10 +182,7 @@ test('both host adapters resolve the local catalog from isolated homes', {
   assert.equal(claudeResolvedPlugin, pluginDirectory);
   assert.equal(codexResolvedPlugin, pluginDirectory);
   assert.equal(claudeResolvedPlugin, codexResolvedPlugin);
-  assert.match(
-    claudeMarketplaces.stdout,
-    new RegExp(`Source: Directory \\(${catalogRoot.replaceAll(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\)`),
-  );
+  assert.equal(claudeMarketplaces.find(({ name }) => name === 'mattstack').path, catalogRoot);
   assert.deepEqual(
     codexMarketplaces.marketplaces.find(({ name }) => name === 'mattstack')
       .marketplaceSource,

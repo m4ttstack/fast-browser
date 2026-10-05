@@ -70,6 +70,22 @@ const claudeGitMarketplace = JSON.stringify([
 
 const codexEmptyPlugins = JSON.stringify({ installed: [], available: [] });
 const codexNoMarketplaces = JSON.stringify({ marketplaces: [] });
+
+test('standalone installs use a host-compatible default catalog when source is omitted', async () => {
+  const claude = scriptedRunner([
+    { stdout: claudeNoPlugins }, { stdout: claudeNoMarketplaces },
+    { stdout: 'added' }, { stdout: 'installed' },
+  ]);
+  const codex = scriptedRunner([
+    { stdout: codexEmptyPlugins }, { stdout: codexNoMarketplaces },
+    { stdout: '{"marketplaceName":"mattstack","alreadyAdded":false}' },
+    { stdout: '{"pluginId":"fast-browser@mattstack"}' },
+  ]);
+  await installClaude({ run: claude.run });
+  await installCodex({ run: codex.run });
+  assert.deepEqual(claude.calls[2], ['claude', ['plugin', 'marketplace', 'add', 'm4ttstack/mattstack-marketplace', '--scope', 'user']]);
+  assert.deepEqual(codex.calls[2], ['codex', ['plugin', 'marketplace', 'add', 'm4ttstack/fast-browser', '--json']]);
+});
 const codexMarketplace = JSON.stringify({
   marketplaces: [{
     name: 'mattstack',
@@ -104,6 +120,15 @@ function codexPlugins(version = pluginVersion, marketplaceSource = source) {
     available: [],
   });
 }
+
+test('omitted source retains each host existing marketplace without replacing it', async () => {
+  const claude = scriptedRunner([{ stdout: claudeInstalledCurrent }, { stdout: claudeMarketplace }]);
+  const codex = scriptedRunner([{ stdout: codexPlugins() }, { stdout: codexMarketplace }]);
+  assert.equal((await installClaude({ run: claude.run })).changed, false);
+  assert.equal((await installCodex({ run: codex.run })).changed, false);
+  assert.equal(claude.calls.length, 2);
+  assert.equal(codex.calls.length, 2);
+});
 
 test('Claude preflights and uses the exact fresh-install mutation commands', async () => {
   const { calls, run } = scriptedRunner([

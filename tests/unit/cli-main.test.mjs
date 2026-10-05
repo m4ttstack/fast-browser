@@ -4,6 +4,23 @@ import test from 'node:test';
 import { main } from '../../lib/cli/main.mjs';
 import { ConfigError } from '../../lib/core/config.mjs';
 
+test('doctor shows unselected checks as skipped without claiming they passed', async () => {
+  const writes = [];
+  const exitCode = await main({ command: 'doctor' }, {
+    write: (text) => writes.push(text),
+    commands: {
+      doctor: async () => ({
+        ok: true,
+        checks: [{ id: 'codex-plugin', status: 'skip', message: 'Codex is not selected.', remediation: null }],
+      }),
+    },
+  });
+  assert.equal(exitCode, 0);
+  assert.match(writes.join(''), /SKIP codex-plugin/);
+  assert.match(writes.join(''), /ran no checks/);
+  assert.doesNotMatch(writes.join(''), /doctor passed/);
+});
+
 // safeFailure's allowlist decides which errors get to say anything about
 // themselves on the way out of the CLI; everything off it collapses to the
 // generic diagnostics-free message. These pin both halves of that contract

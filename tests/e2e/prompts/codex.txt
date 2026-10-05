@@ -1,6 +1,7 @@
 Use only the installed fast-browser@mattstack plugin under the existing full
 profile policy for this task. Do not use browser-use:browser, any browser-use
 plugin, computer-use tools, or any other browser automation tool.
+The test audits your raw MCP events: drive the tools yourself without delegating.
 
 Open the exact local origin {{ORIGIN}}. Complete an order for customer CODEX,
 plan Team, and 5 seats. You MUST work in this shape: call browser_navigate at
@@ -8,6 +9,12 @@ most once, then call browser_snapshot at most once to scout the page, then
 complete the ENTIRE remaining flow (filling every field, clicking, and
 submitting) in ONE browser_run_code_unsafe call. Do not click, type, or
 snapshot step-by-step. Never exceed 8 total Fast Browser calls.
+The fixture's flow is: "Start order", fill "Customer name", "Continue",
+select the "Team" option in "Plan", fill "Seats", "Review order", then
+"Place order". The review displays the plan value as lowercase "team".
+Use [name="customer"], [name="plan"], and [name="seats"] for the fields;
+the plan's option value is "team". Its wrapping label includes all option text.
+Read the completed order ID from [data-testid="order-id"].
 
 Your final response must contain ONLY one JSON object, with no code fences and
 no prose, of the exact form
