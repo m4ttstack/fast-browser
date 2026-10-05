@@ -130,6 +130,11 @@ Use `--host claude`, `--host codex`, or `--host both`. Interactive setup with
 no `--host` uses the hosts it detects; non-interactive setup always requires an
 explicit `--host` so a second host is never changed silently.
 
+Setup reuses each host's configured `mattstack` marketplace when `--source` is
+omitted. For a fresh install, Claude Code uses `m4ttstack/mattstack-marketplace`
+and Codex uses `m4ttstack/fast-browser`. Pass `--source` to choose a different
+catalog explicitly.
+
 Setup defaults to `--profile safe`. It verifies and installs the pinned runtime
 and extension, installs the host plugin adapters, writes owned routing state,
 and prints the unpacked extension directory. It does not add the extension to
@@ -223,6 +228,8 @@ checks with status, message, and remediation. A failed doctor exits nonzero;
 run the printed remediation and repeat the check. A check that knows no
 specific fix reports a null remediation and names the underlying cause in its
 message instead.
+Checks for hosts not selected in your configuration report `skip`, rather than
+`pass`; they do not verify that host's installation.
 
 A caller that needs only some checks can name them, and doctor runs those
 (plus any check they depend on) in the usual order. The full run includes a live Codex agent smoke
@@ -231,6 +238,10 @@ test that takes several seconds; a narrow selection skips it:
 ```bash
 $ fast-browser doctor --checks runtime-checksum,extension-loaded,pairing --json
 ```
+
+The Codex smoke keeps its session log so custom-agent delegation can complete
+and doctor can verify the child's response. A parent success marker alone
+does not count as a working browser driver.
 
 From here, Fast Browser's tools show up directly inside Claude Code and Codex.
 There is no separate client to run: point either agent at a task that needs a
@@ -367,8 +378,11 @@ npm install
 npm test
 ```
 
-`npm test` runs the unit, integration, registry, and registry end-to-end
-suites. Narrower suites are available too, for example `npm run test:unit` or
+`npm test` runs the unit, integration, registry, registry end-to-end, and offline
+host acceptance suites. Real browser and model runs are opt-in. With Codex and
+Fast Browser configured locally, run `npm run test:codex-live` to verify a
+complete checkout through Codex and Chrome against a local fixture.
+Narrower suites are available too, for example `npm run test:unit` or
 `npm run test:e2e`; see `package.json` for the full list. See `CLAUDE.md` for
 repo conventions and the runtime release process.
 

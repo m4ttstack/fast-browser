@@ -252,14 +252,64 @@ test('doctor keeps the full check schema healthy for an unselected host', async 
   assert.deepEqual(report.checks.map(({ id }) => id), [...DOCTOR_CHECK_IDS]);
   assert.equal(report.ok, true);
   for (const id of ['codex-cli', 'codex-plugin', 'codex-routing', 'browser-driver']) {
-    assert.equal(report.checks.find((check) => check.id === id).status, 'pass');
+    assert.equal(report.checks.find((check) => check.id === id).status, 'skip');
   }
 });
 
-test('Codex browser-driver smoke uses one bounded ephemeral read-only execution', async () => {
+function successfulDriverSession() {
+  return [
+    { type: 'event_msg', payload: { type: 'item_completed', item: {
+      type: 'SubAgentActivity', kind: 'started', agent_path: '/root/browser_driver', agent_thread_id: 'child',
+    } } },
+    { type: 'event_msg', payload: { type: 'item_completed', item: {
+      type: 'SubAgentActivity', kind: 'completed', agent_path: '/root/browser_driver', agent_thread_id: 'child',
+    } } },
+    { type: 'response_item', payload: { type: 'agent_message', author: '/root/browser_driver', content: [
+      { type: 'input_text', text: 'Message Type: FINAL_ANSWER\nTask name: /root\nSender: /root/browser_driver\nPayload:\nFAST_BROWSER_DRIVER_OK' },
+    ] } },
+  ];
+}
+
+test('Codex smoke rejects a parent marker without completed browser_driver delegation', async () => {
+  const wrongChild = successfulDriverSession();
+  wrongChild[1].payload.item.agent_thread_id = 'another-child';
+  const wrongMarker = successfulDriverSession();
+  wrongMarker[2].payload.content[0].text = 'FAST_BROWSER_DRIVER_OK';
+  for (const events of [[], successfulDriverSession().slice(0, 1), wrongChild, wrongMarker]) {
+    await assert.rejects(runCodexBrowserDriverSmoke({
+      cwd: '/repo',
+      run: async () => ({ exitCode: 0, stderr: '', stdout: JSON.stringify({
+        type: 'item.completed', item: { type: 'agent_message', text: 'FAST_BROWSER_DRIVER_OK' },
+      }) }),
+      loadSessionEvents: async () => events,
+    }), /completed browser_driver delegation/);
+  }
+});
+
+test('Codex smoke reads only its persistent rollout to verify the child response', async (t) => {
+  const codexHome = await mkdtemp(path.join(tmpdir(), 'codex-smoke-'));
+  t.after(() => rm(codexHome, { recursive: true, force: true }));
+  const directory = path.join(codexHome, 'sessions', '2026', '10', '05');
+  await mkdir(directory, { recursive: true });
+  const thread = '01a10c85-cf64-75f1-ace5-e43474864ccb';
+  await writeFile(path.join(directory, `rollout-date-${thread}.jsonl`),
+    successfulDriverSession().map((event) => JSON.stringify(event)).join('\n'));
+  await writeFile(path.join(directory, 'unrelated.jsonl'), 'not JSON');
+  const run = async () => ({ exitCode: 0, stderr: '', stdout: [
+    { type: 'thread.started', thread_id: thread },
+    { type: 'item.completed', item: { type: 'agent_message', text: 'FAST_BROWSER_DRIVER_OK' } },
+  ].map((event) => JSON.stringify(event)).join('\n') });
+  await runCodexBrowserDriverSmoke({ cwd: '/repo', codexHome, run });
+  await rm(path.join(directory, `rollout-date-${thread}.jsonl`));
+  await assert.rejects(runCodexBrowserDriverSmoke({ cwd: '/repo', codexHome, run }),
+    /completed browser_driver delegation/);
+});
+
+test('Codex browser-driver smoke uses one bounded persistent read-only execution', async () => {
   const calls = [];
   await runCodexBrowserDriverSmoke({
     cwd: '/repo',
+    loadSessionEvents: async () => successfulDriverSession(),
     run: async (command, args, options) => {
       calls.push([command, args, options]);
       return {
@@ -277,14 +327,13 @@ test('Codex browser-driver smoke uses one bounded ephemeral read-only execution'
     'codex',
     [
       'exec',
-      '--ephemeral',
       '--sandbox',
       'read-only',
       '--json',
       '--skip-git-repo-check',
       '-C',
       '/repo',
-      'Delegate to browser_driver. Return exactly FAST_BROWSER_DRIVER_OK without using browser tools.',
+      'Delegate to the browser_driver agent. Have it return FAST_BROWSER_DRIVER_OK without using browser tools. Return exactly that marker only after the agent completes successfully. If spawning fails, return FAST_BROWSER_DRIVER_FAILED instead.',
     ],
     { timeoutMs: 60_000 },
   ]]);
@@ -294,6 +343,7 @@ test('Codex browser-driver smoke omits --ask-for-approval, which exec rejects as
   const calls = [];
   await runCodexBrowserDriverSmoke({
     cwd: '/repo',
+    loadSessionEvents: async () => successfulDriverSession(),
     run: async (command, args, options) => {
       calls.push([command, args, options]);
       return {
@@ -316,6 +366,7 @@ test('Codex browser-driver smoke allows 60 seconds for a real agent run', async 
   const calls = [];
   await runCodexBrowserDriverSmoke({
     cwd: '/repo',
+    loadSessionEvents: async () => successfulDriverSession(),
     run: async (command, args, options) => {
       calls.push([command, args, options]);
       return {

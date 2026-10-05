@@ -21,7 +21,7 @@ import {
 } from './helpers/host-runner.mjs';
 
 const pluginRoot = fileURLToPath(new URL('../../', import.meta.url));
-const cwd = path.resolve(pluginRoot, '../..');
+const cwd = pluginRoot;
 const live = process.env.FAST_BROWSER_LIVE_E2E === '1';
 
 function claudeToolUse(name, input = {}) {
@@ -813,6 +813,7 @@ test('host command builders emit the verified non-bypass flags', () => {
         '--json',
         '--ephemeral',
         '--sandbox', 'read-only',
+        '--skip-git-repo-check',
         '--cd', '/tmp/workspace',
         'synthetic prompt',
       ],

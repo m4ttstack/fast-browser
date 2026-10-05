@@ -381,6 +381,7 @@ export function buildCodexCommand({ cwd, prompt }) {
       '--json',
       '--ephemeral',
       '--sandbox', 'read-only',
+      '--skip-git-repo-check',
       '--cd', cwd,
       prompt,
     ],
