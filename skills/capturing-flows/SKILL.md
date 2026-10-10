@@ -383,7 +383,9 @@ Quote the GIF's size and the `--fps` and `--width` each conversion used.
 
 In a main session, ask with the host's question tool (or a plain message) and
 end the turn. As a delegated subagent, which has no user, put the question in
-the distilled result and return: that is the hand back edge.
+the distilled result and return, leaving the tab where it is: that is the hand
+back edge. Your caller relays the question and may resume you with the answer;
+when it does, carry on from the step you stopped at.
 
 ## When something fails
 

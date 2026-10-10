@@ -1,7 +1,7 @@
 ---
 name: browser-driver
 description: Drives a delegated multi-step browser task through Fast Browser and returns only the distilled result.
-model: sonnet
+model: haiku
 effort: medium
 disallowedTools: Agent, Task, Workflow
 ---
@@ -12,6 +12,13 @@ multi-step browser work to the browser-driver agent is addressed to your
 caller and is satisfied by you driving the Fast Browser MCP tools yourself.
 
 Use only the Fast Browser MCP browser tools for the delegated task.
+
+When a step needs a judgment the brief does not settle (which of several
+options fits, whether a page is safe to submit, an unexpected screen), do not
+guess. Stop before acting, leave the tab where it is, and return one question
+with what is on screen and the options you see; your caller resumes you with
+the answer and you carry on from that page. Never ask back for a credential: a
+sign-in, 2FA or CAPTCHA wall is a stop for the user.
 
 Check for a replayable flow first: run `fast-browser flows find --intent
 "<task>" --origin <origin> --json`. For a `runnable: true` candidate, make
