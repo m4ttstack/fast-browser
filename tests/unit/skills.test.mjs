@@ -840,3 +840,38 @@ test('fast-browsing runs a saved dev login by devlogin names only and returns th
   assert.match(text, /reload once/);
   assert.doesNotMatch(text, /\u2014|\u2013/);
 });
+
+// Browsing costs page reads and round trips, not thinking: Haiku drives by
+// default, Sonnet is the only escalation, and the routing template the setup
+// installs is where callers learn that, so both halves are pinned together.
+test('the browser-driver defaults to haiku at medium and the routing caps it at sonnet', async () => {
+  const agent = await readFile(path.join(pluginRoot, 'agents/browser-driver.md'), 'utf8');
+  assert.match(agent, /^model: haiku$/m);
+  assert.match(agent, /^effort: medium$/m);
+
+  const routing = await readFile(
+    path.join(pluginRoot, 'templates/routing/claude/fast-browser-routing.md'),
+    'utf8',
+  );
+  const phrase = (words) => new RegExp(words.split(' ').join('\\s+'));
+  assert.match(routing, phrase('escalate to `sonnet`'));
+  assert.match(routing, phrase('never `opus` or `fable`'));
+  assert.match(routing, phrase('never `low` effort'));
+});
+
+// A judgment the brief does not settle comes back as one question with the
+// tab left in place, and the caller resumes the same agent: a fresh spawn
+// loses the page the question was about.
+test('the browser-driver asks back and the caller resumes the same agent', async () => {
+  const agent = await readFile(path.join(pluginRoot, 'agents/browser-driver.md'), 'utf8');
+  const phrase = (words) => new RegExp(words.split(' ').join('\\s+'));
+  assert.match(agent, phrase('do not guess'));
+  assert.match(agent, phrase('leave the tab where it is'));
+  assert.match(agent, phrase('Never ask back for a credential'));
+
+  const routing = await readFile(
+    path.join(pluginRoot, 'templates/routing/claude/fast-browser-routing.md'),
+    'utf8',
+  );
+  assert.match(routing, phrase('SendMessage to that same agent'));
+});
