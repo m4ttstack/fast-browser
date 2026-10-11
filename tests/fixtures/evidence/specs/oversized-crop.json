@@ -1,0 +1,4 @@
+{ "state": "AFTER", "title": "The account has an archive tab", "layout": "single", "out": "fx-oversized-crop.png",
+  "targets": { "tab": "[data-testid=tab]" }, "frame": "[data-testid=panel]",
+  "expect": { "cropped": true, "noWarnings": true },
+  "panels": [{ "marks": [ { "lift": "tab", "title": "Archive", "note": "The frame was a whole panel for one small tab" } ] }] }

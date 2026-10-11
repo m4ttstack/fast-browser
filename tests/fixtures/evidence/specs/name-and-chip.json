@@ -1,0 +1,5 @@
+{ "state": "AFTER", "title": "The service shows its monitoring", "layout": "single", "out": "fx-name-and-chip.png",
+  "targets": { "name": "[data-testid=name]", "chip": "[data-testid=chip]" },
+  "expect": { "liftsPerMark": [1], "merged": true },
+  "panels": [{ "marks": [
+    { "lift": ["name", "chip"], "title": "Service and monitoring", "note": "The chip sits just under the name" } ] }] }

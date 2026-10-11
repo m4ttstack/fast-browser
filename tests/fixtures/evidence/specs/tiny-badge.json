@@ -1,0 +1,3 @@
+{ "state": "AFTER", "title": "The project carries the pinned badge", "layout": "single", "out": "fx-tiny-badge.png",
+  "targets": { "title": "[data-testid=title]", "badge": "[data-testid=badge]" },
+  "panels": [{ "marks": [ { "lift": ["title", "badge"], "title": "Pinned", "note": "Badge beside the title" } ] }] }

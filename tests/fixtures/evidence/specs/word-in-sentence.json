@@ -1,0 +1,4 @@
+{ "state": "AFTER", "title": "The service is active", "layout": "single", "out": "fx-word-in-sentence.png",
+  "targets": { "word": "[data-testid=word]" }, "frame": "[data-testid=panel]",
+  "expect": { "noWarnings": true, "maxGrown": 2 },
+  "panels": [{ "marks": [ { "lift": "word", "title": "Active", "note": "One word inside a running sentence" } ] }] }

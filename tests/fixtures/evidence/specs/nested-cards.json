@@ -1,0 +1,5 @@
+{ "state": "AFTER", "title": "Pat owns and reviews the project", "layout": "single", "out": "fx-nested-cards.png",
+  "targets": { "owner": "[data-testid=owner]", "reviewer": "[data-testid=reviewer]", "contact": "[data-testid=contact]" },
+  "panels": [{ "marks": [
+    { "lift": ["owner", "reviewer"], "title": "On the project", "note": "Owner and reviewer", "tag": "NEW" },
+    { "redact": "contact" } ] }] }

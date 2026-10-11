@@ -1,0 +1,6 @@
+{ "state": "AFTER", "title": "The project carries two status chips", "layout": "single", "out": "fx-tiny-chips.png",
+  "targets": { "chip-a": "[data-testid=chip-a]", "chip-b": "[data-testid=chip-b]" },
+  "expect": { "cropped": true, "laterLiftsCapped": true },
+  "panels": [{ "marks": [
+    { "lift": "chip-a", "title": "Pinned", "note": "First chip" },
+    { "lift": "chip-b", "title": "Healthy", "note": "Second chip, ten pixels on" } ] }] }

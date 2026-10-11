@@ -1,0 +1,3 @@
+{ "state": "AFTER", "title": "Status reads Ready", "layout": "single", "out": "fx-dark-surface.png",
+  "targets": { "value": "[data-testid=value]" },
+  "panels": [{ "marks": [ { "lift": "value", "title": "Ready", "tag": "OK" } ] }] }

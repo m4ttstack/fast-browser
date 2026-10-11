@@ -210,3 +210,11 @@ check (`ENOENT` or "outside allowed roots").
   `flow.origin`
 - Script: `~/.fast-browser/macros/flow-runner.js`
 - Status: built-in
+
+## capture-evidence
+
+- Description: Capture and measure named elements for `fast-browser compose`. Scrolls the frame into view, screenshots the viewport, then measures each target in the same page state. `frame: "auto"` crops to the nearest card that holds every target (falling back to the targets' union, reported as `frameSnap: "union"`); a selector crops to that element. A selector matching zero or several elements is listed in `missed` and never guessed. Targets too far apart for one frame fail with `frameSnap: "too-large"` and capture nothing. Reports whether the frame sits on a dark surface. Seal the return with `fast-browser compose --seal <file>` before composing. Uses no element handles and no CDP sessions, so it is safe over the extension relay. Runs without Node host globals, so pass your own absolute home directory as `home`.
+- Params: `{ targets: Record<string, string>, frame?: "auto" | string (default "auto"), out: string, home: string (your absolute home directory path) }`
+- Target: Current page (site-agnostic)
+- Script: `~/.fast-browser/macros/capture-evidence.js`
+- Status: built-in

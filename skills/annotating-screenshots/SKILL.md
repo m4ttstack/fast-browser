@@ -5,6 +5,12 @@ description: Use when a browser screenshot needs markup before it is shown or sh
 
 # Annotating Screenshots
 
+A live page that is becoming evidence for an MR or ticket (proving a value
+changed, showing a fixed bug, marking what a reviewer should look at) goes
+through `composing-evidence` instead: it crops to the card, lifts the
+elements you name and lays out the labels for you. Use this skill when the
+whole screenshot is the deliverable and it needs markup on it.
+
 One `capture-annotated.js` call produces the PNG and the boxes together. Every
 number in the config comes from that one call. Nothing is estimated by reading
 the image, and nothing is typed by hand.

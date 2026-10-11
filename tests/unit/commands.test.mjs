@@ -953,6 +953,61 @@ test('doctor fails with the brew remediation when rsvg-convert is absent', async
   assert.match(check.remediation, /brew install librsvg/);
 });
 
+test('doctor compose-renderer passes when the renderer is ready', async () => {
+  const report = await doctor({ profile: 'safe' }, {
+    checks: passingChecksExcept('compose-renderer'),
+    composeRendererStatus: async () => 'ready',
+    composeRendererLaunch: async () => ({ ok: true, version: 'Chrome 1' }),
+    paths: unusedPaths,
+  });
+  assert.equal(report.checks.find(({ id }) => id === 'compose-renderer').status, 'pass');
+});
+
+test('doctor compose-renderer reports the version when the renderer starts', async () => {
+  const report = await doctor({ profile: 'safe' }, {
+    checks: passingChecksExcept('compose-renderer'),
+    composeRendererStatus: async () => 'ready',
+    composeRendererLaunch: async () => ({ ok: true, version: 'Chrome 1.2.3' }),
+    paths: unusedPaths,
+  });
+  const check = report.checks.find(({ id }) => id === 'compose-renderer');
+  assert.equal(check.status, 'pass');
+  assert.match(check.message, /starts \(Chrome 1\.2\.3\)/);
+});
+
+test('doctor compose-renderer fails with the reinstall remedy when the renderer does not start', async () => {
+  const report = await doctor({ profile: 'safe' }, {
+    checks: passingChecksExcept('compose-renderer'),
+    composeRendererStatus: async () => 'ready',
+    composeRendererLaunch: async () => ({ ok: false, reason: 'exit' }),
+    paths: unusedPaths,
+  });
+  const check = report.checks.find(({ id }) => id === 'compose-renderer');
+  assert.equal(check.status, 'fail');
+  assert.match(check.message, /did not start/);
+  assert.match(check.remediation, /fast-browser setup/);
+});
+
+test('doctor compose-renderer fails with the setup remedy when the renderer is missing', async () => {
+  const report = await doctor({ profile: 'safe' }, {
+    checks: passingChecksExcept('compose-renderer'),
+    composeRendererStatus: async () => 'missing',
+    paths: unusedPaths,
+  });
+  const check = report.checks.find(({ id }) => id === 'compose-renderer');
+  assert.equal(check.status, 'fail');
+  assert.match(check.remediation, /fast-browser setup/);
+});
+
+test('doctor compose-renderer passes quietly when the lock pins no renderer', async () => {
+  const report = await doctor({ profile: 'safe' }, {
+    checks: passingChecksExcept('compose-renderer'),
+    composeRendererStatus: async () => 'unpinned',
+    paths: unusedPaths,
+  });
+  assert.equal(report.checks.find(({ id }) => id === 'compose-renderer').status, 'pass');
+});
+
 test('doctor passes when ffmpeg is present and names its version', async () => {
   const report = await doctor(
     { profile: 'safe' },
@@ -3917,6 +3972,254 @@ test('CLI production dispatch composes setup entirely from injected adapters', a
   assert.equal(exitCode, 0);
   assert.deepEqual(events, ['platform', 'dirs', 'save']);
   assert.equal(JSON.parse(writes.join('')).command, 'setup');
+});
+
+test('setup installs the pinned compose renderer after the runtime', async () => {
+  const writes = [];
+  const events = [];
+  const exitCode = await main(
+    {
+      command: 'setup', hosts: ['claude'], profile: 'safe', source: '/repo/mattstack', runtimeLock: null, json: true,
+    },
+    {
+      write: (text) => writes.push(text),
+      checkPlatform: async () => {},
+      detectHosts: async () => ['claude'],
+      ensureDataDirs: async () => {},
+      loadRuntimeLock: async () => ({
+        productVersion: '0.1.0-alpha.1',
+        sourceCommit: 'abc',
+        runtime: { sha256: 'a'.repeat(64) },
+        extension: { id: 'extension-id', version: '1.0.0' },
+        renderer: { revision: '1243', platforms: {} },
+      }),
+      installRuntime: async () => { events.push('runtime'); return { version: '0.1.0-alpha.1' }; },
+      installRenderer: async () => { events.push('renderer'); return { installed: true }; },
+      installExtension: async () => ({ unpacked: '/tmp/extension' }),
+      installClaude: async () => ({ host: 'claude', changed: false, changes: [] }),
+      installBuiltinMacros: async () => {},
+      installLauncher: async () => ({ action: 'installed', path: '/home/test/.local/bin/fast-browser' }),
+      prepareRoutingTransition: async () => ({
+        nextState: { profile: 'safe', files: [], blocks: [] },
+        apply: async () => ({ rollback: async () => {} }),
+      }),
+      saveConfig: async () => {},
+      doctor: async () => ({ schemaVersion: 1, ok: true, profile: 'safe', checks: [] }),
+      loadConfig: async () => null,
+      isSetupCurrent: async () => false,
+      paths: {},
+      interactive: false,
+    },
+  );
+  assert.equal(exitCode, 0);
+  assert.deepEqual(events.filter((e) => e === 'runtime' || e === 'renderer'), ['runtime', 'renderer']);
+});
+
+test('setup skips the renderer when the lock pins none', async () => {
+  const writes = [];
+  const events = [];
+  const exitCode = await main(
+    {
+      command: 'setup', hosts: ['claude'], profile: 'safe', source: '/repo/mattstack', runtimeLock: null, json: true,
+    },
+    {
+      write: (text) => writes.push(text),
+      checkPlatform: async () => {},
+      detectHosts: async () => ['claude'],
+      ensureDataDirs: async () => {},
+      loadRuntimeLock: async () => ({
+        productVersion: '0.1.0-alpha.1',
+        sourceCommit: 'abc',
+        runtime: { sha256: 'a'.repeat(64) },
+        extension: { id: 'extension-id', version: '1.0.0' },
+      }),
+      installRuntime: async () => { events.push('runtime'); return { version: '0.1.0-alpha.1' }; },
+      installRenderer: async () => { events.push('renderer'); },
+      installExtension: async () => ({ unpacked: '/tmp/extension' }),
+      installClaude: async () => ({ host: 'claude', changed: false, changes: [] }),
+      installBuiltinMacros: async () => {},
+      installLauncher: async () => ({ action: 'installed', path: '/home/test/.local/bin/fast-browser' }),
+      prepareRoutingTransition: async () => ({
+        nextState: { profile: 'safe', files: [], blocks: [] },
+        apply: async () => ({ rollback: async () => {} }),
+      }),
+      saveConfig: async () => {},
+      doctor: async () => ({ schemaVersion: 1, ok: true, profile: 'safe', checks: [] }),
+      loadConfig: async () => null,
+      isSetupCurrent: async () => false,
+      paths: {},
+      interactive: false,
+    },
+  );
+  assert.equal(exitCode, 0);
+  assert.equal(events.includes('renderer'), false);
+});
+
+const rendererLock = {
+  schemaVersion: 1,
+  productVersion: '0.1.0-alpha.5',
+  sourceCommit: 'commit-new',
+  protocolVersion: 2,
+  runtime: { file: 'rt.tar.gz', sha256: 'a'.repeat(64), node: '>=20' },
+  extension: { file: 'ext.zip', sha256: 'b'.repeat(64), id: 'a'.repeat(32), version: '0.2.2' },
+  renderer: { revision: '1243', platforms: {} },
+};
+
+function rendererSetupDeps(overrides) {
+  const events = [];
+  return {
+    events,
+    deps: {
+      checkPlatform: async () => {},
+      detectHosts: async () => ['claude'],
+      ensureDataDirs: async () => {},
+      loadRuntimeLock: async () => rendererLock,
+      installRuntime: async () => { events.push('runtime'); return { version: rendererLock.productVersion }; },
+      installExtension: async () => ({ unpacked: '/tmp/extension' }),
+      installClaude: async () => ({ host: 'claude', changed: false, changes: [] }),
+      installBuiltinMacros: async () => {},
+      installLauncher: async () => ({ action: 'installed', path: '/home/test/.local/bin/fast-browser' }),
+      prepareRoutingTransition: async () => ({
+        nextState: { profile: 'safe', files: [], blocks: [] },
+        apply: async () => ({ rollback: async () => {} }),
+      }),
+      saveConfig: async () => { events.push('save'); },
+      doctor: async () => ({ schemaVersion: 1, ok: true, profile: 'safe', checks: [] }),
+      loadConfig: async () => null,
+      isSetupCurrent: async () => false,
+      paths: {},
+      interactive: false,
+      ...overrides,
+    },
+  };
+}
+
+class FakeRendererInstallError extends Error {
+  constructor(message) { super(message); this.name = 'RendererInstallError'; }
+}
+
+test('setup finishes and warns when the renderer install fails on a first install', async () => {
+  const writes = [];
+  const { events, deps } = rendererSetupDeps({
+    installRenderer: async () => { events.push('renderer'); throw new FakeRendererInstallError('the download failed its checksum'); },
+    write: (text) => writes.push(text),
+  });
+  const exitCode = await main(
+    { command: 'setup', hosts: ['claude'], profile: 'safe', source: '/repo/mattstack', json: true },
+    deps,
+  );
+  assert.equal(exitCode, 0);
+  assert.equal(events.includes('save'), true);
+  const { renderer } = JSON.parse(writes.join(''));
+  assert.equal(renderer.installed, false);
+  assert.match(renderer.warning, /fast-browser setup/);
+  assert.match(renderer.warning, /failed its checksum/);
+});
+
+test('setup withholds an unknown renderer failure message from its warning', async () => {
+  const writes = [];
+  const { deps } = rendererSetupDeps({
+    installRenderer: async () => { throw new Error('/private/path leaked'); },
+    write: (text) => writes.push(text),
+  });
+  await main({ command: 'setup', hosts: ['claude'], profile: 'safe', source: '/repo/mattstack', json: true }, deps);
+  assert.doesNotMatch(JSON.parse(writes.join('')).renderer.warning, /private/);
+});
+
+test('setup prints the renderer warning for a person', async () => {
+  const writes = [];
+  const { deps } = rendererSetupDeps({
+    installRenderer: async () => { throw new FakeRendererInstallError('the download failed its checksum'); },
+    write: (text) => writes.push(text),
+  });
+  await main({ command: 'setup', hosts: ['claude'], profile: 'safe', source: '/repo/mattstack' }, deps);
+  assert.match(writes.join(''), /Warning: The compose renderer could not be installed/);
+});
+
+test('setup upgrade installs the renderer after the runtime and tolerates its failure', async () => {
+  const homeDir = await mkdtemp(path.join(tmpdir(), 'fast-browser-renderer-upgrade-'));
+  const paths = resolvePaths({ homeDir });
+  const oldLock = { ...rendererLock, productVersion: '0.1.0-alpha.1', sourceCommit: 'commit-old', extension: { ...rendererLock.extension, version: '0.2.1' } };
+  const runtimeDir = path.join(paths.runtimeDir, oldLock.productVersion);
+  await mkdir(path.join(runtimeDir, 'fast-browser-mcp'), { recursive: true });
+  await writeFile(path.join(runtimeDir, 'fast-browser-mcp', 'cli.cjs'), '// stub\n');
+  await writeFile(path.join(runtimeDir, 'installed.json'), JSON.stringify({
+    schemaVersion: 1,
+    lock: runtimeLockIdentity(oldLock),
+    contentDigest: await buildContentManifestDigest(path.join(runtimeDir, 'fast-browser-mcp')),
+  }), { mode: 0o600 });
+  const { directory: extDir } = extensionInstallLocation(paths);
+  await mkdir(path.join(extDir, 'unpacked'), { recursive: true });
+  await writeFile(path.join(extDir, 'unpacked', 'manifest.json'), '{}');
+  await writeFile(path.join(extDir, 'installed.json'), JSON.stringify({
+    schemaVersion: 1,
+    lock: runtimeLockIdentity(oldLock),
+    contentDigest: await buildContentManifestDigest(path.join(extDir, 'unpacked')),
+  }), { mode: 0o600 });
+
+  const writes = [];
+  const { events, deps } = rendererSetupDeps({
+    paths,
+    installRenderer: async () => { events.push('renderer'); throw new FakeRendererInstallError('the download failed its checksum'); },
+    write: (text) => writes.push(text),
+    loadConfig: async () => ({ ...defaultConfig(), profile: 'safe', hosts: { claude: true, codex: false } }),
+    isSetupCurrent: async () => true,
+    doctor: async () => ({
+      schemaVersion: 1,
+      ok: false,
+      checks: ['runtime-checksum', 'mcp-handshake', 'tool-contract'].map((id) => ({ id, status: 'fail', message: id, remediation: null })),
+    }),
+  });
+  const exitCode = await main(
+    { command: 'setup', hosts: ['claude'], profile: 'safe', source: '/repo/mattstack', json: true },
+    deps,
+  );
+  assert.equal(exitCode, 0);
+  assert.deepEqual(events.filter((e) => e === 'runtime' || e === 'renderer'), ['runtime', 'renderer']);
+  assert.equal(JSON.parse(writes.join('')).renderer.installed, false);
+});
+
+for (const [status, retried] of [['fail', true], ['pass', false]]) {
+  test(`a rerun on a current install ${retried ? 'retries' : 'skips'} the renderer when doctor's compose-renderer ${retried ? 'fails' : 'passes'}`, async () => {
+    const writes = [];
+    const forces = [];
+    const { events, deps } = rendererSetupDeps({
+      installRenderer: async (options) => { events.push('renderer'); forces.push(options.force); throw new FakeRendererInstallError('the download failed its checksum'); },
+      write: (text) => writes.push(text),
+      loadConfig: async () => ({ ...defaultConfig(), profile: 'safe', hosts: { claude: true, codex: false } }),
+      isSetupCurrent: async () => true,
+      doctor: async () => ({
+        schemaVersion: 1, ok: status === 'pass', profile: 'safe',
+        checks: [{ id: 'compose-renderer', status, message: 'renderer', remediation: null }],
+      }),
+    });
+    const exitCode = await main(
+      { command: 'setup', hosts: ['claude'], profile: 'safe', source: '/repo/mattstack', json: true },
+      deps,
+    );
+    assert.equal(exitCode, 0);
+    assert.equal(events.includes('runtime'), false, 'a current install never reinstalls the runtime');
+    assert.equal(events.includes('renderer'), retried);
+    if (retried) assert.deepEqual(forces, [true]);
+    const report = JSON.parse(writes.join(''));
+    if (retried) {
+      assert.equal(report.renderer.installed, false);
+      assert.match(report.renderer.warning, /run `fast-browser setup` again to retry/);
+    } else {
+      assert.equal('renderer' in report, false);
+    }
+  });
+}
+
+test('doctor compose-renderer fails when the runtime lock could not be read', async () => {
+  const report = await doctor({ profile: 'safe' }, {
+    checks: passingChecksExcept('compose-renderer'),
+    loadRuntimeLock: async () => { throw new Error('unreadable'); },
+    paths: unusedPaths,
+  });
+  const check = report.checks.find(({ id }) => id === 'compose-renderer');
+  assert.equal(check.status, 'fail');
+  assert.match(check.remediation, /fast-browser setup/);
 });
 
 test('setup carries the built-in macros it deliberately left alone into its report', async () => {

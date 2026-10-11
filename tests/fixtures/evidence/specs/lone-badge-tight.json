@@ -1,0 +1,4 @@
+{ "state": "AFTER", "title": "The project carries the pinned badge", "layout": "single", "out": "fx-lone-badge-tight.png",
+  "targets": { "badge": "[data-testid=badge]" },
+  "expect": { "cropped": true, "minLiftHeight": 28, "noWarnings": true, "padClamped": "left" },
+  "panels": [{ "marks": [ { "lift": "badge", "title": "Pinned", "note": "A 12px badge four pixels from a word" } ] }] }
