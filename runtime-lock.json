@@ -20,5 +20,20 @@
       "sha256": "b98600eb6b42a2e3d40cc4a165c02a7b64da7cfefc288e4b4214756cec8a41ca",
       "url": "https://github.com/m4ttheweric/playwright/releases/download/fast-browser-v0.1.2/fast-browser-extension-0.1.2.crx"
     }
+  },
+  "renderer": {
+    "revision": "1234",
+    "platforms": {
+      "mac-arm64": {
+        "url": "https://github.com/m4ttheweric/playwright/releases/download/fast-browser-v0.1.2/chromium-headless-shell-1234-mac-arm64.zip",
+        "file": "chromium-headless-shell-1234-mac-arm64.zip",
+        "sha256": "cb46a336dbe3d6f1339c5039c3083e4e5dd8e4379710790e34f8f4a865e2452d"
+      },
+      "mac-x64": {
+        "url": "https://github.com/m4ttheweric/playwright/releases/download/fast-browser-v0.1.2/chromium-headless-shell-1234-mac-x64.zip",
+        "file": "chromium-headless-shell-1234-mac-x64.zip",
+        "sha256": "608e2b5b1815b45e8bf59c9a381412b62df3ce36f2c182bc04e22fcf04ad53ea"
+      }
+    }
   }
 }

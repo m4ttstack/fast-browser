@@ -661,3 +661,16 @@ test('an invalid flag placed before the subcommand positional is still rejected,
     (error) => error instanceof UsageError && /--json/.test(error.message) && /init/.test(error.message),
   );
 });
+
+const pick = ({ command, spec, seal }) => ({ command, spec, seal });
+
+test('compose takes one spec path', () => {
+  assert.deepEqual(pick(parseArgs(['compose', 'spec.json'])), { command: 'compose', spec: 'spec.json', seal: null });
+});
+test('compose --seal takes one return path', () => {
+  assert.deepEqual(pick(parseArgs(['compose', '--seal', 'ret.json'])), { command: 'compose', spec: null, seal: 'ret.json' });
+});
+test('compose needs exactly one of a spec or --seal', () => {
+  assert.throws(() => parseArgs(['compose']), /compose requires a spec path or --seal/);
+  assert.throws(() => parseArgs(['compose', 'a.json', '--seal', 'b.json']), /compose takes a spec path or --seal, not both/);
+});

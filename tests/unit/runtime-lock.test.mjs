@@ -334,6 +334,23 @@ test('bundled lock pins the intended candidate identity and immutable artifact U
         sha256: 'b98600eb6b42a2e3d40cc4a165c02a7b64da7cfefc288e4b4214756cec8a41ca',
       },
     },
+    renderer: {
+      revision: '1234',
+      platforms: {
+        'mac-arm64': {
+          url: 'https://github.com/m4ttheweric/playwright/releases/download/'
+            + 'fast-browser-v0.1.2/chromium-headless-shell-1234-mac-arm64.zip',
+          file: 'chromium-headless-shell-1234-mac-arm64.zip',
+          sha256: 'cb46a336dbe3d6f1339c5039c3083e4e5dd8e4379710790e34f8f4a865e2452d',
+        },
+        'mac-x64': {
+          url: 'https://github.com/m4ttheweric/playwright/releases/download/'
+            + 'fast-browser-v0.1.2/chromium-headless-shell-1234-mac-x64.zip',
+          file: 'chromium-headless-shell-1234-mac-x64.zip',
+          sha256: '608e2b5b1815b45e8bf59c9a381412b62df3ce36f2c182bc04e22fcf04ad53ea',
+        },
+      },
+    },
   });
 });
 
@@ -859,4 +876,40 @@ test('without a secrets channel DEBUG and the whole env pass through unchanged',
   });
   assert.equal(captured[0].options.env, process.env);
   assert.equal(captured[0].options.env.DEBUG, 'pw:api');
+});
+
+test('a lock without renderer parses and has no renderer', () => {
+  const lock = parseRuntimeLock(fixtureLock());
+  assert.equal(lock.renderer, undefined);
+});
+
+test('a renderer entry parses per platform', () => {
+  const value = fixtureLock();
+  value.renderer = {
+    revision: '1243',
+    platforms: {
+      'mac-arm64': {
+        url: 'https://github.com/example-org/example-repo/releases/download/fast-browser-v0.1.2/chromium-headless-shell-1243-mac-arm64.zip',
+        file: 'chromium-headless-shell-1243-mac-arm64.zip',
+        sha256: 'a'.repeat(64),
+      },
+    },
+  };
+  const lock = parseRuntimeLock(value);
+  assert.equal(lock.renderer.revision, '1243');
+  assert.equal(lock.renderer.platforms['mac-arm64'].file, 'chromium-headless-shell-1243-mac-arm64.zip');
+});
+
+test('a renderer file name that does not match its revision and platform is refused', () => {
+  const value = fixtureLock();
+  value.renderer = { revision: '1243', platforms: { 'mac-arm64': {
+    url: 'https://github.com/o/r/releases/download/t/other.zip', file: 'other.zip', sha256: 'a'.repeat(64),
+  } } };
+  assert.throws(() => parseRuntimeLock(value), /renderer\.platforms\.mac-arm64\.file must be exactly chromium-headless-shell-1243-mac-arm64\.zip/);
+});
+
+test('an unknown renderer platform is refused', () => {
+  const value = fixtureLock();
+  value.renderer = { revision: '1243', platforms: { 'win-x64': {} } };
+  assert.throws(() => parseRuntimeLock(value), /renderer\.platforms has an unsupported platform/);
 });

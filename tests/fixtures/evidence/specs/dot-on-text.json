@@ -1,0 +1,4 @@
+{ "state": "AFTER", "title": "The record opens from its chip", "layout": "single", "out": "fx-dot-on-text.png",
+  "targets": { "chip": "[data-testid=chip]" }, "frame": "[data-testid=frame]",
+  "expect": { "noWarnings": true, "dotGround": [246, 247, 249], "slid": true },
+  "panels": [{ "marks": [ { "lift": "chip", "title": "Open record", "note": "The anchor dot stays off the line of text under the chip" } ] }] }

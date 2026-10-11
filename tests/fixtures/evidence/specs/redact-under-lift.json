@@ -1,0 +1,4 @@
+{ "state": "AFTER", "title": "A lift never reveals a redaction", "layout": "single", "out": "fx-redact-under-lift.png",
+  "targets": { "contact": "[data-testid=contact]", "reviewer": "[data-testid=reviewer]" },
+  "page": "nested-cards",
+  "panels": [{ "marks": [ { "redact": "contact" }, { "lift": ["reviewer", "contact"], "title": "Masked" } ] }] }

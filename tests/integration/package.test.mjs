@@ -26,6 +26,11 @@ const requiredEntries = [
   'package/builtins/macros/page-recon.js',
   'package/builtins/macros/page-affordances.js',
   'package/builtins/macros/flow-runner.js',
+  'package/builtins/macros/capture-evidence.js',
+  'package/assets/fonts/InterVariable.woff2',
+  'package/lib/commands/compose.mjs',
+  'package/lib/compose/page-geometry.js',
+  'package/lib/compose/page-layout.js',
   'package/lib/cli/main.mjs',
   'package/lib/cli/parse-args.mjs',
   'package/lib/commands/configure.mjs',
@@ -79,6 +84,7 @@ const requiredEntries = [
   'package/skills/fast-browsing/agents/openai.yaml',
   'package/skills/mine-macros/agents/openai.yaml',
   'package/skills/reviewing-flows/agents/openai.yaml',
+  'package/skills/composing-evidence/agents/openai.yaml',
   'package/templates/codex/browser_driver.toml',
   'package/templates/routing/claude/fast-browser-routing.md',
   'package/templates/routing/claude/fast-browser-verification-consent.md',
@@ -89,6 +95,7 @@ const requiredEntries = [
   'package/skills/fast-browsing/SKILL.md',
   'package/skills/mine-macros/SKILL.md',
   'package/skills/reviewing-flows/SKILL.md',
+  'package/skills/composing-evidence/SKILL.md',
   'package/runtime-lock.json',
   'package/README.md',
   'package/SECURITY.md',
@@ -211,8 +218,8 @@ test('npm package contains only portable deployable Fast Browser assets', async 
   }
   assert.equal(
     entries.filter((entry) => /\/skills\/[^/]+\/SKILL\.md$/.test(entry)).length,
-    6,
-    'package must contain exactly six real skills',
+    7,
+    'package must contain exactly seven real skills',
   );
 
   for (const entry of entries) {

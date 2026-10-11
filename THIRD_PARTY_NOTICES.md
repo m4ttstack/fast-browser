@@ -34,6 +34,16 @@ after download regardless.
   The zip above wrapped in a CRX3 signature, so the two install identical
   bytes. `setup` installs the zip; the CRX is for an unattended installer that
   registers the extension with Chrome itself.
+- Compose renderer: Chromium headless shell, revision `1234`, used by
+  `fast-browser compose` to render evidence images. Chromium is licensed under
+  the BSD-3-Clause license (https://chromium.googlesource.com/chromium/src/+/main/LICENSE),
+  not the Apache License 2.0 above.
+  - `mac-arm64`: `chromium-headless-shell-1234-mac-arm64.zip`
+    SHA-256 `cb46a336dbe3d6f1339c5039c3083e4e5dd8e4379710790e34f8f4a865e2452d`
+    https://github.com/m4ttheweric/playwright/releases/download/fast-browser-v0.1.2/chromium-headless-shell-1234-mac-arm64.zip
+  - `mac-x64`: `chromium-headless-shell-1234-mac-x64.zip`
+    SHA-256 `608e2b5b1815b45e8bf59c9a381412b62df3ce36f2c182bc04e22fcf04ad53ea`
+    https://github.com/m4ttheweric/playwright/releases/download/fast-browser-v0.1.2/chromium-headless-shell-1234-mac-x64.zip
 
 Every value above is reproduced from the committed runtime lock, so the notice
 can be checked against the installer contract. A release-gate test asserts they
@@ -73,3 +83,10 @@ FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
 COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
 IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+## Inter
+
+`assets/fonts/InterVariable.woff2` is Inter 4.1 by Rasmus Andersson
+(https://github.com/rsms/inter), licensed under the SIL Open Font License 1.1
+(`assets/fonts/OFL.txt`). SHA-256 of the bundled file: 693b77d4f32ee9b8bfc995589b5fad5e99adf2832738661f5402f9978429a8e3.
+It is embedded into `fast-browser compose` renders so they never fetch fonts.

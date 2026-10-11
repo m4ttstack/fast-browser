@@ -1,0 +1,4 @@
+interface:
+  display_name: "Composing Evidence"
+  short_description: "Turn named page elements into cropped, labelled evidence boards."
+  default_prompt: "Use $composing-evidence to compose evidence boards for this brief."

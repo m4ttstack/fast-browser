@@ -1,0 +1,4 @@
+{ "state": "AFTER", "title": "The record opens from its link under the tabs", "layout": "single", "out": "fx-start-tab.png",
+  "targets": { "link": "[data-testid=link]" }, "frame": "[data-testid=frame]",
+  "expect": { "noWarnings": true, "frameEdges": { "left": "clean", "top": "inward", "right": "clean", "bottom": "outward" }, "cleanRows": ["top", "bottom"], "leaderGround": [246, 247, 249] },
+  "panels": [{ "marks": [ { "lift": "link", "title": "Open record", "note": "The frame no longer cuts the tab labels or the heading" } ] }] }

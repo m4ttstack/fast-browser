@@ -172,8 +172,9 @@ test('annotate refuses a zero-width (but non-zero-height) box', async () => {
 // `type` is user-supplied config data and is never validated against
 // ANNOTATION_TYPES before these two guards run, so echoing it puts an
 // arbitrary string into CLI output. Every other diagnosable failure in this
-// command names the field rather than the value (see confinedName and the
-// missing-base error in lib/commands/annotate.mjs, and the duplicate
+// command names the field rather than the value (see confinedScreenshotPath
+// in lib/core/screenshots.mjs, the missing-base error in
+// lib/commands/annotate.mjs, and the duplicate
 // positional in lib/cli/parse-args.mjs); the annotation index is our own
 // number and locates the entry just as precisely.
 test('a bounds failure names the annotation index and never echoes the config type', async () => {

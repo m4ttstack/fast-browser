@@ -12,7 +12,7 @@ wrong" bugs cannot be fixed here.
 | Symptom | Repo |
 |---|---|
 | relay drops, CDP, tab groups, extension behavior, MCP tools | the fork (see below) |
-| setup, doctor, uninstall, migrate, config, annotate, gif | here, `lib/` |
+| setup, doctor, uninstall, migrate, config, annotate, gif, compose | here, `lib/` |
 | skills, agents, macros, routing rules | here |
 | which runtime version is installed | here, `runtime-lock.json` |
 
@@ -80,6 +80,10 @@ write unless the published bytes hash to what that manifest claims.
 
 The runtime version and this plugin's version are separate sequences and are not
 meant to match. Plugin `alpha.9` pinned runtime `alpha.8`, for instance.
+
+`npm run pin-renderer` pins the `chromium-headless-shell` that `compose` renders
+with into the lock's `renderer` entry. With `--upload` it re-hosts the zips as
+assets on the fork's release; uploading needs the repo owner's approval.
 
 ### The gates are the guardrail
 

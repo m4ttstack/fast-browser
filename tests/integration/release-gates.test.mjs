@@ -67,6 +67,10 @@ test('Playwright notices exist and agree with the runtime lock', async () => {
     lock.extension.sha256,
     lock.extension.id,
     ...(lock.extension.crx ? [lock.extension.crx.file, lock.extension.crx.sha256] : []),
+    ...(lock.renderer ? [
+      `revision \`${lock.renderer.revision}\``,
+      ...Object.values(lock.renderer.platforms).flatMap((p) => [p.url, p.file, p.sha256]),
+    ] : []),
   ]) {
     assert.ok(notices.includes(value), `notices must record ${value}`);
   }

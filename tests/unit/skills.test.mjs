@@ -82,7 +82,9 @@ test('skill frontmatter contains only portable discovery fields', async () => {
 test('macro index exposes only the portable built-in macros', async () => {
   const text = await readFile(path.join(pluginRoot, 'skills/browser-macros/MACROS.md'), 'utf8');
 
-  assert.equal((text.match(/^## /gm) || []).length, 4);
+  assert.equal((text.match(/^## /gm) || []).length, 5);
+  assert.match(text, /^## capture-evidence$/m);
+  assert.match(text, /~\/\.fast-browser\/macros\/capture-evidence\.js/);
   assert.match(text, /^## page-recon$/m);
   assert.match(text, /maxLinks\?: number \(default 10\)/);
   assert.match(text, /~\/\.fast-browser\/macros\/page-recon\.js/);
@@ -151,7 +153,7 @@ test('macro index exposes only the portable built-in macros', async () => {
   assert.match(text, /present ONLY\s+when a quirk was actually clicked/);
   assert.match(text, /`quirkAttempted`\s+\(when present\) immediately before it/);
   assert.match(text, /~\/\.fast-browser\/macros\/flow-runner\.js/);
-  assert.equal((text.match(/Status: built-in/g) || []).length, 4);
+  assert.equal((text.match(/Status: built-in/g) || []).length, 5);
 
   // The Script paths above are written with `~`, which the runtime does not
   // expand: a bare or tilde filename resolves against the browser server's
@@ -874,4 +876,53 @@ test('the browser-driver asks back and the caller resumes the same agent', async
     'utf8',
   );
   assert.match(routing, phrase('SendMessage to that same agent'));
+});
+
+// Each line pinned here is a mistake a blind run made without the skill, or
+// a contract of the compose CLI as it ships: a capture handed to compose
+// unsealed, a spec written away from its sidecar, a lift that cut a fact in
+// half, a thin-strip crop accepted as is, a board reported unread. Marks and
+// layouts the CLI does not support stay out until they exist.
+test('composing-evidence states the compose contract and the blind-run lessons', async () => {
+  const text = await readFile(path.join(pluginRoot, 'skills/composing-evidence/SKILL.md'), 'utf8');
+  const phrase = (words) => new RegExp(words.split(' ').join('\\s+'));
+  const { STATES, TAGS, MARK_KINDS_M1 } = await import('../../lib/compose/spec.mjs');
+
+  assert.match(text, /~\/\.fast-browser\/macros\/capture-evidence\.js/);
+  assert.match(text, phrase('with `~` written out'));
+  assert.match(text, /home: "<your absolute home directory>"/);
+  assert.match(text, /fast-browser compose --seal <file>/);
+  assert.match(text, /fast-browser compose <spec\.json>/);
+  assert.match(text, phrase('beside the sidecar'));
+  assert.match(text, /failedStep/);
+  assert.match(text, phrase('Never edit the return'));
+  // Only no-match and ambiguous are selector problems; the other two misses
+  // and a too-large frame need the page or the viewport changed instead.
+  assert.match(text, phrase('`no-match` or `ambiguous`: the selector is wrong'));
+  assert.match(text, phrase('`not-visible` \\(zero-size box\\): the element is collapsed or hidden'));
+  assert.match(text, phrase('`out-of-view`: it fell outside the viewport'));
+  assert.match(text, /`frameSnap: "too-large"`/);
+  assert.match(text, /browser_resize/);
+  assert.equal((text.match(/`fast-browser setup`/g) || []).length, 2);
+  assert.match(text, /\bnever `nth=`/);
+  assert.match(text, /browser_find/);
+  assert.match(text, phrase('Lift the whole fact'));
+  assert.match(text, /`union`/);
+  assert.match(text, phrase('thin strip'));
+  assert.match(text, phrase('compose refuses it'));
+  // The fill is drawn over the measured box only, never a blur of the area.
+  assert.match(text, phrase('with a solid fill, not a blur'));
+  assert.match(text, phrase("the fill covers that element's box only"));
+  assert.doesNotMatch(text, /`redact` blurs/);
+  assert.match(text, phrase('Read the PNG'));
+  for (const state of STATES) assert.ok(text.includes(`\`${state}\``), state);
+  for (const tag of TAGS) assert.ok(text.includes(`\`${tag}\``), tag);
+  assert.deepEqual([...MARK_KINDS_M1], ['lift', 'redact']);
+  for (const unsupported of ['bracket', 'loupe', '"link"', '"empty"', '"pair"', '"steps"']) {
+    assert.ok(!text.includes(unsupported), `documents unsupported ${unsupported}`);
+  }
+
+  const pointer = await readFile(path.join(pluginRoot, 'skills/annotating-screenshots/SKILL.md'), 'utf8');
+  const body = pointer.replace(/^---\n[\s\S]*?\n---\n/, '');
+  assert.match(body.slice(0, 900), /composing-evidence/);
 });
