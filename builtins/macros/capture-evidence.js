@@ -35,6 +35,14 @@ async (page, args) => {
       const count = await page.locator(frame).count();
       if (count !== 1) return { failedStep: 'frame', error: 'the frame selector must match exactly one element' };
       await page.locator(frame).evaluate((element) => element.setAttribute('data-ev-frame', ''), undefined, { timeout: 2000 });
+      const contains = await page.evaluate(() => {
+        const f = document.querySelector('[data-ev-frame]').getBoundingClientRect();
+        return [...document.querySelectorAll('[data-ev-key]')].every((e) => {
+          const r = e.getBoundingClientRect();
+          return r.left >= f.left - 1 && r.top >= f.top - 1 && r.right <= f.right + 1 && r.bottom <= f.bottom + 1;
+        });
+      });
+      if (!contains) return { failedStep: 'frame', error: 'the frame selector does not contain every target' };
       frameSnap = 'selector';
     }
 
@@ -96,7 +104,7 @@ async (page, args) => {
     const boxes = {};
     for (const [key, box] of Object.entries(measured.boxes)) {
       if (box[2] <= 0 || box[3] <= 0) { missed.push({ key, reason: 'not-visible' }); continue; }
-      if (box[1] < 0 || box[1] + box[3] > measured.viewport.h) { missed.push({ key, reason: 'out-of-view' }); continue; }
+      if (box[0] < 0 || box[0] + box[2] > measured.viewport.w || box[1] < 0 || box[1] + box[3] > measured.viewport.h) { missed.push({ key, reason: 'out-of-view' }); continue; }
       boxes[key] = box;
     }
     if (Object.keys(boxes).length === 0) return { failedStep: 'measure', missed };

@@ -82,3 +82,22 @@ test('a failed call leaves no tags behind for the next call on the same page', {
     assert.notEqual(second.frameSnap, 'selector');
   } finally { await browser.close(); await rm(home, { recursive: true, force: true }); }
 });
+
+for (const [edge, fixture] of [['right', 'off-right-edge'], ['left', 'off-left-edge']]) {
+  test(`a target clipped by the ${edge} edge is missed as out-of-view`, { skip }, async () => {
+    const { home, result } = await run(fixture, { targets: { inside: '[data-testid=inside]', clipped: '[data-testid=clipped]' } });
+    try {
+      assert.deepEqual(result.missed, [{ key: 'clipped', reason: 'out-of-view' }]);
+      assert.deepEqual(Object.keys(result.boxes), ['inside']);
+    } finally { await rm(home, { recursive: true, force: true }); }
+  });
+}
+
+test('an explicit frame that does not contain every target fails', { skip }, async () => {
+  const { home, result } = await run('frame-misses-target', {
+    frame: '[data-testid=panel]', targets: { in: '[data-testid=in]', out: '[data-testid=out]' },
+  });
+  try {
+    assert.deepEqual(result, { failedStep: 'frame', error: 'the frame selector does not contain every target' });
+  } finally { await rm(home, { recursive: true, force: true }); }
+});
