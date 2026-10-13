@@ -120,7 +120,7 @@ test('page-affordances reads roles, names and structure off a real page', async 
     'Accept terms', 'Duplicate', 'Duplicate', 'Full name', 'Passphrase', 'Phone number', 'Plan',
   ]);
   assert.deepEqual(labels(result.buttons), [
-    'Cancel', 'Custom action', 'Save', 'Save', 'Submit claim', 'Upload photo', 'Void claim',
+    'Cancel', 'Custom action', 'Save', 'Save', 'Submit order', 'Upload photo', 'Void order',
   ]);
 
   // The accessible-name walk: through aria-labelledby, through a wrapping
@@ -145,8 +145,8 @@ test('page-affordances reads roles, names and structure off a real page', async 
   assert.equal(plan.type, 'select');
   assert.equal(plan.selector, 'role=combobox[name="Plan"]');
 
-  const voidClaim = result.buttons.find((entry) => entry.label === 'Void claim');
-  assert.equal(voidClaim.disabled, true);
+  const voidOrder = result.buttons.find((entry) => entry.label === 'Void order');
+  assert.equal(voidOrder.disabled, true);
   assert.equal(
     result.buttons.filter((entry) => entry.disabled === true).length,
     1,
@@ -169,8 +169,8 @@ test('page-affordances reads roles, names and structure off a real page', async 
     { role: 'banner' },
     { role: 'navigation', label: 'Primary' },
     { role: 'main' },
-    { role: 'form', label: 'Claimant' },
-    { role: 'region', label: 'Assessment' },
+    { role: 'form', label: 'Customer' },
+    { role: 'region', label: 'Summary' },
     { role: 'complementary', label: 'Related' },
     { role: 'contentinfo' },
   ]);

@@ -66,9 +66,9 @@ const PAGE = `data:text/html,${encodeURIComponent(`
 <style>body{margin:0;font:14px Helvetica,Arial,sans-serif}
 .row{display:flex;justify-content:space-between;padding:9px 20px}.v{font-weight:600}</style>
 <div class="row"><span>Name</span><span class="v" id="nm">Dana Whitfield</span></div>
-<div class="row"><span>Policy</span><span class="v">PA-99-4471-02</span></div>
+<div class="row"><span>Order</span><span class="v">ORD-4471-02</span></div>
 <div class="row"><span>Estimate</span><span class="v" id="est">$4,182.60</span></div>
-<img id="ph" width="24" height="24" alt="claimant"
+<img id="ph" width="24" height="24" alt="customer"
   src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7">`)}`;
 
 // A fixture for the space measurement: #open sits in the top-left corner
