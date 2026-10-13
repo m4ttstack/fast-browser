@@ -21,10 +21,10 @@
 </header>
 
 <main>
-  <form aria-label="Claimant">
+  <form aria-label="Customer">
     <!-- label[for] association -->
-    <label for="claimant-name">Full name</label>
-    <input id="claimant-name" name="claimant-name" type="text">
+    <label for="customer-name">Full name</label>
+    <input id="customer-name" name="customer-name" type="text">
 
     <!-- wrapping label, with the control itself contributing no text -->
     <label>Phone number <input type="tel" name="phone"></label>
@@ -54,7 +54,7 @@
     <!-- no accessible name of any kind -->
     <input type="text" id="no-name-field">
 
-    <button type="submit">Submit claim</button>
+    <button type="submit">Submit order</button>
 
     <!-- identical accessible names, distinct testids: proves data-testid is
          preferred over name and aria-label once the role name collides -->
@@ -69,7 +69,7 @@
     <!-- no accessible name -->
     <button style="width:40px;height:20px"></button>
 
-    <button disabled data-testid="void-claim">Void claim</button>
+    <button disabled data-testid="void-order">Void order</button>
 
     <!-- an image button's name is its alt text, and its role is one no role=
          selector can express -->
@@ -78,7 +78,7 @@
 
     <!-- a hidden subtree contributes nothing to the accessible name, which is
          where this macro and Playwright have to agree or the selector misses -->
-    <button id="cancel-claim">Cancel <span hidden>(not available)</span></button>
+    <button id="cancel-order">Cancel <span hidden>(not available)</span></button>
   </form>
 
   <!-- an explicit role, taken ahead of the tag -->

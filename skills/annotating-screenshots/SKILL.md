@@ -179,8 +179,8 @@ took the label's spot from the `space` bands the same call measured.
 
 ```json
 {
-  "base": "claim.png",
-  "out": "claim-annotated.png",
+  "base": "order.png",
+  "out": "order-annotated.png",
   "measured": {
     "schemaVersion": 1,
     "viewport": { "inner": [900, 560], "client": [885, 560] }
