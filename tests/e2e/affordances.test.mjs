@@ -170,7 +170,7 @@ test('page-affordances reads roles, names and structure off a real page', async 
     { role: 'navigation', label: 'Primary' },
     { role: 'main' },
     { role: 'form', label: 'Customer' },
-    { role: 'region', label: 'Assessment' },
+    { role: 'region', label: 'Summary' },
     { role: 'complementary', label: 'Related' },
     { role: 'contentinfo' },
   ]);
