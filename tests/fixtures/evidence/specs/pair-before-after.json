@@ -1,0 +1,6 @@
+{ "state": "BEFORE → AFTER", "title": "The deploy card now shows its status", "layout": "pair", "out": "fx-pair-before-after.png",
+  "panels": [
+    { "label": "BEFORE", "fixture": { "page": "status-before", "targets": { "status": "[data-testid=status]" }, "frame": "[data-testid=deploy]" },
+      "marks": [ { "empty": "status", "text": "No status" } ] },
+    { "label": "AFTER", "fixture": { "page": "status-after", "targets": { "status": "[data-testid=status]" }, "frame": "[data-testid=deploy]" },
+      "marks": [ { "lift": "status", "title": "Status shown", "tag": "NEW" } ] } ] }

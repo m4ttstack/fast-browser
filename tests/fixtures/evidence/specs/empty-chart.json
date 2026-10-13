@@ -1,0 +1,4 @@
+{ "state": "FOUND", "title": "The burndown chart renders nothing", "layout": "single", "out": "fx-empty-chart.png",
+  "targets": { "chart": "[data-testid=chart]" },
+  "expect": { "slots": [["empty", "inside"]], "noWarnings": true },
+  "panels": [{ "marks": [ { "empty": "chart", "text": "Nothing rendered here" } ] }] }

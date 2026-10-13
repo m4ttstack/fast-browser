@@ -1,0 +1,23 @@
+<!doctype html><meta charset="utf-8">
+<style>body{margin:0;font:14px Helvetica,Arial,sans-serif;background:#f6f7f9;color:#111827}
+.app{display:flex;width:900px;height:600px;background:#fff}
+.nav{width:180px;padding:24px 20px;background:#f3f4f6;box-sizing:border-box}
+.nav div{padding:10px 0;color:#4b5563}
+.main{flex:1;padding:24px 28px;display:flex;flex-direction:column}
+.bar{display:flex;justify-content:space-between;align-items:center;height:44px}
+button{font:inherit;height:32px;padding:0 14px;border:1px solid #d1d5db;border-radius:6px;background:#fff}
+.row{display:flex;align-items:center;height:56px;border-bottom:1px solid #e5e7eb}
+.row .name{width:260px}.row .who{width:150px;color:#6b7280}.row .chip{width:76px;text-align:center;padding:2px 0;border-radius:999px;background:#dcfce7;color:#166534;font-size:12px}
+.foot{margin-top:auto;padding-bottom:4px;color:#6b7280}</style>
+<div class="app" data-testid="tracker">
+  <div class="nav"><div>Projects</div><div>Tasks</div><div>Reviews</div><div>Reports</div></div>
+  <div class="main">
+    <div class="bar"><h3 style="margin:0">Atlas rewrite</h3><button data-testid="new-task">New task</button></div>
+    <div class="row"><span class="name">Draft the release notes</span><span class="who">Pat Example</span><span class="chip">Open</span></div>
+    <div class="row"><span class="name">Review the import flow</span><span class="who">Pat Example</span><span class="chip">Open</span></div>
+    <div class="row"><span class="name">Archive the old board</span><span class="who">Pat Example</span><span class="chip" data-testid="status">Done</span></div>
+    <div class="row"><span class="name">Update the style guide</span><span class="who">Pat Example</span><span class="chip">Open</span></div>
+    <div class="row"><span class="name">Plan the next sprint</span><span class="who">Pat Example</span><span class="chip">Open</span></div>
+    <div class="foot"><span data-testid="saved">All changes saved</span></div>
+  </div>
+</div>

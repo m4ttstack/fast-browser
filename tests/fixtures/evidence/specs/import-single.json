@@ -1,0 +1,7 @@
+{ "state": "FOUND", "title": "The burndown chart is blank in the reported screenshot", "layout": "single", "out": "fx-import-single.png",
+  "expect": { "origin": [true], "slots": [["empty", "inside"]], "redactionPad": 12, "crops": 2 },
+  "panels": [
+    { "fixture": { "import": { "page": "ticket-before", "dpr": 2, "format": "jpeg" } },
+      "frame": [72, 72, 856, 536],
+      "boxes": { "chart": [122, 258, 760, 240], "owner": [118, 182, 340, 48], "contact": [118, 522, 388, 48] },
+      "marks": [ { "empty": "chart", "text": "Nothing rendered here" }, { "redact": "owner" }, { "redact": "contact" } ] } ] }

@@ -1,0 +1,5 @@
+{ "state": "AFTER", "title": "The project carries the pinned badge", "layout": "single", "out": "fx-loupe-badge.png",
+  "targets": { "badge": "[data-testid=badge]" },
+  "page": "tiny-badge", "frame": ".head",
+  "expect": { "loupes": [4] },
+  "panels": [{ "marks": [ { "loupe": "badge", "zoom": 4, "title": "Pinned badge", "note": "Marks a pinned project" } ] }] }

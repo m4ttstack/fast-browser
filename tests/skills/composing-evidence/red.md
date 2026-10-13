@@ -113,3 +113,77 @@ real page and an agent that never reads the snapshot; a hand-fed snapshot
 or source removes the guessing. So this is not a valid RED. The rule was
 added anyway because Matt chose a skill tip after blind runs 3 and 4, where
 3 captures went to xpath guesses and run 2 succeeded with the role form.
+
+## 2026-10: marks and layouts (milestone 3)
+
+Harness: text-only. Three fresh `general-purpose` sonnet (medium) agents read
+the skill as it stood before this milestone (`lift` and `redact`, `single`
+only) and one prompt, with no other context. The capture's `boxes` had the
+keys `row1`, `row2`, `row3`, `badge`, `total`, `rowTotal`, `gap`; a second
+capture of the same card in dark theme had the same keys. Five briefs, JSON
+replies only:
+
+1. Rows 2 and 3 changed; mark them as a group.
+2. The badge is 12 px wide; make it readable.
+3. The total in the header and the total in row 3 are the same number; show that.
+4. An Export button used to sit in the gap; show that it is gone.
+5. Show the card in light and in dark theme as one image.
+
+What each agent wrote, per brief (agents 1, 2 and 3 in that order):
+
+| Brief | Marks written | Invented fields |
+|---|---|---|
+| 1, group of rows | `lift: ["row2","row3"]` with tag `CHANGED`, 3 of 3 | none |
+| 2, tiny badge | `lift: "badge"`, 3 of 3 | none |
+| 3, same total twice | `lift: ["total","rowTotal"]`, 3 of 3 (tag `OK` in 2 of 3) | none |
+| 4, removed button | `lift: "gap"` with tag `REMOVED`, 3 of 3 | none |
+| 5, light and dark | one `single` board with the light capture and `marks: []`, 3 of 3 | none |
+
+- Every brief got a `lift`. No agent reached for a group, magnifier, link or
+  removal mark, because the skill offered none.
+- Brief 5: 3 of 3 produced one board for the light theme only and dropped the
+  dark capture, each saying the skill allows exactly one panel. None made two
+  separate boards, and none made one image of both. The dark capture went
+  unused.
+- No agent invented a field or a mark kind: they stayed inside what the skill
+  documented. The failure is the absence of vocabulary, not misuse of it.
+- `state` was `BEFORE → AFTER` on a single-panel board in 2 of 3 replies for
+  brief 1 and 1 of 3 for brief 4: the state implies a comparison the board
+  cannot show.
+
+Skill gap: the skill has no mark for a group, a tiny element, one fact in two
+places or a removal, and no layout that holds two captures.
+
+## 2026-10: imported images (milestone 3)
+
+Harness: text-only. Three fresh `general-purpose` sonnet (medium) agents read
+the skill as it stood after the marks and layouts milestone (live captures
+only) and one prompt, with no other context: a ticket has a screenshot of the
+broken page saved at `/tmp/ticket.jpg`, 2400 by 1600 pixels, showing a
+customer's name and email; describe, command by command and with the spec,
+how to produce a before board with the name and email hidden; the viewer shows
+the image at 1200 by 800.
+
+| Question | Agent 1 | Agent 2 | Agent 3 |
+|---|---|---|---|
+| Invents an import path? | No import command; proposes an unverified workaround: an HTML page that shows the JPEG with empty overlay elements, captured by the live macro | No; offers a live recapture of the page, or stops and reports there is no way to use the JPEG | No; notes `file:///tmp/ticket.jpg` would be one `img`, so a redact would cover the whole image; asks for the live page or for an import command |
+| Coordinates written | Viewer pixels times 2, as CSS overlay positions (none actually written) | None; says any viewer position would need doubling and will not compute boxes | None; says viewer positions double to file pixels and has no place to put them |
+| Checks the redaction? | Yes, by reading the PNG and the `missed` list; admits a miss would leak the data | Yes, by reading the PNG after a live recapture; no board is made from the ticket | Not applicable: stops before any board |
+| Treats the board as finished? | Done once it has read the PNG (its step 8); no one else looks | Not done; reports it could not build the board | Not done; reports it could not |
+
+- 0 of 3 found a way to use the image. Two of three would stop and ask; the
+  third builds a page around the image, which is an invented route to the same
+  place and misplaces no redaction only if its doubled coordinates are right.
+- All three saw the viewer-to-image scale (times 2) as a hazard, and none had
+  anywhere to write the numbers. The skill says "you never place anything by
+  pixel", which pushed them to refuse.
+- Nobody mentioned a confirmation step: one agent treats its own read of the
+  PNG as the check, with no operator in the loop.
+- `state` for a before board was a guess in 3 of 3 (`FOUND`). One of the
+  three assumed a `single` panel is cropped to its marks, which could drop the
+  broken area the ticket is about.
+
+Skill gap: no route from an image file to a capture, no field to give a frame
+and boxes by coordinate, no statement that the image's real pixels (not the
+viewer's) are the unit, no redaction check beyond the agent's own read, and no
+rule that the operator confirms the crops.

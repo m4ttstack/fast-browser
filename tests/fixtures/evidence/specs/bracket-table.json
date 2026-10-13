@@ -1,0 +1,4 @@
+{ "state": "AFTER", "title": "The two oldest reviews sort to the middle of the queue", "layout": "single", "out": "fx-bracket-table.png",
+  "targets": { "q2": "[data-testid=q2]", "q3": "[data-testid=q3]" },
+  "expect": { "brackets": [true], "flats": 0 },
+  "panels": [{ "marks": [ { "bracket": ["q2", "q3"], "title": "Oldest two", "note": "Five and six days" } ] }] }
