@@ -9,13 +9,14 @@ import { compose } from '../../lib/commands/compose.mjs';
 import { renderBoard } from '../../lib/compose/engine.mjs';
 import { REDACT_FILL } from '../../lib/compose/page.mjs';
 import { resolvePaths } from '../../lib/core/paths.mjs';
+import { writeSidecar } from './helpers/capture-sidecar.mjs';
 import { assertInvariants, intersects } from './helpers/invariants.mjs';
 import { countOffColor, diffPngs } from './helpers/png-diff.mjs';
 import { rendererForTests } from './helpers/renderer.mjs';
 
 const renderer = await rendererForTests();
 const skip = renderer ? false : 'skipped by FAST_BROWSER_SKIP_COMPOSE_E2E=1';
-const macro = new Function(`return (${await readFile(new URL('../../builtins/macros/capture-evidence.js', import.meta.url), 'utf8')});`)();
+const macro = new Function(`return (${await readFile(new URL('./helpers/capture-evidence.js', import.meta.url), 'utf8')});`)();
 const specDir = path.resolve('tests/fixtures/evidence/specs');
 const goldenDir = path.resolve('tests/fixtures/evidence/goldens');
 const pluginRoot = path.resolve('.');
@@ -36,16 +37,14 @@ const unionOf = (boxes) => {
   return [x, y, Math.max(...boxes.map((b) => b[0] + b[2])) - x, Math.max(...boxes.map((b) => b[1] + b[3])) - y];
 };
 
-async function captureLive({ browser, pageName, targets, frame, out, home, paths }) {
+async function captureLive({ browser, pageName, targets, frame, out, home }) {
   const page = await browser.newPage({ viewport: { width: 1000, height: 700 } });
   await page.goto(pathToFileURL(path.resolve(`tests/fixtures/evidence/pages/${pageName}.html`)).href);
   const captureReturn = await macro(page, { targets, out, home, frame });
   await page.close();
   assert.equal(captureReturn.failedStep, undefined, `capture failed at ${captureReturn.failedStep}`);
   assert.equal(captureReturn.missed.length, 0, 'every fixture target resolves');
-  const ret = path.join(home, `${out}.return.json`);
-  await writeFile(ret, JSON.stringify(captureReturn));
-  const { sidecar } = await compose({ command: 'compose', seal: ret, spec: null }, { paths });
+  const { sidecar } = await writeSidecar(captureReturn);
   return { captureReturn, sidecar };
 }
 
@@ -72,7 +71,7 @@ async function prepare(file, home) {
       const out = `${name}.c${i + 1}`;
       taken.push(input.import
         ? await captureImport({ browser, input: input.import, out, home, paths })
-        : await captureLive({ browser, pageName: input.page ?? name, targets: input.targets, frame: input.frame, out, home, paths }));
+        : await captureLive({ browser, pageName: input.page ?? name, targets: input.targets, frame: input.frame, out, home }));
     }
   } finally { await browser.close(); }
   const spec = { ...fixture, panels: fixture.panels.map(({ fixture: _input, ...panel }, i) => ({ ...panel, capture: path.basename(taken[i].sidecar) })) };
@@ -89,7 +88,7 @@ for (const file of (await readdir(specDir)).filter((f) => f.endsWith('.json'))) 
       const { paths, fixture, taken, specPath } = await prepare(file, home);
       const { captureReturn } = taken[0];
       let layoutReport;
-      const report = await compose({ command: 'compose', spec: specPath, seal: null }, {
+      const report = await compose({ command: 'compose', spec: specPath }, {
         paths,
         rendererLocation: async () => renderer,
         renderBoard: async (args) => { const r = await renderBoard(args); layoutReport = r.report; return r; },

@@ -8,7 +8,7 @@ import { rendererLaunches } from '../../lib/compose/renderer.mjs';
 import { IMPORT_MAX_SIDE, rasterizeImage, renderBoard } from '../../lib/compose/engine.mjs';
 import { readPngSize } from '../../lib/annotate/png.mjs';
 import { buildBoardHtml, REDACT_FILL } from '../../lib/compose/page.mjs';
-import { assertInvariants, intersects, pathsCross, rectDistance, segmentHitsRect } from './helpers/invariants.mjs';
+import { assertInvariants, assertPanel, intersects, pathsCross, rectDistance, segmentHitsRect } from './helpers/invariants.mjs';
 import { countOffColor } from './helpers/png-diff.mjs';
 import { rendererForTests } from './helpers/renderer.mjs';
 
@@ -18,19 +18,21 @@ const font = await readFile(new URL('../../assets/fonts/InterVariable.woff2', im
 const geometrySource = await readFile(new URL('../../lib/compose/page-geometry.js', import.meta.url), 'utf8');
 const layoutSource = await readFile(new URL('../../lib/compose/page-layout.js', import.meta.url), 'utf8');
 
-// A synthetic 600x300 capture: white card, three grey text bars.
-async function syntheticCapture({ dark = false, size = [600, 300], bars, boxes, tints = [] } = {}) {
+// A synthetic 600x300 capture: white card, three grey text bars. `size`, `bars` and `boxes` are in CSS pixels;
+// at a device scale the image has `scale` times as many pixels and the frame and boxes are in those.
+async function syntheticCapture({ dark = false, size = [600, 300], bars, boxes, tints = [], scale = 1 } = {}) {
   const { chromium } = await import(renderer.playwrightCore);
   const browser = await chromium.launch({ headless: true, executablePath: renderer.executablePath });
   try {
-    const page = await browser.newPage({ viewport: { width: size[0], height: size[1] } });
+    const page = await browser.newPage({ viewport: { width: size[0], height: size[1] }, deviceScaleFactor: scale });
     const bg = dark ? '#111827' : '#ffffff'; const fg = dark ? '#e5e7eb' : '#334155';
     const list = bars ?? [[40, 40, 200, 20], [40, 80, 300, 20], [560, 260, 40, 40]];
     await page.setContent(`<body style="margin:0;background:${bg}">${list.map(([x, y, w, h]) =>
       `<div style="position:absolute;left:${x}px;top:${y}px;width:${w}px;height:${h}px;background:${fg}"></div>`).join('')}${tints.map(([x, y, w, h, colour]) =>
       `<div style="position:absolute;left:${x}px;top:${y}px;width:${w}px;height:${h}px;background:${colour}"></div>`).join('')}</body>`);
-    return { png: await page.screenshot(), size, frame: [0, 0, size[0], size[1]], dark,
-      boxes: boxes ?? { a: list[0], b: list[1], edge: list[2] } };
+    const named = boxes ?? { a: list[0], b: list[1], edge: list[2] };
+    return { png: await page.screenshot({ scale: 'device' }), size: size.map((n) => n * scale), frame: [0, 0, size[0] * scale, size[1] * scale], dark, scale,
+      boxes: Object.fromEntries(Object.entries(named).map(([key, box]) => [key, box.map((n) => n * scale)])) };
   } finally { await browser.close(); }
 }
 
@@ -1332,4 +1334,81 @@ test('an imported panel takes its wash from its own pixels', { skip }, async () 
   const { report, dir } = await render(spec([{ lift: 'a', title: 'Dark' }]), { ...dark, dark: false, source: 'import' });
   await rm(dir, { recursive: true, force: true });
   assert.equal(p0(report).dark, true, 'the sidecar says nothing about dark; the pixels do');
+});
+
+// A report panel built by hand, so a capture-pixel number in the invariants helper is tested without a render.
+// Sources and padding are in the panel's capture pixels; rects are board pixels.
+const reportPanel = (scale, { frame, lifts }) => ({
+  scale, capture: [0, 0, 400, 200], frame: frame.map((n) => n * scale), labels: [], redactions: [], dots: [], leaders: [], connectors: [], targets: [],
+  lifts: lifts.map(({ rect, source, pad = [0, 0, 0, 0] }) => ({ rect, source: source.map((n) => n * scale), pad: pad.map((n) => n * scale) })),
+});
+const apartBy = (gap) => ({
+  frame: [0, 0, 400, 200],
+  lifts: [{ rect: [100, 40, 80, 40], source: [100, 40, 50, 20] }, { rect: [150, 50, 80, 40], source: [150 + gap, 40, 50, 20] }],
+});
+
+for (const scale of [1, 2]) {
+  test(`the invariants forgive overlapping lifts whose sources are 6 CSS px apart, at ${scale}x`, () => {
+    assertPanel(reportPanel(scale, apartBy(6)), [0, 0, 600, 400]);
+  });
+
+  test(`the invariants catch overlapping lifts whose sources are 12 CSS px apart, at ${scale}x`, () => {
+    assert.throws(() => assertPanel(reportPanel(scale, apartBy(12)), [0, 0, 600, 400]), /two lifts of separate content overlap/);
+  });
+
+  test(`a lift may draw 0.4 CSS px past the shown region and not 0.75, at ${scale}x`, () => {
+    const lift = (left) => ({ frame: [10, 0, 380, 200], lifts: [{ rect: [100, 40, 80, 40], source: [10, 40, 50, 20], pad: [left, 0, 0, 0] }] });
+    assertPanel(reportPanel(scale, lift(0.4)), [0, 0, 600, 400]);
+    assert.throws(() => assertPanel(reportPanel(scale, lift(0.75)), [0, 0, 600, 400]), /capture pixels outside the panel's shown region/);
+  });
+}
+
+// A pair of one region captured at two device scales shares its trim in CSS pixels.
+const cardCapture = (card, inner, scale) => syntheticCapture({ scale, bars: [...outline(card), inner], boxes: { a: inner } });
+const pairOf = async (captures) => {
+  const { report, dir } = await render(multi('pair', [[{ lift: 'a', title: 'First' }], [{ lift: 'a', title: 'Second' }]]), captures);
+  await rm(dir, { recursive: true, force: true });
+  assertInvariants(report);
+  return report;
+};
+const trimmedCss = (panel) => Object.fromEntries(Object.entries(panel.trimmed).map(([side, n]) => [side, n / panel.scale]));
+
+test('a pair of one size captured at 1x and 2x trims both by the smaller trim in CSS pixels, as at 1x', { skip }, async () => {
+  const cards = [[30, 24, 540, 252], [20, 40, 560, 230]];
+  const inner = [[60, 50, 480, 200], [60, 70, 480, 170]];
+  const mixed = await pairOf([await cardCapture(cards[0], inner[0], 1), await cardCapture(cards[1], inner[1], 2)]);
+  const flat = await pairOf([await cardCapture(cards[0], inner[0], 1), await cardCapture(cards[1], inner[1], 1)]);
+  assert.deepEqual(mixed.panels.map((p) => p.scale), [1, 2]);
+  const smaller = { left: 18, top: 22, right: 18, bottom: 22 };
+  assert.deepEqual(trimmedCss(mixed.panels[0]), smaller, 'the 1x panel takes the smaller of the two trims');
+  assert.deepEqual(trimmedCss(mixed.panels[1]), smaller, 'and so does the 2x panel');
+  assert.deepEqual(flat.panels.map(trimmedCss), [smaller, smaller], 'which is what the 1x board gives');
+  assert.deepEqual(mixed.panels.map((p) => p.frame.map((n) => n / p.scale)), flat.panels.map((p) => p.frame), 'so both show one region');
+});
+
+// An image of 2x the pixels whose blank ground is an odd number of device pixels, which no CSS length at 2x gives.
+const edges = ([x, y, w, h]) => [[x, y, w, 4], [x, y + h - 4, w, 4], [x, y, 4, h], [x + w - 4, y, 4, h]];
+
+test('a shared trim of half a CSS pixel is rounded down in the 1x panel and exact in the 2x one', { skip }, async () => {
+  const first = await cardCapture([30, 24, 540, 252], [60, 50, 480, 200], 1);
+  const inner = [120, 140, 960, 340];
+  const image = await syntheticCapture({ size: [1200, 600], bars: [...edges([41, 80, 1118, 460]), inner], boxes: { a: inner } });
+  const report = await pairOf([first, { ...image, scale: 2 }]);
+  const [a, b] = report.panels;
+  assert.deepEqual(a.trimmed, { left: 18, top: 22, right: 18, bottom: 22 }, 'the 1x panel takes the floor of 18.5, and no more than its own blank ground');
+  assert.deepEqual(b.trimmed, { left: 37, top: 44, right: 37, bottom: 44 }, 'the 2x panel takes 18.5 CSS pixels exactly');
+  assert.ok(a.trimmed.left <= 28 && b.trimmed.left <= 37, 'neither trims past its own blank ground');
+});
+
+// The bar runs 140px past the lift box, so at the 96px grow limit of an imported capture the lift cannot reach clean ground and stays put.
+test('an imported panel with a lift lays out the same beside a 1x and a 2x live panel', { skip }, async () => {
+  const bar = [60, 40, 220, 20]; const box = [40, 30, 100, 40];
+  const ticket = { ...(await syntheticCapture({ size: [600, 300], bars: [bar], boxes: { a: box } })), source: 'import' };
+  const liveBars = [[300, 200, 60, 20]];
+  const boardAt = async (scale) => pairOf([ticket, await syntheticCapture({ size: [900, 500], bars: liveBars, boxes: { a: liveBars[0] }, scale })]);
+  const [one, two] = [await boardAt(1), await boardAt(2)];
+  assert.deepEqual(two.panels.map((p) => p.scale), [1, 2]);
+  const [a, b] = [one.panels[0].lifts[0], two.panels[0].lifts[0]];
+  assert.deepEqual(a.grown, [0, 0, 0, 0], 'the imported lift is held to the limit of its own scale');
+  for (const key of ['source', 'grown', 'pad', 'rect']) assert.deepEqual(b[key], a[key], `the imported lift's ${key}`);
 });

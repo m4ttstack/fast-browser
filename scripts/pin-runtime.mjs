@@ -14,6 +14,7 @@
 
 import { execFile as execFileCallback } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { realpathSync } from 'node:fs';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -37,6 +38,29 @@ function parseArgs(argv) {
   return args;
 }
 
+// A renderer asset path keeps the tag of the release that published it, since
+// the renderer is versioned apart from the runtime. A path may be split across
+// string literals, so only its tag and the file name's start are matched. It
+// survives a pin byte for byte, in the replacement and in the stale check.
+const RENDERER_ASSET_PATH = /fast-browser-v[^/\s'"`]+\/chromium-headless-shell-/g;
+
+export function rewriteText(relative, before, pairs, stale) {
+  const protectedUrls = [];
+  let text = before.replace(RENDERER_ASSET_PATH, url => {
+    protectedUrls.push(url);
+    return `\u0000renderer-${protectedUrls.length - 1}\u0000`;
+  });
+  for (const [from, to] of pairs)
+    text = text.replaceAll(from, to);
+  const leftover = stale.filter(value => text.includes(value));
+  text = text.replace(/\u0000renderer-(\d+)\u0000/g, (_, index) => protectedUrls[Number(index)]);
+  if (text === before)
+    throw new Error(`${relative}: nothing to rewrite, is it already pinned?`);
+  if (leftover.length)
+    throw new Error(`${relative}: stale after rewrite: ${leftover.join(', ')}`);
+  return text;
+}
+
 // Not every file carries every value (only the notices name the release
 // manifest, for instance), so a pair that finds no match is fine. What is not
 // fine is a *stale* value surviving, which is the failure this script exists to
@@ -44,15 +68,7 @@ function parseArgs(argv) {
 // previous pin. `stale` is asserted, `pairs` are opportunistic.
 async function rewrite(relative, pairs, stale) {
   const file = path.join(repoRoot, relative);
-  const before = await readFile(file, 'utf8');
-  let text = before;
-  for (const [from, to] of pairs)
-    text = text.replaceAll(from, to);
-  if (text === before)
-    throw new Error(`${relative}: nothing to rewrite, is it already pinned?`);
-  const leftover = stale.filter(value => text.includes(value));
-  if (leftover.length)
-    throw new Error(`${relative}: stale after rewrite: ${leftover.join(', ')}`);
+  const text = rewriteText(relative, await readFile(file, 'utf8'), pairs, stale);
   return { file, relative, text };
 }
 
@@ -173,7 +189,9 @@ async function currentPluginVersion() {
   return JSON.parse(await readFile(path.join(repoRoot, 'package.json'), 'utf8')).version;
 }
 
-main().catch(error => {
-  console.error(`pin-runtime: ${error.message}`);
-  process.exitCode = 1;
-});
+if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))) {
+  main().catch(error => {
+    console.error(`pin-runtime: ${error.message}`);
+    process.exitCode = 1;
+  });
+}

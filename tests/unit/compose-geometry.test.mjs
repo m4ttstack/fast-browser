@@ -1120,3 +1120,236 @@ test('a card border runs the same under the lift at board scale 2', () => {
   const { L } = liftSpot(contentUnder(px, [0, 0, 200, 100], 2, element), [400, 200], element, [80, 60]);
   assert.equal(L, 140);
 });
+
+
+// Pixel replication: what a 2x capture of the same page looks like to the geometry.
+function doubled(px) {
+  const out = canvas(px.width * 2, px.height * 2);
+  for (let y = 0; y < out.height; y += 1) {
+    for (let x = 0; x < out.width; x += 1) {
+      const from = ((y >> 1) * px.width + (x >> 1)) * 4;
+      out.data.set(px.data.subarray(from, from + 4), (y * out.width + x) * 4);
+    }
+  }
+  return out;
+}
+const times2 = (box) => box.map((n) => n * 2);
+
+test('at scale 2 a lift grows to twice what it grows to at scale 1', () => {
+  const px = canvas(200, 60).fill(45, 24, 55, 4, INK);
+  const two = sandbox.__composeGeometry.withScale(2);
+  const one = growBox(px, [40, 20, 30, 12], 96).box;
+  assert.deepEqual([...two.growBox(doubled(px), times2([40, 20, 30, 12]), 192).box], times2(one));
+});
+
+test('at scale 2 a crop lands on twice the crop at scale 1', () => {
+  const px = canvas(600, 400).fill(250, 180, 60, 12, INK);
+  const two = sandbox.__composeGeometry.withScale(2);
+  const one = cropToMarks(px, [0, 0, 600, 400], [250, 180, 60, 12]).box;
+  assert.deepEqual([...two.cropToMarks(doubled(px), [0, 0, 1200, 800], times2([250, 180, 60, 12])).box], times2(one));
+});
+
+test('withScale(1) is the default geometry', () => {
+  const px = canvas(200, 60).fill(45, 24, 55, 4, INK);
+  assert.deepEqual([...sandbox.__composeGeometry.withScale(1).growBox(px, [40, 20, 30, 12], 96).box], growBox(px, [40, 20, 30, 12], 96).box);
+});
+
+// A rounded corner leaves off-colour arc pixels at each end of an edge line.
+test('the corner trim covers 2px of arc at scale 1 and 5px at scale 2', () => {
+  const arc = (rows) => canvas(100, 60).fill(40, 10 + rows, 30, 30 - 2 * rows, [37, 99, 235]);
+  const box = [40, 10, 30, 30];
+  const at = (scale) => sandbox.__composeGeometry.withScale(scale).edgeIsClean;
+  assert.equal(at(1)(arc(2), box, 'left'), true);
+  assert.equal(at(1)(arc(5), box, 'left'), false);
+  assert.equal(at(2)(arc(5), box, 'left'), true);
+  assert.equal(at(2)(arc(6), box, 'left'), false);
+});
+
+// One distance per test below: the same page at 1x and pixel-replicated at 2x must give the same answer.
+const atScale = (scale) => sandbox.__composeGeometry.withScale(scale);
+const twin = (px) => [px, doubled(px)];
+const edgeAtBothScales = (px, box, side) => twin(px).map((p, i) => atScale(i + 1).edgeIsClean(p, i ? times2(box) : box, side));
+
+// The extra source line a 2x edge takes is only taken where it is in reach.
+const GROW_BOX_2X = [80, 40, 60, 24];
+const inkTo205 = (width) => canvas(width, 100).fill(90, 48, 116, 8, INK);
+
+test('at scale 2 a growing edge never ends past the image bound', () => {
+  const [x, , w] = atScale(2).growBox(inkTo205(207), GROW_BOX_2X, 192).box;
+  assert.equal(x + w, 207);
+});
+
+test('at scale 2 a growing edge never ends inside an avoid box', () => {
+  const [x, , w] = atScale(2).growBox(inkTo205(300), GROW_BOX_2X, 192, { avoid: [[207, 0, 20, 100]] }).box;
+  assert.equal(x + w, 207);
+});
+
+test('at scale 2 a growing edge never grows past its limit', () => {
+  const [x, , w] = atScale(2).growBox(inkTo205(300), GROW_BOX_2X, 67).box;
+  assert.equal(x + w - 140, 67);
+});
+
+test('at scale 2 the lift band still rejects a 2px word gap (LIFT_BAND)', () => {
+  const px = canvas(120, 60).fill(45, 24, 10, 4, INK).fill(57, 24, 10, 4, INK);
+  const one = atScale(1).growBox(px, [40, 20, 12, 12], 96, { band: atScale(1).LIFT_BAND }).box;
+  const two = atScale(2).growBox(doubled(px), times2([40, 20, 12, 12]), 192, { band: atScale(2).LIFT_BAND }).box;
+  assert.ok(one[0] + one[2] >= 68, 'at 1x the right edge clears both words, not the 2px gap');
+  assert.deepEqual([...two], times2([...one]));
+});
+
+test('at scale 2 clusters join boxes 24px apart and split boxes 26px apart (CLUSTER_GAP)', () => {
+  const row = (scale, gap) => [...atScale(scale).clusterBoxes([[0, 0, 80 * scale, 20 * scale], [(80 + gap) * scale, 0, 80 * scale, 20 * scale]])].map((c) => [...c]);
+  for (const scale of [1, 2]) {
+    assert.deepEqual(row(scale, 12), [[0, 1]], `a 12px gap joins at scale ${scale}`);
+    assert.deepEqual(row(scale, 13), [[0], [1]], `a 13px gap splits at scale ${scale}`);
+  }
+});
+
+test('at scale 2 an outward frame edge reaches 192px (FRAME_REACH)', () => {
+  const px = canvas(600, 400).fill(100, 60, 200, 110, INK);
+  const frame = [0, 150, 600, 200]; const marks = [200, 155, 40, 20];
+  const one = atScale(1).cleanFrame(px, frame, marks);
+  const two = atScale(2).cleanFrame(doubled(px), times2(frame), times2(marks));
+  assert.equal(one.edges.top, 'outward');
+  assert.equal(two.edges.top, 'outward', 'the 182px band is within reach at scale 2');
+});
+
+test('at scale 2 an inward frame edge lands 4px inside its band (FRAME_CUSHION)', () => {
+  const px = canvas(600, 400).fill(100, 100, 200, 10, INK);
+  const frame = [0, 100, 600, 250]; const marks = [200, 200, 40, 20];
+  const one = atScale(1).cleanFrame(px, frame, marks);
+  const two = atScale(2).cleanFrame(doubled(px), times2(frame), times2(marks));
+  assert.deepEqual([...one.frame], [0, 112, 600, 238]);
+  assert.deepEqual([...two.frame], times2([...one.frame]));
+});
+
+test('at scale 2 a 2px rule is a rule and a 3px bar is content (RULE_THICKNESS)', () => {
+  const box = [100, 10, 60, 80];
+  assert.deepEqual(edgeAtBothScales(canvas(300, 100).fill(20, 40, 260, 2, GREY), box, 'left'), [true, true]);
+  assert.deepEqual(edgeAtBothScales(canvas(300, 100).fill(20, 40, 260, 3, GREY), box, 'left'), [false, false]);
+});
+
+test('at scale 2 a rule must hold its colour 96px across the line, as 48px at scale 1 (RULE_LENGTH)', () => {
+  const box = [100, 10, 60, 80];
+  assert.deepEqual(edgeAtBothScales(canvas(300, 100).fill(77, 40, 48, 2, GREY), box, 'left'), [false, false]);
+  assert.deepEqual(edgeAtBothScales(canvas(300, 100).fill(76, 40, 49, 2, GREY), box, 'left'), [true, true]);
+});
+
+// The same page at 1x, and pixel-replicated at 2x, must give the same answer in board terms:
+// a distance in capture pixels doubles, one in board pixels does not.
+const cropAt = (scale, px, frame, marks, options) => {
+  const result = atScale(scale).cropToMarks(px, frame, marks, options);
+  return { box: [...result.box], edges: result.edges && { ...result.edges }, cut: result.cut };
+};
+const cropTwice = (px, frame, marks, options) => {
+  const parts = options && options.parts;
+  const two = parts ? { ...options, parts: parts.map((part) => ({ ...part, box: times2(part.box) })) } : options;
+  return [cropAt(1, px, frame, marks, options), cropAt(2, doubled(px), times2(frame), times2(marks), two)];
+};
+const sameCropTwice = (px, frame, marks, options) => {
+  const [one, two] = cropTwice(px, frame, marks, options);
+  assert.deepEqual(two.box, times2(one.box));
+  assert.deepEqual(two.edges, one.edges);
+  assert.equal(two.cut, one.cut);
+  return one;
+};
+
+test('at scale 2 a gap of 5px between letters is not a band, as at scale 1 (BAND)', () => {
+  const px = canvas(240, 60);
+  for (let x = 45; x < 80; x += 9) px.fill(x, 24, 4, 4, INK);
+  const box = [40, 20, 16, 12];
+  const one = atScale(1).growBox(px, box, 96).box;
+  const two = atScale(2).growBox(doubled(px), times2(box), 192).box;
+  assert.deepEqual([...one], [40, 20, 37, 12], 'at 1x the 5px gaps are crossed and the edge stops past the last letter');
+  assert.deepEqual([...two], times2([...one]));
+});
+
+test('at scale 2 a crop edge snaps to a band 57px away, as at scale 1 (CROP_SNAP)', () => {
+  const px = canvas(600, 400).fill(295, 150, 66, 10, INK);
+  const one = sameCropTwice(px, [0, 0, 600, 400], [200, 150, 40, 20]);
+  assert.deepEqual(one.box, [136, 102, 237, 116], 'at 1x the right edge snaps to the band past the text');
+});
+
+test('at scale 2 an inward frame edge stops 16px short of the marks (FRAME_MARGIN)', () => {
+  const px = canvas(600, 400).fill(100, 100, 200, 10, INK);
+  const edgeFor = (marks) => [atScale(1).cleanFrame(px, [0, 100, 600, 250], marks).edges.top,
+    atScale(2).cleanFrame(doubled(px), times2([0, 100, 600, 250]), times2(marks)).edges.top];
+  assert.deepEqual(edgeFor([200, 128, 40, 20]), ['inward', 'inward'], 'an edge 16px above the marks is allowed');
+  assert.deepEqual(edgeFor([200, 127, 40, 20]), ['outward', 'outward'], 'an edge 15px above the marks is refused');
+});
+
+test('at scale 2 a snapped crop edge backs away 24 lines from text, as 12 at scale 1 (CROP_AIR)', () => {
+  const left = sameCropTwice(canvas(600, 400).fill(201, 180, 40, 60, INK), [0, 0, 600, 400], [300, 200, 40, 20]);
+  assert.equal(left.box[0], 189);
+  const bottom = sameCropTwice(canvas(600, 400).fill(250, 150, 60, 30, INK), [0, 0, 600, 400], [260, 100, 40, 20]);
+  assert.equal(bottom.box[1] + bottom.box[3], 192);
+});
+
+test('at scale 2 the context floor is 640 by 400, as 320 by 200 at scale 1 (CROP_MIN_W, CROP_MIN_H)', () => {
+  const one = sameCropTwice(canvas(800, 600), [0, 0, 800, 600], [380, 290, 40, 20], { floor: true });
+  assert.deepEqual(one.box, [240, 200, 320, 200]);
+  const tall = sameCropTwice(canvas(1000, 800), [0, 0, 1000, 800], [300, 300, 300, 20], { floor: true });
+  assert.deepEqual(tall.box, [236, 210, 428, 200]);
+});
+
+test('at scale 2 a bracket group crops 32 capture px beyond its rows, as 16 at scale 1 (CROP_MARGIN_TIGHT)', () => {
+  const rows = rowsOfText(canvas(600, 600), Array.from({ length: 16 }, (_, i) => rowAt(i)));
+  const frame = [0, 0, 600, 600];
+  const tight = sameCropTwice(rows, frame, groupBox, { parts: [{ box: groupBox, bracket: true }] });
+  assert.ok(tight.box[1] + tight.box[3] > rowAt(12) + 10 && tight.box[1] + tight.box[3] <= rowAt(13));
+  const lift = [100, GROUP[1] - 10, 60, 10];
+  sameCropTwice(rows, frame, groupBox, { parts: [{ box: groupBox, bracket: true }, { box: lift, bracket: false }] });
+});
+
+test('at scale 2 a trim keeps 4 capture px of ground outside the first content, as 2 at scale 1 (TRIM_PAD)', () => {
+  const frame = [0, 0, 300, 200];
+  const px = card(300, 200, [30, 30], [240, 140]);
+  const one = trimBlank(px, frame, null);
+  const two = atScale(2).trimBlank(doubled(px), times2(frame), null);
+  assert.deepEqual(one.box, [28, 28, 244, 144]);
+  assert.deepEqual([...two.box], times2(one.box));
+  assert.deepEqual({ ...two.trimmed }, { left: 56, top: 56, right: 56, bottom: 56 });
+});
+
+test('at scale 2 a trim stops 4 capture px short of the marks, as 2 at scale 1 (TRIM_PAD)', () => {
+  const frame = [0, 0, 300, 200]; const marks = [20, 60, 30, 30];
+  const px = canvas(300, 200).fill(100, 100, 40, 20, INK);
+  const one = trimBlank(px, frame, marks);
+  const two = atScale(2).trimBlank(doubled(px), times2(frame), times2(marks));
+  assert.deepEqual(one.box.slice(0, 2), [18, 58]);
+  assert.deepEqual([...two.box], times2(one.box));
+});
+
+test('at scale 2 padding keeps 6 capture px of ground beside its neighbour, as 3 at scale 1 (LIFT_CLEAR)', () => {
+  const px = canvas(160, 120).fill(36, 54, 4, 4, INK);
+  const one = cleanPad(px, [50, 50, 12, 12], 12);
+  const two = atScale(2).cleanPad(doubled(px), times2([50, 50, 12, 12]), 24);
+  assert.deepEqual(one, [7, 12, 12, 12]);
+  assert.deepEqual([...two], times2(one));
+});
+
+// The card and the element are in board px, so the same board picture has S = 1 at 1x and S = 1/2 at 2x:
+// a block of n pixels at 1x is 4n pixels, and the margin LIFT_CLEAR reaches 6 capture px, not 3.
+test('at scale 2 content under a card counts 4 times the pixels, over the same board distance (LIFT_CLEAR)', () => {
+  const px = canvas(200, 100).fill(64, 40, 4, 4, INK);
+  const hiddenOne = contentUnder(px, [0, 0, 200, 100], 1, ELEMENT);
+  const hiddenTwo = atScale(2).contentUnder(doubled(px), [0, 0, 400, 200], 0.5, ELEMENT);
+  for (const [left, count] of [[70, 16], [73, 4], [74, 0]]) {
+    assert.equal(hiddenOne([left, 30, 40, 30]), count);
+    assert.equal(hiddenTwo([left, 30, 40, 30]), 4 * count, `a card at ${left}`);
+  }
+});
+
+test('at scale 2 a lift keeps clear of a block the same board distance away (LIFT_CLEAR)', () => {
+  const px = canvas(200, 100).fill(60, 30, 5, 40, INK);
+  const one = liftSpot(contentUnder(px, [0, 0, 200, 100], 1, ELEMENT), [200, 100], ELEMENT, [40, 30]);
+  const two = atScale(2).liftSpot(atScale(2).contentUnder(doubled(px), [0, 0, 400, 200], 0.5, ELEMENT), [200, 100], ELEMENT, [40, 30]);
+  assert.deepEqual({ L: two.L, T: two.T, clamped: two.clamped }, one);
+  assert.ok(one.L > 70, 'the block 5px from the centred card is inside its margin, so the card moves away');
+});
+
+test('at scale 2 a rule keeps 8 capture px on its shorter side, as 4 at scale 1 (RULE_MIN_SIDE)', () => {
+  const bottom = (below) => edgeAtBothScales(canvas(200, 200).fill(100, 40, 1, 98 + below, [200, 200, 200]), [20, 20, 160, 118], 'bottom');
+  assert.deepEqual(bottom(3), [false, false], '3px below the line');
+  assert.deepEqual(bottom(4), [true, true], '4px below the line');
+});

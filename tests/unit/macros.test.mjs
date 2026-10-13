@@ -95,13 +95,11 @@ const SHIPPED_RECON = '// shipped recon\n';
 const CURRENT_RECON = '// current recon\n';
 const CURRENT_CAPTURE = '// current capture\n';
 const CURRENT_AFFORDANCES = '// current affordances\n';
-const CURRENT_EVIDENCE = '// current evidence\n';
 const CURRENT_RUNNER = '// current runner\n';
 const SHIPPED_RECON_SECTION = syntheticSection('page-recon', 'maxLinks?: number');
 const CURRENT_RECON_SECTION = syntheticSection('page-recon', 'maxLinks?: number, home: string');
 const CURRENT_CAPTURE_SECTION = syntheticSection('capture-annotated', 'targets: object');
 const CURRENT_AFFORDANCES_SECTION = syntheticSection('page-affordances', 'maxButtons?: number');
-const CURRENT_EVIDENCE_SECTION = syntheticSection('capture-evidence', 'targets: object, home: string');
 const CURRENT_RUNNER_SECTION = syntheticSection('flow-runner', 'flow: object, args: object');
 
 // A plugin root whose packaged macro and index section have both moved on from
@@ -112,14 +110,12 @@ async function movedOnPluginRoot(t) {
       'page-recon.js': CURRENT_RECON,
       'page-affordances.js': CURRENT_AFFORDANCES,
       'capture-annotated.js': CURRENT_CAPTURE,
-      'capture-evidence.js': CURRENT_EVIDENCE,
       'flow-runner.js': CURRENT_RUNNER,
     },
     sections: {
       'page-recon': CURRENT_RECON_SECTION,
       'page-affordances': CURRENT_AFFORDANCES_SECTION,
       'capture-annotated': CURRENT_CAPTURE_SECTION,
-      'capture-evidence': CURRENT_EVIDENCE_SECTION,
       'flow-runner': CURRENT_RUNNER_SECTION,
     },
     macroHashes: { 'page-recon.js': [sha256(SHIPPED_RECON), sha256(CURRENT_RECON)] },
@@ -609,14 +605,12 @@ test('the shipped hash manifest refuses the empty-string digest', async (t) => {
       'page-recon.js': CURRENT_RECON,
       'page-affordances.js': CURRENT_AFFORDANCES,
       'capture-annotated.js': CURRENT_CAPTURE,
-      'capture-evidence.js': CURRENT_EVIDENCE,
       'flow-runner.js': CURRENT_RUNNER,
     },
     sections: {
       'page-recon': CURRENT_RECON_SECTION,
       'page-affordances': CURRENT_AFFORDANCES_SECTION,
       'capture-annotated': CURRENT_CAPTURE_SECTION,
-      'capture-evidence': CURRENT_EVIDENCE_SECTION,
       'flow-runner': CURRENT_RUNNER_SECTION,
     },
     // The digest of no bytes at all. A generator that hashes whatever readFile

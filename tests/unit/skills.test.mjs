@@ -82,9 +82,7 @@ test('skill frontmatter contains only portable discovery fields', async () => {
 test('macro index exposes only the portable built-in macros', async () => {
   const text = await readFile(path.join(pluginRoot, 'skills/browser-macros/MACROS.md'), 'utf8');
 
-  assert.equal((text.match(/^## /gm) || []).length, 5);
-  assert.match(text, /^## capture-evidence$/m);
-  assert.match(text, /~\/\.fast-browser\/macros\/capture-evidence\.js/);
+  assert.equal((text.match(/^## /gm) || []).length, 4);
   assert.match(text, /^## page-recon$/m);
   assert.match(text, /maxLinks\?: number \(default 10\)/);
   assert.match(text, /~\/\.fast-browser\/macros\/page-recon\.js/);
@@ -153,7 +151,7 @@ test('macro index exposes only the portable built-in macros', async () => {
   assert.match(text, /present ONLY\s+when a quirk was actually clicked/);
   assert.match(text, /`quirkAttempted`\s+\(when present\) immediately before it/);
   assert.match(text, /~\/\.fast-browser\/macros\/flow-runner\.js/);
-  assert.equal((text.match(/Status: built-in/g) || []).length, 5);
+  assert.equal((text.match(/Status: built-in/g) || []).length, 4);
 
   // The Script paths above are written with `~`, which the runtime does not
   // expand: a bare or tilde filename resolves against the browser server's
@@ -879,8 +877,8 @@ test('the browser-driver asks back and the caller resumes the same agent', async
 });
 
 // Each line pinned here is a mistake a blind run made without the skill, or
-// a contract of the compose CLI as it ships: a capture handed to compose
-// unsealed, a spec written away from its sidecar, a lift that cut a fact in
+// a contract of the capture tool or the compose CLI as it ships: a sidecar
+// edited by hand, a spec written away from its sidecar, a lift that cut a fact in
 // half, a thin-strip crop accepted as is, a board reported unread. The skill
 // must also name every mark kind and layout the validator accepts.
 test('composing-evidence states the compose contract and the blind-run lessons', async () => {
@@ -888,14 +886,48 @@ test('composing-evidence states the compose contract and the blind-run lessons',
   const phrase = (words) => new RegExp(words.split(' ').join('\\s+'));
   const { STATES, TAGS, MARK_KINDS, LAYOUTS } = await import('../../lib/compose/spec.mjs');
 
-  assert.match(text, /~\/\.fast-browser\/macros\/capture-evidence\.js/);
-  assert.match(text, phrase('with `~` written out'));
-  assert.match(text, /home: "<your absolute home directory>"/);
-  assert.match(text, /fast-browser compose --seal <file>/);
+  assert.match(text, /`browser_capture_evidence`/);
+  assert.match(text, /targets: \{ <key>: "<selector>" \}, frame: "auto", out: "<board>\.c1"/);
+  assert.doesNotMatch(text, /browser_run_code_unsafe/);
+  assert.doesNotMatch(text, /--seal/);
+  assert.doesNotMatch(text, /capture-evidence\.js/);
+  assert.match(text, /Never edit the sidecar/);
+  assert.match(text, phrase('the frame selector is larger than the viewport'));
+  assert.match(text, phrase('inside a shadow root or an iframe'));
+  assert.match(text, phrase('capture again once'));
+  assert.match(text, phrase('read `error`, then fix what that step names'));
+  assert.match(text, phrase('The return carries its path as `sidecar`'));
+  assert.match(text, phrase('A return is finished only when `missed` is empty'));
+  assert.match(text, phrase('`frameSnap` is not `union`'));
+  assert.match(text, phrase('only when `missed` is empty, `frameSnap` is not `union` and there is no `failedStep`'));
+  assert.match(text, phrase('until then fix the cause, capture again, and write no spec'));
+  assert.match(text, phrase('Remove a key the board does not need from `targets`'));
+  assert.match(text, phrase('If the same key misses on the second capture, report it and stop that board'));
+  assert.match(text, phrase('other boards in the same job continue'));
+  assert.doesNotMatch(text, /after two captures/);
+  assert.doesNotMatch(text, /nothing to seal/i);
+  assert.match(text, phrase('`frameSnap` is `union`: pass `frame: "<selector>"` for the element that holds the targets'));
+  assert.doesNotMatch(text, phrase('If it is still `union`'));
+  assert.match(text, phrase('for the element that holds the targets and capture again. The frame from that capture is final, thin strip or not; if it is a thin strip, say so in the report. If that capture fails at `frame` because no element both holds the targets and fits the viewport, say so in the report and stop that board'));
+  assert.match(text, phrase('when the tool chose the frame, that is `frameSnap` is neither `union` nor `selector`: try once with'));
+  assert.match(text, phrase('If it fails, the earlier files are untouched: keep them and say so in the report'));
+  assert.doesNotMatch(text, phrase('keep the frame the tool chose'));
+  assert.match(text, phrase('If that capture succeeds and is no better, capture once more with `frame: "auto"` to get the tool\'s frame back, and say so in the report'));
+  assert.match(text, phrase('If it fails the same way, report it and stop that board; other boards in the same job continue'));
+  assert.match(text, phrase('run `fast-browser setup`, ask the human to restart the Fast Browser session, and capture once it is back'));
+  assert.doesNotMatch(text, phrase('run `fast-browser setup`, then capture'));
+  assert.match(text, phrase('Compose refuses a sidecar whose image, frame, boxes or scale were changed afterwards'));
+  assert.match(text, phrase('`count` says how many elements matched'));
+  assert.doesNotMatch(text, phrase('If it does not drop to one after scoping'));
+  assert.match(text, phrase('`count` says how many elements matched; read the structure of that region'));
+  assert.match(text, phrase('before the second capture, then scope to the smallest element'));
+  assert.match(text, phrase('smallest element that holds the wanted match and none of the others'));
+  assert.match(text, phrase('Changing the words inside the same kind of selector is not a fix'));
+  assert.match(text, phrase('`failedStep: "resolve"` or `"frame"` saying the element is inside a shadow root'));
   assert.match(text, /fast-browser compose <spec\.json>/);
   assert.match(text, phrase('beside the sidecar'));
   assert.match(text, /failedStep/);
-  assert.match(text, phrase('Never edit the return'));
+  assert.match(text, phrase('Never edit the sidecar'));
   // Only no-match and ambiguous are selector problems; the other two misses
   // and a too-large frame need the page or the viewport changed instead.
   assert.match(text, phrase('`no-match` or `ambiguous`: the selector is wrong'));

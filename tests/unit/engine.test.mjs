@@ -7,6 +7,7 @@ import { runtimeArgs } from '../../lib/runtime/launch.mjs';
 const paths = {
   dataDir: '/synthetic-home/.fast-browser',
   outputDir: '/synthetic-home/.fast-browser/output',
+  screenshotsDir: '/synthetic-home/.fast-browser/screenshots',
 };
 const lock = { extension: { id: 'abcdefghijklmnopabcdefghijklmnop' } };
 
@@ -46,6 +47,7 @@ test('the attached arg list keeps its exact historical order', () => {
     '--codegen=none',
     '--timeout-settle=200',
     '--output-dir=/synthetic-home/.fast-browser/output',
+    '--capture-dir=/synthetic-home/.fast-browser/screenshots',
   ]);
 });
 
@@ -58,6 +60,7 @@ test('the cdp engine emits the endpoint and never --headless or --extension', ()
     '--codegen=none',
     '--timeout-settle=200',
     '--output-dir=/synthetic-home/.fast-browser/output',
+    '--capture-dir=/synthetic-home/.fast-browser/screenshots',
   ]);
   // Under --cdp-endpoint, headlessness belongs to the sidecar's Chrome.
   // Emitting the flag would imply a knob that does nothing.

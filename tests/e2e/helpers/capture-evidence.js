@@ -1,8 +1,6 @@
 async (page, args) => {
-  // Only locator.count, locator.evaluate, locator.first().waitFor, page.evaluate, page.screenshot and
-  // page.waitForTimeout: those are the calls proven safe over the extension
-  // relay. Element handles stalled the relay in the spike, and a new CDP
-  // session kills it, so neither may appear here.
+  // The headless 1x capture script the fixture suites use. The capture tool,
+  // not this file, defines the capture rules.
   const { targets = {}, frame = 'auto', out = 'capture', home } = args || {};
   if (typeof home !== 'string' || home[0] !== '/' || home.split('/').includes('..')) {
     return { failedStep: 'args', error: "home must be the caller's absolute home directory path, with no .. segments" };

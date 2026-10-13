@@ -310,27 +310,27 @@ test('bundled lock pins the intended candidate identity and immutable artifact U
 
   assert.deepEqual(lock, {
     schemaVersion: 1,
-    productVersion: '0.1.2',
-    sourceCommit: '2136981392ab38fdffa66629793ff49bd78bfdcd',
+    productVersion: '0.1.3',
+    sourceCommit: 'f21bd60029e93f92a167d3c8b461020c2c787d92',
     protocolVersion: 2,
     runtime: {
       url: 'https://github.com/m4ttheweric/playwright/releases/download/'
-        + 'fast-browser-v0.1.2/fast-browser-mcp-0.1.2.tar.gz',
-      file: 'fast-browser-mcp-0.1.2.tar.gz',
-      sha256: '61b625cd8277110eae61be3187af848978da269d2777b7fd07636e855b67bebe',
+        + 'fast-browser-v0.1.3/fast-browser-mcp-0.1.3.tar.gz',
+      file: 'fast-browser-mcp-0.1.3.tar.gz',
+      sha256: '9d05ed1fcfa2c7ee509098462a52d26d08361a6a23f9979c77ffd035553eb202',
       node: '>=20',
     },
     extension: {
       url: 'https://github.com/m4ttheweric/playwright/releases/download/'
-        + 'fast-browser-v0.1.2/fast-browser-extension-0.1.2.zip',
-      file: 'fast-browser-extension-0.1.2.zip',
+        + 'fast-browser-v0.1.3/fast-browser-extension-0.1.3.zip',
+      file: 'fast-browser-extension-0.1.3.zip',
       sha256: 'b6bccac5cdd19c5588b6c9f77847877a88021acb55a67ad3153085ac2efe63a7',
       id: 'fnfikoifhimpdedpdepehibjjkcfbacm',
       version: '0.2.11',
       crx: {
         url: 'https://github.com/m4ttheweric/playwright/releases/download/'
-          + 'fast-browser-v0.1.2/fast-browser-extension-0.1.2.crx',
-        file: 'fast-browser-extension-0.1.2.crx',
+          + 'fast-browser-v0.1.3/fast-browser-extension-0.1.3.crx',
+        file: 'fast-browser-extension-0.1.3.crx',
         sha256: 'b98600eb6b42a2e3d40cc4a165c02a7b64da7cfefc288e4b4214756cec8a41ca',
       },
     },
@@ -386,6 +386,7 @@ function launcherPaths(directory) {
     dataDir: path.join(directory, '.fast-browser'),
     runtimeDir: path.join(directory, '.fast-browser', 'runtime'),
     outputDir: path.join(directory, '.fast-browser', 'output'),
+    screenshotsDir: path.join(directory, '.fast-browser', 'screenshots'),
   };
 }
 
@@ -399,6 +400,7 @@ test('builds exact safe and full runtime argument snapshots', () => {
     '--codegen=none',
     '--timeout-settle=200',
     `--output-dir=${paths.outputDir}`,
+    `--capture-dir=${paths.screenshotsDir}`,
     '--save-trace',
   ];
 
@@ -450,6 +452,7 @@ test('runtimeArgs omits --save-trace exactly when config.trace is false', () => 
     '--codegen=none',
     '--timeout-settle=200',
     `--output-dir=${paths.outputDir}`,
+    `--capture-dir=${paths.screenshotsDir}`,
   ];
 
   assert.deepEqual(

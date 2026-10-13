@@ -14,36 +14,63 @@ you never place anything by pixel.
 1. **Choose selectors.** On a large page a full `browser_snapshot` can run to
    tens of thousands of tokens; use `browser_find`, or a snapshot scoped to
    the section you need, instead.
-2. **Capture.** `browser_run_code_unsafe` with
-   `filename: "<your absolute home directory>/.fast-browser/macros/capture-evidence.js"`,
-   the `~/.fast-browser/macros/capture-evidence.js` path with `~` written out
-   (a bare or `~` path is refused as outside allowed roots), and
-   `args: { targets: { <key>: "<selector>" }, frame: "auto", out: "<board>.c1", home: "<your absolute home directory>" }`.
-   `out` is a plain file name; the PNG lands in `~/.fast-browser/screenshots/`.
-   If the call reports the macro file is missing (ENOENT), run
-   `fast-browser setup`, then capture.
-3. **Check the return.** Never edit the return. Fix the cause and capture
-   again:
-   - It has `failedStep`: fix what that step names (`args`, `resolve`,
-     `frame`, `measure`).
+2. **Capture.** Call `browser_capture_evidence` with
+   `{ targets: { <key>: "<selector>" }, frame: "auto", out: "<board>.c1" }`.
+   `out` is a plain file name. The tool screenshots the viewport at 2x,
+   measures each target, and writes `<board>.c1.png` and
+   `<board>.c1.capture.json` (the sidecar) into `~/.fast-browser/screenshots/`.
+   If the tool is not in your tool list, run `fast-browser setup`, ask the
+   human to restart the Fast Browser session, and capture once it is back.
+3. **Check the return.** Never edit the sidecar. A return is finished only
+   when `missed` is empty, `frameSnap` is not `union` and there is no
+   `failedStep`; until then fix the cause, capture again, and write no spec.
+   Remove a key the board does not need from `targets`. If the same key
+   misses on the second capture, report it and stop that board; other boards
+   in the same job continue. Do not compose around it.
+   - It has `failedStep`: read `error`, then fix what that step names
+     (`args`, `resolve`, `frame`, `measure`).
    - `failedStep: "frame"` with `frameSnap: "too-large"`: the targets cannot
      share one viewport-sized frame. Enlarge the viewport with
      `browser_resize`, or split them into separate boards.
+   - `failedStep: "frame"` saying the frame selector is larger than the
+     viewport: pick a smaller element, or enlarge the viewport with
+     `browser_resize`.
    - A key is in `missed` as `no-match` or `ambiguous`: the selector is
-     wrong. Fix it, scoping to a unique container.
+     wrong. Fix it, scoping to a unique container. For `ambiguous`, `count`
+     says how many elements matched; read the structure of that region
+     (`browser_find`, or a `browser_snapshot` scoped to it) before the second
+     capture, then scope to the smallest element that holds the wanted match
+     and none of the others. Changing the words inside the same kind of
+     selector is not a fix.
    - A key is in `missed` as `not-visible` (zero-size box): the element is
      collapsed or hidden. Open, expand or reveal it first.
    - A key is in `missed` as `out-of-view`: it fell outside the viewport once
      the frame was centred, so the targets are too far apart for one view.
      Pass a tighter `frame`, enlarge the viewport with `browser_resize`, or
      split into separate boards.
-   - `frameSnap` is `union`, or `frame` is a thin strip (far wider than it is
-     tall, or cutting through the card): pass `frame: "<selector>"` for the
-     card that holds the targets.
-4. **Seal.** Save the return, verbatim, to a file (for example
-   `~/.fast-browser/screenshots/<board>.c1.return.json`) and run
-   `fast-browser compose --seal <file>`. It prints the sidecar path,
-   `~/.fast-browser/screenshots/<board>.c1.capture.json`.
+   - `failedStep: "resolve"` or `"frame"` saying the element is inside a
+     shadow root or an iframe: it cannot be a target. Name the element
+     that hosts it (the custom element, or the `iframe`) instead.
+   - `frameSnap` is `union`: pass `frame: "<selector>"` for the element that
+     holds the targets and capture again. The frame from that capture is
+     final, thin strip or not; if it is a thin strip, say so in the report.
+     If that capture fails at `frame` because no element both holds the
+     targets and fits the viewport, say so in the report and stop that board.
+   - `frame` is a thin strip (far wider than it is tall, or cutting through
+     the card) when the tool chose the frame, that is `frameSnap` is neither
+     `union` nor `selector`: try once with `frame: "<selector>"` for the
+     element that holds the targets. If that capture succeeds and is no
+     better, capture once more with `frame: "auto"` to get the tool's frame
+     back, and say so in the report. If it fails, the earlier files are
+     untouched: keep them and say so in the report.
+   - The call fails with an error instead of a return (it timed out, the
+     page moved while it was captured, the page lays out differently at
+     2x, the page is pinch-zoomed): do what the message says, then
+     capture again once. If it fails the same way, report it and stop that
+     board; other boards in the same job continue.
+4. **Keep the sidecar.** The return carries its path as `sidecar`; carry that
+   path forward. Compose refuses a sidecar whose image, frame, boxes or
+   scale were changed afterwards.
 5. **Write the spec** beside the sidecar, in `~/.fast-browser/screenshots/`.
    `capture` names the sidecar by its file name only.
 6. **Render.** `fast-browser compose <spec.json>`. If it lists problems, fix
