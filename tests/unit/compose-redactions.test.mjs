@@ -167,7 +167,7 @@ for (const [label, out, prepare] of [
 test('the CLI parses --confirm as a mode of its own', () => {
   assert.equal(parseArgs(['compose', '--confirm', 'b.spec.json']).confirm, 'b.spec.json');
   assert.equal(parseArgs(['compose', 'b.spec.json']).confirm, null);
-  assert.throws(() => parseArgs(['compose', 'b.spec.json', '--confirm', 'b.spec.json']), /compose takes one of a spec path, --seal, --import or --confirm/);
+  assert.throws(() => parseArgs(['compose', 'b.spec.json', '--confirm', 'b.spec.json']), /compose takes one of a spec path, --import or --confirm/);
   assert.throws(() => parseArgs(['compose', '--confirm']), /--confirm requires a value/);
 });
 

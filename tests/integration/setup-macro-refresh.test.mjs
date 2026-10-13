@@ -140,21 +140,17 @@ const CURRENT_RECON_SECTION = syntheticSection('page-recon', 'maxLinks?: number,
 const CURRENT_CAPTURE_SECTION = syntheticSection('capture-annotated', 'targets: object');
 const CURRENT_AFFORDANCES_SECTION = syntheticSection('page-affordances', 'maxButtons?: number');
 const CURRENT_RUNNER_SECTION = syntheticSection('flow-runner', 'flow: object, args: object');
-const CURRENT_EVIDENCE = '// current evidence\n';
-const CURRENT_EVIDENCE_SECTION = syntheticSection('capture-evidence', 'targets: object, out: string');
 const CURRENT_MACROS = {
   'page-recon.js': CURRENT_RECON,
   'page-affordances.js': CURRENT_AFFORDANCES,
   'capture-annotated.js': CURRENT_CAPTURE,
   'flow-runner.js': CURRENT_RUNNER,
-  'capture-evidence.js': CURRENT_EVIDENCE,
 };
 const CURRENT_SECTIONS = {
   'page-recon': CURRENT_RECON_SECTION,
   'page-affordances': CURRENT_AFFORDANCES_SECTION,
   'capture-annotated': CURRENT_CAPTURE_SECTION,
   'flow-runner': CURRENT_RUNNER_SECTION,
-  'capture-evidence': CURRENT_EVIDENCE_SECTION,
 };
 
 async function movedOnPluginRoot(t) {

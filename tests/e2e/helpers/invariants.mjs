@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 
 export const intersects = (a, b) => a[0] < b[0] + b[2] && b[0] < a[0] + a[2] && a[1] < b[1] + b[3] && b[1] < a[1] + a[3];
-export const inside = (a, b) => a[0] >= b[0] - 0.5 && a[1] >= b[1] - 0.5 && a[0] + a[2] <= b[0] + b[2] + 0.5 && a[1] + a[3] <= b[1] + b[3] + 0.5;
+export const inside = (a, b, slack = 0.5) => a[0] >= b[0] - slack && a[1] >= b[1] - slack && a[0] + a[2] <= b[0] + b[2] + slack && a[1] + a[3] <= b[1] + b[3] + slack;
 export const segmentHitsRect = ([x1, y1], [x2, y2], r) => {
   const minX = Math.min(x1, x2); const maxX = Math.max(x1, x2); const minY = Math.min(y1, y2); const maxY = Math.max(y1, y2);
   return intersects([minX, minY, Math.max(maxX - minX, 0.01), Math.max(maxY - minY, 0.01)], [r[0] + 1, r[1] + 1, r[2] - 2, r[3] - 2]);
@@ -24,7 +24,9 @@ export const pathsCross = (a, b) => a.slice(1).some((p, i) => b.slice(1).some((q
 // A line on a label's edge touches its text, so the rect is inflated by the 1px segmentHitsRect trims.
 const inflate = (r) => [r[0] - 1, r[1] - 1, r[2] + 2, r[3] + 2];
 
+// Lift sources, pads and the panel's frame are in that panel's capture pixels, so the numbers compared with them scale by its scale.
 export function assertPanel(panel, stage) {
+  const scale = panel.scale ?? 1;
   for (const label of panel.labels) {
     assert.equal(intersects(label.rect, panel.capture), false, 'a label overlaps the screenshot');
     assert.ok(inside(label.rect, stage), 'a label leaves the stage');
@@ -35,7 +37,7 @@ export function assertPanel(panel, stage) {
   for (const lift of panel.lifts) assert.ok(inside(lift.rect, panel.capture), 'a lift leaves the frame');
   for (const lift of panel.lifts) {
     const [x, y, w, h] = lift.source; const [left, top, right, bottom] = lift.pad;
-    assert.ok(inside([x - left, y - top, w + left + right, h + top + bottom], panel.frame), 'a lift draws capture pixels outside the panel\'s shown region');
+    assert.ok(inside([x - left, y - top, w + left + right, h + top + bottom], panel.frame, 0.5 * scale), 'a lift draws capture pixels outside the panel\'s shown region');
   }
   for (const r of panel.redactions) assert.ok(inside(r.rect, panel.capture), 'a redaction is drawn outside the screenshot');
   for (const slot of panel.slots ?? []) assert.ok(inside(slot.rect, panel.capture), 'a slot leaves the frame');
@@ -69,7 +71,7 @@ export function assertPanel(panel, stage) {
   }));
   panel.lifts.forEach((a, i) => panel.lifts.slice(i + 1).forEach((b) => {
     // Lifts closer than their two paddings cannot be kept apart.
-    if (intersects([a.source[0] - 8, a.source[1] - 8, a.source[2] + 16, a.source[3] + 16], b.source)) return;
+    if (intersects([a.source[0] - 8 * scale, a.source[1] - 8 * scale, a.source[2] + 16 * scale, a.source[3] + 16 * scale], b.source)) return;
     assert.equal(intersects(a.rect, b.rect), false, 'two lifts of separate content overlap');
   }));
   const dotted = panel.leaders.filter((leader) => ['lift', 'slot'].includes(panel.targets[leader.target].kind)).length;

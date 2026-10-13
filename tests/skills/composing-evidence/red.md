@@ -114,6 +114,31 @@ or source removes the guessing. So this is not a valid RED. The rule was
 added anyway because Matt chose a skill tip after blind runs 3 and 4, where
 3 captures went to xpath guesses and run 2 succeeded with the role form.
 
+## 2026-10-12: Capture as a tool
+
+Edit: pipeline steps 2 to 4 now name the `browser_capture_evidence` tool in
+place of the capture macro, and the seal step is gone because the tool writes
+the sidecar itself. Step 3 gains the tool's failure modes (a target inside a
+shadow root or an iframe, a call that fails with an error). The pressure run
+for this wording is the blind eval on the real tool; its result is in
+`green.md`.
+
+## 2026-10-12: Blind eval of the capture tool
+
+A fresh agent given only a brief and the skill, driving the real capture
+tool on a real page, did two things step 3 did not stop:
+
+- It composed from an unfinished return. One capture left two of four keys
+  in `missed` as `ambiguous`, and the agent wrote a spec from the two boxes it
+  had. Another returned `frameSnap: "union"`, and the agent composed from it
+  without capturing again with a `frame` selector; the crop cut through
+  neighbouring page chrome.
+- It had no next move after a second `ambiguous`. Three identical buttons sat
+  in one header. It scoped with a `text=` selector, got `count: 3`, changed
+  only the words in that selector, got `count: 4`, and gave up. Both
+  selectors matched an element large enough to hold every button, and the
+  agent never read the structure between the two tries.
+
 ## 2026-10: marks and layouts (milestone 3)
 
 Harness: text-only. Three fresh `general-purpose` sonnet (medium) agents read

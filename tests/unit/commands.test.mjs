@@ -4179,6 +4179,72 @@ test('setup upgrade installs the renderer after the runtime and tolerates its fa
   assert.equal(JSON.parse(writes.join('')).renderer.installed, false);
 });
 
+test('a first install does not force the renderer', async () => {
+  const writes = [];
+  const forces = [];
+  const { events, deps } = rendererSetupDeps({
+    installRenderer: async (options) => { events.push('renderer'); forces.push(options.force); throw new FakeRendererInstallError('the download failed its checksum'); },
+    write: (text) => writes.push(text),
+  });
+  const exitCode = await main(
+    { command: 'setup', hosts: ['claude'], profile: 'safe', source: '/repo/mattstack', json: true },
+    deps,
+  );
+  assert.equal(exitCode, 0);
+  assert.deepEqual(forces, [false], 'a first install does not force the renderer');
+  assert.equal(events.includes('save'), true);
+  const { renderer } = JSON.parse(writes.join(''));
+  assert.equal(renderer.installed, false);
+  assert.match(renderer.warning, /fast-browser setup/);
+  assert.match(renderer.warning, /failed its checksum/);
+});
+
+test('an upgrade does not force the renderer', async () => {
+  const homeDir = await mkdtemp(path.join(tmpdir(), 'fast-browser-renderer-upgrade-'));
+  try {
+    const paths = resolvePaths({ homeDir });
+    const oldLock = { ...rendererLock, productVersion: '0.1.0-alpha.1', sourceCommit: 'commit-old', extension: { ...rendererLock.extension, version: '0.2.1' } };
+    const runtimeDir = path.join(paths.runtimeDir, oldLock.productVersion);
+    await mkdir(path.join(runtimeDir, 'fast-browser-mcp'), { recursive: true });
+    await writeFile(path.join(runtimeDir, 'fast-browser-mcp', 'cli.cjs'), '// stub\n');
+    await writeFile(path.join(runtimeDir, 'installed.json'), JSON.stringify({
+      schemaVersion: 1,
+      lock: runtimeLockIdentity(oldLock),
+      contentDigest: await buildContentManifestDigest(path.join(runtimeDir, 'fast-browser-mcp')),
+    }), { mode: 0o600 });
+    const { directory: extDir } = extensionInstallLocation(paths);
+    await mkdir(path.join(extDir, 'unpacked'), { recursive: true });
+    await writeFile(path.join(extDir, 'unpacked', 'manifest.json'), '{}');
+    await writeFile(path.join(extDir, 'installed.json'), JSON.stringify({
+      schemaVersion: 1,
+      lock: runtimeLockIdentity(oldLock),
+      contentDigest: await buildContentManifestDigest(path.join(extDir, 'unpacked')),
+    }), { mode: 0o600 });
+
+    const writes = [];
+    const forces = [];
+    const { events, deps } = rendererSetupDeps({
+      paths,
+      installRenderer: async (options) => { events.push('renderer'); forces.push(options.force); throw new FakeRendererInstallError('the download failed its checksum'); },
+      write: (text) => writes.push(text),
+      loadConfig: async () => ({ ...defaultConfig(), profile: 'safe', hosts: { claude: true, codex: false } }),
+      isSetupCurrent: async () => true,
+      doctor: async () => ({
+        schemaVersion: 1,
+        ok: false,
+        checks: ['runtime-checksum', 'mcp-handshake', 'tool-contract'].map((id) => ({ id, status: 'fail', message: id, remediation: null })),
+      }),
+    });
+    const exitCode = await main(
+      { command: 'setup', hosts: ['claude'], profile: 'safe', source: '/repo/mattstack', json: true },
+      deps,
+    );
+    assert.equal(exitCode, 0);
+    assert.deepEqual(events.filter((e) => e === 'runtime' || e === 'renderer'), ['runtime', 'renderer']);
+    assert.deepEqual(forces, [false], 'an upgrade does not force the renderer');
+  } finally { await rm(homeDir, { recursive: true, force: true }); }
+});
+
 for (const [status, retried] of [['fail', true], ['pass', false]]) {
   test(`a rerun on a current install ${retried ? 'retries' : 'skips'} the renderer when doctor's compose-renderer ${retried ? 'fails' : 'passes'}`, async () => {
     const writes = [];

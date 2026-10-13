@@ -26,7 +26,6 @@ const requiredEntries = [
   'package/builtins/macros/page-recon.js',
   'package/builtins/macros/page-affordances.js',
   'package/builtins/macros/flow-runner.js',
-  'package/builtins/macros/capture-evidence.js',
   'package/assets/fonts/InterVariable.woff2',
   'package/lib/commands/compose.mjs',
   'package/lib/compose/page-geometry.js',
@@ -216,6 +215,11 @@ test('npm package contains only portable deployable Fast Browser assets', async 
   for (const required of requiredEntries) {
     assert.equal(entrySet.has(required), true, `package is missing ${required}`);
   }
+  assert.equal(
+    entries.some((entry) => entry.endsWith('capture-evidence.js')),
+    false,
+    'the capture test helper must not ship',
+  );
   assert.equal(
     entries.filter((entry) => /\/skills\/[^/]+\/SKILL\.md$/.test(entry)).length,
     7,

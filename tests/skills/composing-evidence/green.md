@@ -49,6 +49,102 @@ Same harness, page and snapshot as the RED round 3: 3 of 3 wrote
 cited the new row as the reason. No regression; the rule is untested against
 the real-page failure, which only the blind eval can show.
 
+## 2026-10-12: Capture as a tool
+
+Edit: pipeline steps 2 to 4 now name the `browser_capture_evidence` tool in
+place of the capture macro, and the seal step is gone because the tool writes
+the sidecar itself. Step 3 gains the tool's failure modes (a target inside a
+shadow root or an iframe, a call that fails with an error). The pressure run
+for this wording is the blind eval on the real tool; its result is in the
+entry "Blind eval of the capture steps" below.
+
+## 2026-10-12: A finished return, and what ambiguous asks for
+
+Edit: step 3 now states that a return is finished only when `missed` is
+empty, `frameSnap` is not `union` and there is no `failedStep`, and that
+until then the next move is another capture, never a spec; a key the board
+does not need is removed from `targets`, and the same key missing after two
+captures is reported and stops the board. The `ambiguous` case now says
+`count` is how many elements matched, that a count which does not drop to one
+means the container is too large, and that the next move is to read the
+structure of that region and scope to the smallest element that holds the
+wanted match and none of the others; changing the words inside the same kind
+of selector is not a fix. The pressure run for this wording is the entry
+below.
+
+## 2026-10-12: Blind eval of the capture steps
+
+Setup: a fresh agent given only a brief and this skill's text, driving the
+real `browser_capture_evidence` tool on a real page. Five boards were asked
+for, and the brief allowed at most three capture calls per board.
+
+Before the step 3 change (the run described in `red.md`): four of five
+boards, one capture call each. The agent composed from a return with keys in
+`missed` and from a `union` frame, and gave up on a badge after two
+`ambiguous` results.
+
+After the step 3 change: five of five boards. Capture calls per board were
+1, 1, 1, 2, 2. The agent that had re-worded an ambiguous selector now read
+the structure of the region before scoping again and resolved the badge on
+its second capture. The capture that came back `union` was captured again
+with a `frame` selector before any spec was written. No board was composed
+from an unfinished return. Both declared redactions held.
+
+Not fixed by the change: board quality is a separate matter. A judge scoring
+three of the boards against design mocks gave one 4 and two 3s out of 5, for
+how the lifts were laid out and what was lifted, not for the capture or for
+step 3.
+
+## 2026-10-12: Wording of steps 3 and 4 after a cold read
+
+A cold read of steps 2 to 4 found that the frame case had no exit: the
+finished-return rule let a thin-strip `frame` through while the bullet below it
+said to fix it, and on a page with no card there was nothing to pass. Three
+phrases were also ambiguous. The thin strip is now one attempt with a `frame`
+selector, then keep the tool's frame and say so; `union` gets one retry, then
+stops that board. The stop for a repeatedly missed key says that board stops
+and the others continue, "after two captures" became "on the second capture",
+and step 4 no longer mentions sealing, a step the reader never saw. It says
+what compose refuses. No new run result: this is a wording change checked by
+the phrase pins in `tests/unit/skills.test.mjs`.
+
+2026-10-12: step 4 now says compose also refuses a sidecar whose `scale` was changed afterwards, since the digest covers a scale other than 1. Wording change only, pinned in `tests/unit/skills.test.mjs`.
+
+Wording change after a cold read, 2026-10-13: a missing capture tool needs a
+restart of the Fast Browser session after `fast-browser setup`, since a
+running session keeps its tool list; an `ambiguous` key's structure is read
+before the second capture, so the two-capture stop rule holds; a `union`
+frame is retried with an explicit selector and the board stops when that
+capture fails at `frame`; a selector capture that is no better is followed by
+one `frame: "auto"` capture, because a successful selector capture has
+overwritten the files; a repeated error stops that board only. No new round:
+each sentence follows what the tool does.
+
+Wording change after a re-read, 2026-10-13: the `union` and thin-strip bullets
+were made exclusive because a re-read found a loop between them (an auto
+frame of `union`, then a selector frame that is a thin strip, then auto
+again). The thin-strip bullet now applies only when the tool chose the frame,
+and the frame from a selector capture after `union` is final.
+
+## 2026-10-13: Blind eval on the pinned runtime, with the marks and layouts merged in
+
+One clean Sonnet run at medium effort, given the brief and this skill only,
+drove the capture tool of the pinned runtime in a real Chrome over the same
+five cases as the 2026-10-12 eval. Five boards of five; capture calls 1, 1, 1,
+1 and 2 (an auto frame came back `union` and was captured again with a frame
+selector, as step 3 says); every capture at 2x with no missed key; both
+declared redactions are solid fills. The agent reached for the lens on the
+case with a tiny badge, the first run to magnify it. It wrote no `tag` and no
+`note` on any mark.
+
+Not fixed by the change, as on 2026-10-12: board quality. A judge given only
+the three boards that have a hand-drawn mock, and the mocks, scored them 4, 3
+and 2 of 5. The faults are layout and choice of marks: a lift that leaves an
+icon outside it, whole rows lifted with nothing enlarged, a leader dot on the
+next row of text, one lift several times the size of its neighbour, and a
+crop that keeps a column the mock leaves out. The captures are on target and
+sharp.
+
 ## 2026-10: marks and layouts (milestone 3)
 
 Edit: the spec section now documents all seven marks (`lift`, `redact`,
