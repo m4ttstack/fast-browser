@@ -1,0 +1,9 @@
+{ "state": "BEFORE → AFTER", "title": "The burndown chart renders again", "layout": "pair", "out": "fx-import-pair-3x.png",
+  "expect": { "origin": [true, false], "sizeRatio": 2.5, "crops": 2 },
+  "panels": [
+    { "label": "BEFORE", "fixture": { "import": { "page": "ticket-before", "dpr": 3, "format": "jpeg" } },
+      "frame": [108, 108, 1284, 804],
+      "boxes": { "chart": [183, 387, 1140, 360], "contact": [177, 783, 580, 72] },
+      "marks": [ { "empty": "chart", "text": "Nothing rendered here" }, { "redact": "contact" } ] },
+    { "label": "AFTER", "fixture": { "page": "ticket-after", "targets": { "chart": "[data-testid=chart]", "contact": "[data-testid=contact]" }, "frame": "[data-testid=burndown]" },
+      "marks": [ { "lift": "chart", "title": "Chart renders", "tag": "OK" }, { "redact": "contact" } ] } ] }

@@ -881,12 +881,12 @@ test('the browser-driver asks back and the caller resumes the same agent', async
 // Each line pinned here is a mistake a blind run made without the skill, or
 // a contract of the compose CLI as it ships: a capture handed to compose
 // unsealed, a spec written away from its sidecar, a lift that cut a fact in
-// half, a thin-strip crop accepted as is, a board reported unread. Marks and
-// layouts the CLI does not support stay out until they exist.
+// half, a thin-strip crop accepted as is, a board reported unread. The skill
+// must also name every mark kind and layout the validator accepts.
 test('composing-evidence states the compose contract and the blind-run lessons', async () => {
   const text = await readFile(path.join(pluginRoot, 'skills/composing-evidence/SKILL.md'), 'utf8');
   const phrase = (words) => new RegExp(words.split(' ').join('\\s+'));
-  const { STATES, TAGS, MARK_KINDS_M1 } = await import('../../lib/compose/spec.mjs');
+  const { STATES, TAGS, MARK_KINDS, LAYOUTS } = await import('../../lib/compose/spec.mjs');
 
   assert.match(text, /~\/\.fast-browser\/macros\/capture-evidence\.js/);
   assert.match(text, phrase('with `~` written out'));
@@ -917,10 +917,59 @@ test('composing-evidence states the compose contract and the blind-run lessons',
   assert.match(text, phrase('Read the PNG'));
   for (const state of STATES) assert.ok(text.includes(`\`${state}\``), state);
   for (const tag of TAGS) assert.ok(text.includes(`\`${tag}\``), tag);
-  assert.deepEqual([...MARK_KINDS_M1], ['lift', 'redact']);
-  for (const unsupported of ['bracket', 'loupe', '"link"', '"empty"', '"pair"', '"steps"']) {
-    assert.ok(!text.includes(unsupported), `documents unsupported ${unsupported}`);
-  }
+  const between = (from, to) => text.slice(text.indexOf(from), text.indexOf(to));
+  const layoutRows = between('### Layouts', '### Marks');
+  const markRows = between('### Marks', '## A screenshot from a ticket');
+  for (const kind of MARK_KINDS) assert.match(markRows, new RegExp(`^\\|[^|]*\\|\\s*\`${kind}\``, 'm'), kind);
+  for (const layout of Object.keys(LAYOUTS)) assert.match(layoutRows, new RegExp(`^\\| \`${layout}\` \\|`, 'm'), layout);
+  assert.match(text, phrase('too small to read'));
+  assert.match(text, phrase('exactly two keys'));
+  assert.match(text, phrase('One capture per panel'));
+  assert.match(text, phrase('the same selectors and the same frame selector'));
+  assert.match(text, phrase('all panels at one height'));
+  assert.match(text, /fast-browser compose --import <image> --out <board>\.c1 --origin <ticket link>/);
+  assert.match(text, phrase("the image's real pixels"));
+  assert.match(text, phrase('in a `pair` of one region, both panels show the same region'));
+  assert.doesNotMatch(text, phrase('every panel shows the same region'));
+  assert.match(text, phrase('Read every crop'));
+  assert.match(text, phrase('Read every crop as well as the board'));
+  assert.match(text, phrase('the crop is where a redaction is checked'));
+  assert.match(text, phrase('because a shrunken board is how a readable sliver survives'));
+  assert.match(text, phrase('On a ticket image compose never widens the frame you give'));
+  assert.match(text, phrase('move that edge yourself'));
+  assert.match(text, /fast-browser compose --confirm <spec\.json>/);
+  assert.match(text, phrase('Never run it yourself'));
+  assert.match(text, phrase('renders it unconfirmed again'));
+  assert.match(text, phrase('unless the operator confirmed the crops of the latest render'));
+  assert.match(text, phrase('ask again after any re-render'));
+  assert.match(text, phrase('attach or post the board nowhere until then'));
+  assert.match(text, phrase("one per redaction on the board, live panels' included"));
+  assert.match(text, phrase("also report each crop's path, that you read each one, and that the board is unconfirmed"));
+  assert.match(text, phrase('naming what that panel is'));
+  assert.match(text, phrase("A `pair` board shows each panel's frame whole"));
+  assert.match(text, phrase('less any blank margin at its edges'));
+  assert.match(text, phrase('A `steps` panel is already cropped to its marks, so there mark fewer things in the panel'));
+  assert.match(text, phrase('The warning `a crop edge cuts through content` means'));
+  assert.match(text, phrase('A `single` board and each panel of a `steps` board are cropped to their marks'));
+  assert.match(text, phrase('never a thin strip'));
+  assert.match(text, phrase("the page's `main` region, or any container that holds most of the page, is the whole page"));
+  assert.match(text, phrase('the element that holds the value together with the label or heading that says what it is'));
+  assert.match(text, phrase('every place that value, or a part of it, appears inside the frame'));
+  assert.match(text, phrase('A box that cuts an icon or a word in half reads as a glitch'));
+  assert.match(text, phrase('Look for every place the value, or a part of it, appears'));
+  assert.match(text, phrase('Make each box cover whole elements, or stop short of them'));
+  assert.match(text, phrase('redact each or frame them out; then check the board for it by eye'));
+  assert.match(text, phrase('in a `pair` of one region, capture both panels again with the same tighter selector'));
+  assert.match(text, phrase("for a ticket image, shrink the panel's `frame` rectangle instead"));
+  assert.match(text, phrase('`a panel is drawn small; frame the card that holds its marks` means'));
+  assert.match(text, phrase("An element in a card's header or toolbar is often not inside the container the card's body has"));
+  assert.match(text, phrase('A capture that comes back `no-match` is a capture spent'));
+  assert.match(text, phrase('a different icon beside it carries a name'));
+  assert.match(text, phrase('whose accessible name is `Pinned`, selected as'));
+  assert.match(text, phrase('report the case as not done'));
+  assert.match(text, phrase('`FOUND` is a problem found'));
+  assert.match(text, phrase('`lift` that text instead'));
+  assert.match(text, phrase('one, with no `label`: the board\'s `state` already says what it is'));
 
   const pointer = await readFile(path.join(pluginRoot, 'skills/annotating-screenshots/SKILL.md'), 'utf8');
   const body = pointer.replace(/^---\n[\s\S]*?\n---\n/, '');

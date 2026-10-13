@@ -1,0 +1,4 @@
+{ "state": "AFTER", "title": "Export is no longer in the release toolbar", "layout": "single", "out": "fx-ghost-button.png",
+  "targets": { "gap": "[data-testid=gap]" },
+  "expect": { "slots": [["ghost", null]], "noWarnings": true },
+  "panels": [{ "marks": [ { "ghost": "gap", "tag": "REMOVED", "title": "Export is gone", "note": "Removed from the toolbar" } ] }] }

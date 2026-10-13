@@ -1,0 +1,22 @@
+<!doctype html><meta charset="utf-8">
+<style>body{margin:0;font:14px Helvetica,Arial,sans-serif;background:#0b1020;color:#e5e7eb}
+.card{margin:40px;width:520px;padding:20px;background:#111827;border:1px solid #1f2937;border-radius:12px}
+.head{display:flex;gap:10px;align-items:center;margin-bottom:12px}
+h3{margin:0;font-size:16px}
+.badge{display:inline-block;width:10px;height:10px;background:#60a5fa;border-radius:3px}
+.chart{height:90px;border-radius:8px;background:#0f172a;margin-bottom:10px}
+.bar{display:flex;gap:8px;align-items:center;margin-top:12px}
+button{font:inherit;height:32px;padding:0 14px;border:1px solid #374151;border-radius:6px;background:#1f2937;color:#e5e7eb}
+.gap{display:inline-block;width:86px;height:32px}
+ul{list-style:none;margin:0;padding:0}
+li{width:max-content;padding:6px 0}
+b{font-weight:600;margin-left:8px;color:#9ca3af}</style>
+<div class="card" data-testid="board"><div class="head"><h3>Release 2.4</h3><span class="badge" data-testid="badge"></span></div>
+  <div class="chart" data-testid="chart"></div>
+  <ul>
+    <li>Unit tests <b>passed</b></li>
+    <li data-testid="r2">Lint <b>failed</b></li>
+    <li data-testid="r3">Build <b>failed</b></li>
+  </ul>
+  <div class="bar"><button>Edit</button><button>Duplicate</button><span class="gap" data-testid="gap"></span><button>Archive</button></div>
+</div>

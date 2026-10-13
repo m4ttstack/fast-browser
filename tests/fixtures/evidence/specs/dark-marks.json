@@ -1,0 +1,8 @@
+{ "state": "FOUND", "title": "The release card on a dark page", "layout": "single", "out": "fx-dark-marks.png",
+  "targets": { "chart": "[data-testid=chart]", "gap": "[data-testid=gap]", "r2": "[data-testid=r2]", "r3": "[data-testid=r3]", "badge": "[data-testid=badge]" },
+  "frame": "[data-testid=board]",
+  "panels": [{ "marks": [
+    { "empty": "chart", "text": "Nothing rendered here" },
+    { "ghost": "gap", "tag": "REMOVED", "title": "Export is gone" },
+    { "bracket": ["r2", "r3"], "title": "Two checks failing", "tag": "ISSUE" },
+    { "loupe": "badge", "zoom": 4, "title": "Pinned badge" } ] }] }

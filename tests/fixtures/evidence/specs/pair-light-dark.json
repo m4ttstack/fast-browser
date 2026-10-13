@@ -1,0 +1,7 @@
+{ "state": "AFTER", "title": "Seat usage reads the same in both themes", "layout": "pair", "out": "fx-pair-light-dark.png",
+  "expect": { "dark": [false, true] },
+  "panels": [
+    { "label": "LIGHT", "fixture": { "page": "theme-light", "targets": { "seats": "[data-testid=seats]" }, "frame": "[data-testid=plan]" },
+      "marks": [ { "lift": "seats", "title": "12 of 20" } ] },
+    { "label": "DARK", "fixture": { "page": "theme-dark", "targets": { "seats": "[data-testid=seats]" }, "frame": "[data-testid=plan]" },
+      "marks": [ { "lift": "seats", "title": "12 of 20" } ] } ] }
