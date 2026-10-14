@@ -1,6 +1,6 @@
 {
   "name": "fast-browser",
-  "version": "0.1.12",
+  "version": "0.1.13",
   "description": "Fast Playwright browser automation for Claude Code and Codex",
   "author": {
     "name": "Matthew Goodwin"

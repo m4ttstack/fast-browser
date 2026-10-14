@@ -1,0 +1,5 @@
+{ "state": "AFTER", "title": "Three checks after the build", "layout": "single", "out": "fx-bracket-divided.png",
+  "page": "row-facts", "frame": "[data-testid=checks]",
+  "targets": { "tests": "[data-testid=tests]", "lint": "[data-testid=lint]", "staging": "[data-testid=staging]" },
+  "expect": { "bracketNear": 40 },
+  "panels": [ { "marks": [ { "bracket": ["tests", "lint", "staging"], "title": "Three checks after the build" } ] } ] }

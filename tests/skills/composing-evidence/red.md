@@ -212,3 +212,156 @@ Skill gap: no route from an image file to a capture, no field to give a frame
 and boxes by coordinate, no statement that the image's real pixels (not the
 viewer's) are the unit, no redaction check beyond the agent's own read, and no
 rule that the operator confirms the crops.
+
+## 2026-10-13: six misses from the first blind run on a local app
+
+Harness: two fresh Sonnet drivers ran the shipped skill on a locally served
+app, and a blind judge scored each board out of 5; the bar
+is 4. The app, its data and the run's files stay out of the repo. Six boards
+missed, each on a choice the skill steers:
+
+- **A pair of one region across two pages.** The skill said to give both
+  captures the same frame selector. The two pages wrap that region in
+  different elements, so no one selector matched both; the driver spent its
+  calls looking for one, then targeted an element outside the frame and was
+  refused with "does not contain every target". No board.
+- **A tab link as a steps target.** The link's box overhangs its tab strip
+  by a pixel or two, so the strip was refused as the frame. The driver
+  retried the same strip by another selector and spent the panel's calls.
+  No board.
+- **A one-panel board of where a flow starts** was given `AFTER`, which the
+  judge read as a result state. Scored 3.
+- **A fact with a sub-line under it.** The driver lifted the first line
+  only, and a clipped sub-line showed under the lift. Scored 3.
+- **A thin strip the tool chose** (about ten times wider than tall) was
+  kept, and the report said so without a retry. The brief asked for two
+  section headers; the driver marked the status chip inside each, and the
+  dim washed out the headers. Scored 3.
+- **A value compared across two places** wrapped onto two lines in a narrow
+  control, so the reader had to rejoin it to compare. Scored 3.
+
+What the skill must therefore say: per-panel frame selectors when no one
+selector names the region on both pages, and a target inside the frame on
+the panel where the thing is absent; on "does not contain every target", the
+next ancestor once; `FLOW` for a step or starting point on any layout; a lift
+takes the whole item with its sub-line; the thin-strip retry is required and
+reported; a named header, row or card is marked whole; a wrapped compared
+value is fixed with `browser_resize` before capture.
+
+## 2026-10-14: what the second blind run still missed
+
+Harness as above, with the first six steers in the skill. Three of six
+boards reached 4; three scored 3, and two problem-free boards drifted:
+
+- **`FLOW` over-reach.** Two boards of facts shown on the page as they are
+  were labelled `FLOW`, because the steer said a one-panel board with no
+  problem in it could be `FLOW`.
+- **A pair across two pages on different regions.** One panel framed one
+  view of the record, the other a different view, each on most of the page,
+  so the two were not like for like and both were drawn small.
+- **A readable personal detail.** The loose frames held more details to
+  hide; the driver ran out of captures and left one readable on the board.
+- **A step label and its mark disagree.** The label said to click an entry
+  in a side rail; the mark's title called it a section heading, so the
+  reader could not tell which the mark was on.
+- **A value the page wraps.** The page breaks the value inside a fixed
+  narrow column, so a wider viewport did not unwrap it.
+
+What the skill must therefore say: `FLOW` only for a flow the brief
+describes, with `FOUND` and `AFTER` named for the rest; the same band on
+each page in a pair across pages; every detail to hide in the first capture,
+and no board while one is readable; a step's mark sits on what its label
+names and its title uses those words; a value the page wraps goes on one
+line in the mark's note.
+
+## 2026-10-14: a union retry stopped on one selector that was too big
+
+Third blind run, a three-panel `steps` board. One panel marks a section
+heading on a statement page. The capture came back `union`, a thin frame.
+The driver passed the whole section as `frame`; that capture failed with
+"the frame selector is larger than the viewport". It read the `union`
+bullet's stop sentence ("no element both holds the targets and fits the
+viewport") and stopped the board with a capture still in hand, though the
+other bullet said to pick a smaller element. One selector that is too big
+does not show that no element fits.
+
+What the skill must therefore say: after a `union` retry that is too large,
+try once more with a smaller element inside it that still holds every
+target (the heading's own header block, not the whole section), not a thin
+strip unless only a thin strip fits; stop only when that fails too or the
+budget is spent.
+
+## 2026-10-14: a pair across two pages framed on a full-height container
+
+Same run, a `pair` across two pages. One page swaps its whole body for a
+different view, so the only region the two share is the header strip and
+the first block under it. No single element is that band: the element that
+holds the strip is a container that fills the viewport and shrinks with it.
+The driver framed that container on both pages at two different viewport
+heights, so the panels showed different regions at different sizes and one
+was too small to read.
+
+What the skill must therefore say: both captures of a `pair` are taken at
+one viewport size; when the only element that holds the band fills the
+viewport, shorten the viewport with `browser_resize`, the same for both,
+until the frame holds the strip and the first block under it, never the
+container at full height; restore the starting size after the last capture.
+
+## 2026-10-14: a step marked the heading its click revealed
+
+Fourth blind run, a three-panel `steps` board. Steps 1 and 2 were reached
+by clicking a tab, and each marked the tab that then showed as selected.
+Step 3 was reached by clicking an item in a side menu, which then showed as
+selected too, but the driver marked the full-width section heading the click
+revealed. The judge read that mark as pointing at the menu while the selected
+item went unmarked, and it was drawn much larger than the other steps' marks.
+
+What the skill must therefore say: a step reached by clicking a control that
+stays selected (a tab, a menu item) marks that selected control, so every
+step marks the same kind of thing; the heading only when no control stays
+selected.
+
+## 2026-10-14: the absent side of a pair carried no mark
+
+Same run, a `pair` across two pages: the thing sits on one page and is
+absent on the other. On the absent side the driver targeted an element both
+pages share, as the skill says, but gave that panel no mark. The board's
+wash covered the whole panel, so the judge could not tell what the absent
+side was showing.
+
+What the skill must therefore say: mark that shared element with a `lift`
+whose `title` says the thing is not there.
+
+## 2026-10-14: review of the absent-side mark
+
+A review read the new pair line against the Marks bullet "Lift the whole
+fact, not its header or card, unless the brief names that header, row or
+card". The absent side lifts a heading or card the brief does not name, so a
+fresh driver may stall between the two, or lift some fact on the absent side
+instead.
+
+What the skill must therefore say: on the pair line, that this lift is the
+one exception to lifting the whole fact.
+
+## 2026-10-14: the absent-side mark on the strip
+
+A later run marked the absent side of a pair by lifting that page's own tab in
+the strip of tabs both pages share, titled to say the thing is not there. The
+judge read the mark as pointing at the header, not at the body area where the
+thing would appear, so the mark for the absence pointed at the wrong element.
+
+What the skill must therefore say: the absent side's mark goes on the element
+at the spot where the thing sits on the other page, never on a tab or label
+in the shared strip.
+
+## 2026-10-14: review of the thin-strip retry against the hiding budget
+
+A review read step 3 and the thin-strip bullet against the hiding rule. Step 3
+said a return is finished only once a thin strip the tool chose has had its
+retry, and the bullet called that retry required. The hiding rule said a thin
+strip left unretried for budget is kept and reported. A driver that spent its
+captures on hiding was told both to retry and to keep the strip.
+
+What the skill must therefore say: the retry is required unless the budget
+went to hiding personal details, and a report that names a thin strip names
+its retry or says it was skipped for budget; step 3 points to that exception.

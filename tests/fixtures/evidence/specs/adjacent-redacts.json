@@ -1,0 +1,5 @@
+{ "state": "AFTER", "title": "The owner card hides the phone and the email", "layout": "single", "out": "fx-adjacent-redacts.png",
+  "page": "contact-lines", "frame": "[data-testid=owner]",
+  "targets": { "name": "[data-testid=name]", "phone": "[data-testid=phone-number]", "email": "[data-testid=email]" },
+  "expect": { "pinned": false, "fillsApart": true },
+  "panels": [ { "marks": [ { "lift": "name", "title": "Owner" }, { "redact": "phone" }, { "redact": "email" } ] } ] }

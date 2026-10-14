@@ -9,6 +9,7 @@ import { main } from '../../lib/cli/main.mjs';
 import { parseArgs } from '../../lib/cli/parse-args.mjs';
 import { compose } from '../../lib/commands/compose.mjs';
 import { CAPTURE_SCHEMA, captureDigest } from '../../lib/compose/capture.mjs';
+import { confirmRedactions } from '../../lib/compose/redactions.mjs';
 import { resolvePaths } from '../../lib/core/paths.mjs';
 
 const PNG = Buffer.from('89504e470d0a1a0a0000000d4948445200000001000000010806000000'
@@ -381,5 +382,73 @@ test('a renderer that reports an ungated spec as gated is refused and leaves not
     await writeFile(w.specPath, JSON.stringify(specOf('b.png', [])));
     await assert.rejects(() => render(w, 1, true), (error) => error.exitCode === 2 && /disagrees with compose about whether this board is gated/.test(error.message));
     assert.deepEqual((await readdir(w.dir)).filter((f) => f.startsWith('b.') && !f.startsWith('b.c1') && f !== 'b.spec.json'), []);
+  } finally { await rm(w.home, { recursive: true, force: true }); }
+});
+
+async function renderedBundle(w) {
+  await render(w, 1);
+  const dir = w.dir;
+  return { dir, stem: 'b', confine: async (name) => path.join(dir, name), fail: (message) => new Error(message) };
+}
+const recordFile = (dir) => path.join(dir, 'b.redactions.json');
+
+test('a confirm removes its record when the board changed while it was writing', async () => {
+  const w = await world();
+  try {
+    const { dir, stem, confine, fail } = await renderedBundle(w);
+    await assert.rejects(
+      confirmRedactions({ dir, stem, confine, fail, afterWrite: async () => { await writeFile(path.join(dir, 'b.png'), Buffer.from('another board')); } }),
+      /the board changed since it was rendered; render it again/,
+    );
+    await assert.rejects(readFile(recordFile(dir)), { code: 'ENOENT' });
+  } finally { await rm(w.home, { recursive: true, force: true }); }
+});
+
+test('a confirm removes its record when a crop changed while it was writing', async () => {
+  const w = await world();
+  try {
+    const { dir, stem, confine, fail } = await renderedBundle(w);
+    await assert.rejects(
+      confirmRedactions({ dir, stem, confine, fail, afterWrite: async () => { await writeFile(path.join(dir, 'b.redact-1.png'), Buffer.from('another crop')); } }),
+      /a redaction crop changed since it was rendered; render the board again/,
+    );
+    await assert.rejects(readFile(recordFile(dir)), { code: 'ENOENT' });
+  } finally { await rm(w.home, { recursive: true, force: true }); }
+});
+
+test('a confirm that cannot remove its record after the board changed still refuses, and says the record was not removed', async () => {
+  const w = await world();
+  try {
+    const { dir, stem, confine, fail } = await renderedBundle(w);
+    await assert.rejects(
+      confirmRedactions({ dir, stem, confine, fail, afterWrite: async () => {
+        await writeFile(path.join(dir, 'b.png'), Buffer.from('another board'));
+        await chmod(dir, 0o500);
+      } }),
+      /^Error: the board changed while confirming and its record could not be removed; render it again$/,
+    );
+  } finally { await chmod(w.dir, 0o700); await rm(w.home, { recursive: true, force: true }); }
+});
+
+test('a confirm with nothing changing still confirms', async () => {
+  const w = await world();
+  try {
+    const { dir, stem, confine, fail } = await renderedBundle(w);
+    const done = await confirmRedactions({ dir, stem, confine, fail, afterWrite: async () => {} });
+    const body = JSON.parse(await readFile(done.record, 'utf8'));
+    assert.ok(body.redactions.every((entry) => entry.confirmed === true));
+  } finally { await rm(w.home, { recursive: true, force: true }); }
+});
+
+test('a confirm does not remove a newer record a render wrote over its own', async () => {
+  const w = await world();
+  try {
+    const { dir, stem, confine, fail } = await renderedBundle(w);
+    const newer = { schemaVersion: 'compose-redactions/1', board: 'b.png', boardSha256: 'f'.repeat(64), redactions: [] };
+    await assert.rejects(confirmRedactions({ dir, stem, confine, fail, afterWrite: async () => {
+      await writeFile(path.join(dir, 'b.png'), Buffer.from('another board'));
+      await writeFile(recordFile(dir), JSON.stringify(newer));
+    } }));
+    assert.equal(JSON.parse(await readFile(recordFile(dir), 'utf8')).boardSha256, 'f'.repeat(64), "the render's own record is left alone");
   } finally { await rm(w.home, { recursive: true, force: true }); }
 });

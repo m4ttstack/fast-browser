@@ -1,4 +1,5 @@
 { "state": "FLOW", "title": "Archiving a project asks before it acts", "layout": "steps", "out": "fx-steps-flow.png",
+  "expect": { "pinned": true },
   "panels": [
     { "label": "Open the project", "fixture": { "page": "flow-list", "targets": { "project": "[data-testid=project]" }, "frame": "[data-testid=list]" },
       "marks": [ { "lift": "project", "title": "Start here" } ] },

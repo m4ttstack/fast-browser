@@ -1,4 +1,4 @@
 { "state": "AFTER", "title": "The release train shows its channel and version", "layout": "single", "out": "fx-split-pill.png",
   "targets": { "name": "[data-testid=pill-name]", "chip": "[data-testid=pill-chip]" },
-  "expect": { "covers": ["chip"] },
+  "expect": { "pinned": false, "noWarnings": true, "covers": ["chip"] },
   "panels": [{ "marks": [ { "lift": "name", "title": "Channel", "note": "The lift keeps the version with the name" } ] }] }

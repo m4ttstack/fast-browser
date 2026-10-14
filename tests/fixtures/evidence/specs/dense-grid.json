@@ -1,0 +1,7 @@
+{ "state": "AFTER", "title": "The release changed two services and told the reviewer", "layout": "single", "out": "fx-dense-grid.png",
+  "page": "dense-grid", "frame": "[data-testid=summary]",
+  "targets": { "changed": "[data-testid=changed]", "restarted": "[data-testid=restarted]", "notified": "[data-testid=notified]" },
+  "expect": { "pinned": true },
+  "panels": [ { "marks": [
+    { "lift": ["changed", "restarted"], "title": "Two services changed, one restarted", "tag": "CHANGED" },
+    { "lift": "notified", "title": "The reviewer was told" } ] } ] }

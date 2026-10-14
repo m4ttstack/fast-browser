@@ -1,5 +1,5 @@
 { "state": "AFTER", "title": "Audit and Build both report green", "layout": "single", "out": "fx-chip-grid.png",
   "targets": { "a1": "[data-testid=a1]", "b1": "[data-testid=b1]", "a2": "[data-testid=a2]", "b2": "[data-testid=b2]", "a3": "[data-testid=a3]", "b3": "[data-testid=b3]" },
-  "expect": { "liftsPerMark": [2], "apart": ["a1", "a2", "b2", "b3"] },
+  "expect": { "pinned": true, "liftsPerMark": [2], "apart": ["a1", "a2", "b2", "b3"] },
   "panels": [{ "marks": [
     { "lift": ["a3", "b1"], "title": "Both checks green", "note": "Audit and Build", "tag": "NEW" } ] }] }

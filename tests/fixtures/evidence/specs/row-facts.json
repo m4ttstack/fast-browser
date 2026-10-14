@@ -1,0 +1,5 @@
+{ "state": "AFTER", "title": "The build and its tests both pass", "layout": "single", "out": "fx-row-facts.png",
+  "page": "row-facts", "frame": "[data-testid=checks]",
+  "targets": { "build": "[data-testid=build]", "tests": "[data-testid=tests]" },
+  "expect": { "pinned": false, "tightLift": true, "merged": true },
+  "panels": [ { "marks": [ { "lift": ["build", "tests"], "title": "Build and tests pass", "tag": "OK" } ] } ] }

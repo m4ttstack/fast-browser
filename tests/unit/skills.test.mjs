@@ -908,7 +908,16 @@ test('composing-evidence states the compose contract and the blind-run lessons',
   assert.doesNotMatch(text, /nothing to seal/i);
   assert.match(text, phrase('`frameSnap` is `union`: pass `frame: "<selector>"` for the element that holds the targets'));
   assert.doesNotMatch(text, phrase('If it is still `union`'));
-  assert.match(text, phrase('for the element that holds the targets and capture again. The frame from that capture is final, thin strip or not; if it is a thin strip, say so in the report. If that capture fails at `frame` because no element both holds the targets and fits the viewport, say so in the report and stop that board'));
+  assert.match(text, phrase('for the element that holds the targets and capture again. The frame from that capture is final, thin strip or not; if it is a thin strip, say so in the report.'));
+  // One frame selector that is too large does not show that no element fits:
+  // a blind run stopped its board there with a capture still in hand.
+  assert.doesNotMatch(text, phrase('because no element both holds the targets and fits the viewport'));
+  assert.match(text, phrase('If that capture fails at `frame` saying the frame selector is larger than the viewport, try once more with a smaller element inside it that still holds every target'));
+  assert.match(text, phrase('for a section heading, the heading\'s own header block with what sits beside it, not the whole section'));
+  assert.match(text, phrase('if the only one that fits is a thin strip, pass it, and its frame is final as above'));
+  // A smaller holder that misses a target must not send the driver one
+  // ancestor up, back to the element that was too large.
+  assert.match(text, phrase('Stop that board, and say so in the report, when that capture fails too, at any step \\(do not go one ancestor up from it\\), or when the budget is spent'));
   assert.match(text, phrase('when the tool chose the frame, that is `frameSnap` is neither `union` nor `selector`: try once with'));
   assert.match(text, phrase('If it fails, the earlier files are untouched: keep them and say so in the report'));
   assert.doesNotMatch(text, phrase('keep the frame the tool chose'));
@@ -991,7 +1000,8 @@ test('composing-evidence states the compose contract and the blind-run lessons',
   assert.match(text, phrase('Look for every place the value, or a part of it, appears'));
   assert.match(text, phrase('Make each box cover whole elements, or stop short of them'));
   assert.match(text, phrase('redact each or frame them out; then check the board for it by eye'));
-  assert.match(text, phrase('in a `pair` of one region, capture both panels again with the same tighter selector'));
+  assert.match(text, phrase('in a `pair` of one region, capture both panels again on the same tighter region, with one selector where one names it on both pages'));
+  assert.doesNotMatch(text, phrase('capture both panels again with the same tighter selector'));
   assert.match(text, phrase("for a ticket image, shrink the panel's `frame` rectangle instead"));
   assert.match(text, phrase('`a panel is drawn small; frame the card that holds its marks` means'));
   assert.match(text, phrase("An element in a card's header or toolbar is often not inside the container the card's body has"));
@@ -1002,6 +1012,55 @@ test('composing-evidence states the compose contract and the blind-run lessons',
   assert.match(text, phrase('`FOUND` is a problem found'));
   assert.match(text, phrase('`lift` that text instead'));
   assert.match(text, phrase('one, with no `label`: the board\'s `state` already says what it is'));
+  assert.match(text, phrase('give each capture its own frame selector for the element that holds that same visible region'));
+  assert.match(text, phrase('never one outside the frame'));
+  // A blind run left the absent side of a pair unmarked, so its whole panel sat under the wash.
+  assert.match(text, phrase("Mark that element with a `lift` whose `title` says the thing is not there"));
+  assert.match(text, phrase('a heading, block or card lifted here is the one exception to lifting the whole fact'));
+  // A later run lifted the absent side's tab in the strip, and the judge read it as pointing at the wrong place.
+  assert.match(text, phrase('at the spot where the thing sits on the other page'));
+  assert.match(text, phrase('each thin strip the tool chose and the frame selector you retried it with, or that its retry was skipped for budget'));
+  assert.match(text, phrase('not a tab or label in the strip both pages share, and never one outside the frame'));
+  assert.match(text, phrase('saying the frame selector does not contain every target: the frame is too tight'));
+  assert.match(text, phrase('Another selector for the same element is not a fix'));
+  assert.match(text, phrase('is not a fix. If that fails too, report it and stop that board'));
+  assert.match(text, phrase('one panel that shows a step or the starting point of a flow the brief describes'));
+  assert.match(text, phrase('A board that shows a problem uses `FOUND`, and one that shows a fact on the page as it is uses `AFTER`'));
+  assert.doesNotMatch(text, phrase('no problem in it'));
+  assert.match(text, phrase('A fact with a sub-line under it is one item'));
+  assert.match(text, phrase('This retry is required, not optional'));
+  assert.match(text, phrase('a thin strip the tool chose has had its retry'));
+  assert.match(text, phrase('mark that thing with its status in it, not a chip inside it'));
+  assert.match(text, phrase('Lift the whole fact, not its header or card, unless the brief names that header, row or card'));
+  assert.match(text, phrase('In a `pair` across two pages, that region is the same band on each page: the same place on screen at about the same size'));
+  // A blind run framed a container that fills the viewport, on two pages at
+  // two viewport heights: two regions at two sizes, one too small to read.
+  assert.match(text, phrase('Take both captures of a `pair` at one viewport size: if step 3 resized the viewport for one panel, capture the other again at that size, within the budget'));
+  assert.match(text, phrase('When the only element that holds the band fills the viewport, read where the first block under the strip ends from the first capture\'s `boxes`, or its PNG divided by the sidecar\'s `scale`'));
+  assert.match(text, phrase('set the viewport height a little more than it with one `browser_resize`, the same for both captures'));
+  assert.doesNotMatch(text, phrase('until that frame holds the strip'));
+  assert.match(text, phrase('That shortened container is the one exception to never the whole page; never frame it at full height'));
+  assert.match(text, phrase('Restore the starting viewport size after the last capture'));
+  assert.match(text, phrase('named in the brief or not, all in the first capture'));
+  assert.match(text, phrase("In `steps`, each panel's mark sits on the thing its `label` names"));
+  assert.match(text, phrase("the mark's `title` calls it by the label's words"));
+  // A blind run marked the heading a menu click revealed, not the menu item left selected.
+  assert.match(text, phrase('A step reached by clicking a control that stays selected, such as a tab or a menu item, marks that selected control'));
+  assert.match(text, phrase('so every step marks the same kind of thing'));
+  assert.match(text, phrase('Mark a heading the click revealed only when no control stays selected'));
+  assert.match(text, phrase("If a wider viewport leaves it wrapped, the page wraps it: write the value on one line in the mark's `note`"));
+  assert.match(text, phrase('Spend captures on hiding first: the targets this rule needs, then any retry for looks'));
+  assert.match(text, phrase('A board that would still show a personal detail is not written'));
+  assert.match(text, phrase('write no spec and report the case as not done for that reason'));
+  assert.match(text, phrase('a thin strip left unretried for budget is kept and reported'));
+  // The thin-strip retry and the hiding budget gave a driver two opposite instructions.
+  assert.match(text, phrase('This retry is required, not optional, unless the budget went to hiding personal details'));
+  assert.match(text, phrase('a report that names a thin strip names its retry, or says the retry was skipped for budget'));
+  assert.match(text, phrase('a thin strip the tool chose has had its retry or was left for the hiding budget'));
+  assert.doesNotMatch(text, phrase('not optional: a report that names a thin strip names its retry too'));
+  assert.match(text, phrase("report the case as not done and do not give that board's path as a result"));
+  assert.match(text, phrase("never repeats the board's title or the lifted words, except a `steps` mark's `title` and a value the page wraps"));
+  assert.match(text, phrase('a value the board compares wrapped onto two lines: widen the viewport with `browser_resize`'));
 
   const pointer = await readFile(path.join(pluginRoot, 'skills/annotating-screenshots/SKILL.md'), 'utf8');
   const body = pointer.replace(/^---\n[\s\S]*?\n---\n/, '');

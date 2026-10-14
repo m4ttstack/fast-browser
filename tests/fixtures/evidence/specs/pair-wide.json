@@ -1,0 +1,7 @@
+{ "state": "FOUND", "title": "Each service names its owner", "layout": "pair", "out": "fx-pair-wide.png",
+  "expect": { "stacked": true },
+  "panels": [
+    { "label": "API", "fixture": { "page": "flush-heading", "targets": { "api-state": "[data-testid=api-state]" }, "frame": "[data-testid=services]" },
+      "marks": [ { "lift": "api-state", "title": "API: owner on plan" } ] },
+    { "label": "WORKER", "fixture": { "page": "flush-heading", "targets": { "worker-state": "[data-testid=worker-state]" }, "frame": "[data-testid=services]" },
+      "marks": [ { "lift": "worker-state", "title": "Worker: owner unknown" } ] } ] }
