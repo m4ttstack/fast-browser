@@ -50,7 +50,7 @@ test('import writes a PNG and a sidecar with no measurements, and compose loads 
     assert.deepEqual([body.source, body.image, body.origin, body.format], ['import', 'r-c-before.c1.png', origin, 'jpeg']);
     assert.deepEqual(await readFile(done.png), PNG, 'the bundle holds the converted bytes');
     const loaded = await loadCapture({ sidecarPath: done.sidecar, fail });
-    assert.deepEqual([loaded.source, loaded.frame, loaded.boxes, loaded.size, loaded.format], ['import', null, {}, [1, 1], 'jpeg']);
+    assert.deepEqual([loaded.source, loaded.frame, loaded.boxes, loaded.size, loaded.format, loaded.scale], ['import', null, {}, [1, 1], 'jpeg', 1]);
   } finally { await rm(home, { recursive: true, force: true }); }
 });
 

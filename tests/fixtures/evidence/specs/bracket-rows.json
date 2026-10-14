@@ -1,6 +1,6 @@
 { "state": "FOUND", "title": "Two release checks fail, and the summary counts them", "layout": "single", "out": "fx-bracket-rows.png",
   "targets": { "r2": "[data-testid=r2]", "r3": "[data-testid=r3]", "summary": "[data-testid=summary]" },
-  "expect": { "brackets": [false], "flats": 1 },
+  "expect": { "pinned": false, "brackets": [false], "flats": 1 },
   "panels": [{ "marks": [
     { "bracket": ["r2", "r3"], "title": "Two checks failing", "note": "Lint and build", "tag": "ISSUE" },
     { "lift": "summary", "title": "Summary agrees" } ] }] }

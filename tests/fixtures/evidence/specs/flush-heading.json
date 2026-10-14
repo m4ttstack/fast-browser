@@ -1,0 +1,7 @@
+{ "state": "FOUND", "title": "One service has no owner", "layout": "single", "out": "fx-flush-heading.png",
+  "page": "flush-heading", "frame": "[data-testid=services]",
+  "targets": { "api-state": "[data-testid=api-state]", "worker-state": "[data-testid=worker-state]" },
+  "expect": { "air": true },
+  "panels": [ { "marks": [
+    { "lift": "api-state", "title": "API: owner on plan" },
+    { "lift": "worker-state", "title": "Worker: owner unknown" } ] } ] }

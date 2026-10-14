@@ -22,3 +22,14 @@ test('the page inlines the capture, the font and the layout script, and fetches 
   assert.equal(html.includes('<b>'), false, 'spec text is JSON-encoded, never raw HTML');
   assert.ok(html.includes(REDACT_FILL));
 });
+
+test('the page styles a pin and the number of a legend alike', () => {
+  const html = buildBoardHtml({
+    spec: { state: 'AFTER', title: 'T', layout: 'single', out: 'o.png', panels: [{ capture: 'c.json', marks: [] }] },
+    captures: [{ png: PNG, size: [1, 1], frame: [0, 0, 1, 1], boxes: {}, dark: false }],
+    fontBytes: Buffer.from('wOF2fake'), geometrySource: '', layoutSource: '',
+  });
+  const css = html.slice(html.indexOf('<style>'), html.indexOf('</style>'));
+  assert.match(css, /\.pin,\.lnum\{[^}]*position:absolute[^}]*width:18px;height:18px[^}]*background:var\(--accent\)/, 'a pin and a legend number are one disc');
+  assert.match(css, /\.pin\{[^}]*box-shadow:0 0 0 2px #fff/, 'and a pin stands in a white ring');
+});

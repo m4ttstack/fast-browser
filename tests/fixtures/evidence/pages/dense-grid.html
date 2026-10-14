@@ -1,0 +1,30 @@
+<!doctype html><meta charset="utf-8">
+<style>body{margin:0;font:14px Helvetica,Arial,sans-serif;background:#f6f7f9}
+.card{box-sizing:border-box;margin:40px;width:900px;padding:20px;background:#fff;border:1px solid #e5e7eb;border-radius:12px}
+h3{margin:0 0 10px;font-size:16px}
+.cols{display:grid;grid-template-columns:repeat(4,1fr);column-gap:16px}
+ul{list-style:none;margin:0;padding:0}
+li{display:flex;gap:8px;align-items:center;height:28px}
+svg{flex:none}</style>
+<div class="card" data-testid="summary"><h3>Release summary</h3>
+  <div class="cols">
+    <ul>
+      <li><svg width="14" height="14" viewBox="0 0 14 14" role="img" aria-label="Done"><circle cx="7" cy="7" r="7" fill="#16a34a"/><path d="M3.5 7.2l2.4 2.3 4.6-4.8" stroke="#fff" stroke-width="1.6" fill="none"/></svg><span>Requested by Pat E.</span></li>
+      <li><svg width="14" height="14" viewBox="0 0 14 14" role="img" aria-label="Done"><circle cx="7" cy="7" r="7" fill="#16a34a"/><path d="M3.5 7.2l2.4 2.3 4.6-4.8" stroke="#fff" stroke-width="1.6" fill="none"/></svg><span>Internal use</span></li>
+      <li><svg width="14" height="14" viewBox="0 0 14 14" role="img" aria-label="Done"><circle cx="7" cy="7" r="7" fill="#16a34a"/><path d="M3.5 7.2l2.4 2.3 4.6-4.8" stroke="#fff" stroke-width="1.6" fill="none"/></svg><span>Plan active</span></li>
+    </ul>
+    <ul>
+      <li><svg width="14" height="14" viewBox="0 0 14 14" role="img" aria-label="Done"><circle cx="7" cy="7" r="7" fill="#16a34a"/><path d="M3.5 7.2l2.4 2.3 4.6-4.8" stroke="#fff" stroke-width="1.6" fill="none"/></svg><span data-testid="changed">2 services changed</span></li>
+      <li><svg width="14" height="14" viewBox="0 0 14 14" role="img" aria-label="Done"><circle cx="7" cy="7" r="7" fill="#16a34a"/><path d="M3.5 7.2l2.4 2.3 4.6-4.8" stroke="#fff" stroke-width="1.6" fill="none"/></svg><span>Rollback not needed</span></li>
+      <li><svg width="14" height="14" viewBox="0 0 14 14" role="img" aria-label="Done"><circle cx="7" cy="7" r="7" fill="#16a34a"/><path d="M3.5 7.2l2.4 2.3 4.6-4.8" stroke="#fff" stroke-width="1.6" fill="none"/></svg><span>No schema change</span></li>
+    </ul>
+    <ul>
+      <li><svg width="14" height="14" viewBox="0 0 14 14" role="img" aria-label="Done"><circle cx="7" cy="7" r="7" fill="#16a34a"/><path d="M3.5 7.2l2.4 2.3 4.6-4.8" stroke="#fff" stroke-width="1.6" fill="none"/></svg><span>No incidents reported</span></li>
+      <li><svg width="14" height="14" viewBox="0 0 14 14" role="img" aria-label="Done"><circle cx="7" cy="7" r="7" fill="#16a34a"/><path d="M3.5 7.2l2.4 2.3 4.6-4.8" stroke="#fff" stroke-width="1.6" fill="none"/></svg><span>No alerts</span></li>
+      <li><svg width="14" height="14" viewBox="0 0 14 14" role="img" aria-label="Done"><circle cx="7" cy="7" r="7" fill="#16a34a"/><path d="M3.5 7.2l2.4 2.3 4.6-4.8" stroke="#fff" stroke-width="1.6" fill="none"/></svg><span data-testid="restarted">1 service restarted</span></li>
+    </ul>
+    <ul>
+      <li><svg width="14" height="14" viewBox="0 0 14 14" role="img" aria-label="Done"><circle cx="7" cy="7" r="7" fill="#16a34a"/><path d="M3.5 7.2l2.4 2.3 4.6-4.8" stroke="#fff" stroke-width="1.6" fill="none"/></svg><span data-testid="notified">Reviewer notified</span></li>
+    </ul>
+  </div>
+</div>

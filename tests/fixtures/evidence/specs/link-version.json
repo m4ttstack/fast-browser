@@ -1,4 +1,4 @@
 { "state": "AFTER", "title": "The header shows the version that staging runs", "layout": "single", "out": "fx-link-version.png",
   "targets": { "head": "[data-testid=head-version]", "row": "[data-testid=row-version]" },
-  "expect": { "links": 1 },
+  "expect": { "pinned": true, "links": 1 },
   "panels": [{ "marks": [ { "link": ["head", "row"], "title": "Same version, two places", "tag": "OK" } ] }] }

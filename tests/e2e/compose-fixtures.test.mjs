@@ -10,7 +10,7 @@ import { renderBoard } from '../../lib/compose/engine.mjs';
 import { REDACT_FILL } from '../../lib/compose/page.mjs';
 import { resolvePaths } from '../../lib/core/paths.mjs';
 import { writeSidecar } from './helpers/capture-sidecar.mjs';
-import { assertInvariants, intersects } from './helpers/invariants.mjs';
+import { assertInvariants, inside, intersects } from './helpers/invariants.mjs';
 import { countOffColor, diffPngs } from './helpers/png-diff.mjs';
 import { rendererForTests } from './helpers/renderer.mjs';
 
@@ -20,8 +20,20 @@ const macro = new Function(`return (${await readFile(new URL('./helpers/capture-
 const specDir = path.resolve('tests/fixtures/evidence/specs');
 const goldenDir = path.resolve('tests/fixtures/evidence/goldens');
 const pluginRoot = path.resolve('.');
+// A copy of REDACT_GROW in lib/compose/page-layout.js, kept apart so the check does not read the code it checks.
+const REDACT_REACH = 2;
 // The 3px ring, the 12px drop and the 28px blur of a lift's box-shadow (page.mjs).
 const LIFT_SHADOW_REACH = 3 + 12 + 28;
+// How far that shadow reaches above a lift (its blur less its drop) and to each side (its ring and its blur).
+const LIFT_SHADOW_ABOVE = 28 - 12;
+const LIFT_SHADOW_BESIDE = 3 + 28;
+// Copies of the .wash and .wash.dark colours in lib/compose/page.mjs, as [r, g, b, alpha]: a fill outside a card is seen through its panel's wash.
+const WASH = { light: [255, 255, 255, 0.55], dark: [11, 9, 32, 0.65] };
+const underWash = (colour, panel) => {
+  if (!panel.wash) return colour;
+  const [r, g, b, alpha] = WASH[panel.dark ? 'dark' : 'light'];
+  return colour.map((v, c) => Math.round(v * (1 - alpha) + [r, g, b][c] * alpha));
+};
 const clipTo = ([x, y, w, h], [bx, by, bw, bh]) => {
   const [x0, y0] = [Math.max(x, bx), Math.max(y, by)];
   return [x0, y0, Math.min(x + w, bx + bw) - x0, Math.min(y + h, by + bh) - y0];
@@ -105,10 +117,15 @@ for (const file of (await readdir(specDir)).filter((f) => f.endsWith('.json'))) 
       if (fixture.expect?.redactionPad) {
         const panel = layoutReport.panels[0]; const scale = panel.capture[2] / panel.frame[2];
         const box = fixture.panels[0].boxes[fixture.panels[0].marks.find((m) => m.redact).redact];
-        const drawn = panel.redactions[0].rect;
-        assert.ok(Math.abs(drawn[2] - (box[2] + 2 * fixture.expect.redactionPad) * scale) < 1.5, 'the fill is the box plus its pad on both sides');
+        const drawn = panel.redactions[0].rect; const pad = fixture.expect.redactionPad;
+        assert.ok(drawn[2] <= (box[2] + 2 * pad) * scale + 1.5, 'the fill never reaches past the box and its pad');
+        assert.ok(drawn[2] > 0 && drawn[3] > 0);
       }
       const board0 = layoutReport.panels[0];
+      if (fixture.expect?.fillsApart) {
+        const [a, b] = board0.redactions.map((r) => r.rect).sort((p, q) => p[1] - q[1]);
+        assert.ok(b[1] - (a[1] + a[3]) >= 1, `two fills on neighbouring lines touch: ${a} and ${b}`);
+      }
       for (const lift of board0.lifts) {
         assert.equal(lift.grown.length, 4, 'every lift reports its growth');
         assert.ok(lift.grown.every((g) => Number.isInteger(g) && g >= 0 && g <= 96), 'growth is whole pixels within the limit');
@@ -126,13 +143,15 @@ for (const file of (await readdir(specDir)).filter((f) => f.endsWith('.json'))) 
       }
       if (fixture.expect?.liftsApart) {
         assert.equal(intersects(board0.lifts[0].rect, board0.lifts[1].rect), false, 'the two lifts sit apart, each by moving away from the other');
-        assert.equal(board0.lifts[1].k, board0.lifts[0].k, 'neither gave way, since moving apart was enough');
+        assert.equal(board0.lifts[1].k, board0.lifts[0].k, 'both share one scale');
       }
       if (fixture.expect?.liftsPerMark) {
         const markIndexes = fixture.panels[0].marks.flatMap((m, i) => ('lift' in m ? [i] : []));
         assert.deepEqual(markIndexes.map((i) => board0.lifts.filter((l) => l.mark === i).length), fixture.expect.liftsPerMark, 'each point gets one lift per cluster');
         assert.equal(board0.labels.length, markIndexes.length, 'each point has one label however many lifts it has');
-        assert.deepEqual(board0.leaders.map((l) => l.targets.length), fixture.expect.liftsPerMark, 'each leader serves every lift of its point');
+        // On a pinned board the lifts of a point share its number in place of a leader.
+        const served = layoutReport.pinned ? board0.labels.map((label) => board0.pins.filter((pin) => pin.number === label.number).length) : board0.leaders.map((l) => l.targets.length);
+        assert.deepEqual(served, fixture.expect.liftsPerMark, 'each leader, or each number, serves every lift of its point');
       }
       assert.ok(board0.lifts.every((l) => Boolean(l.merged) === Boolean(fixture.expect?.merged)), 'a lift reports merged only when its point was split and put back together');
       if (fixture.expect?.merged) assert.equal(board0.connectors.length, 0, 'a merged lift is drawn like a single-cluster mark: no connectors');
@@ -142,25 +161,35 @@ for (const file of (await readdir(specDir)).filter((f) => f.endsWith('.json'))) 
           assert.equal(intersects([x - l, y - t, w + l + r, h + t + b], captureReturn.boxes[name]), false, `${name} sits inside a lift`);
         }
       }
+      if (fixture.expect?.air) {
+        assert.ok(board0.air.left > 0, 'a heading flush against the frame gets painted ground beside it');
+        assert.ok(!layoutReport.warnings.includes('a lift was clamped at the frame edge'));
+      }
       if (fixture.expect?.cropped !== undefined) {
-        const [, , fw, fh] = board0.cleanFrame; const [, , uw, uh] = board0.frame;
+        const [, , fw, fh] = board0.wholeFrame; const [, , uw, uh] = board0.frame;
         assert.equal(board0.cropped, fixture.expect.cropped, 'the report says whether the frame was tightened');
-        assert.equal(uw * uh < 0.5 * fw * fh, fixture.expect.cropped, 'the frame used is under half the cleaned frame when tightened');
+        assert.equal(uw * uh < 0.5 * fw * fh, fixture.expect.cropped, 'the frame used is under half the whole frame when tightened');
         assert.ok(board0.lifts.every((l) => !l.clamped), 'no lift is clamped');
         assert.ok(Math.abs(board0.capture[2] / uw - board0.capture[3] / uh) < 0.01, 'the board shows the frame used');
       }
       if (board0.cropped) {
-        const [fx, fy, fw, fh] = board0.frame; const [ox, oy, ow, oh] = board0.cleanFrame;
+        // The crop is cut from the whole frame: the cleaned frame less its edge slivers, with any air it was given.
+        const [fx, fy, fw, fh] = board0.frame; const [ox, oy, ow, oh] = board0.wholeFrame;
         const at = { left: fx === ox, top: fy === oy, right: fx + fw === ox + ow, bottom: fy + fh === oy + oh };
         for (const [side, kind] of Object.entries(board0.cropEdges)) {
-          if (kind === 'margin') assert.equal(at[side], false, `the ${side} edge is held at its margin, so it is off the cleaned frame's edge`);
-          else if (kind !== 'snapped') assert.equal(at[side], true, `the ${side} edge is ${kind}, so it sits on the cleaned frame's edge`);
+          if (kind === 'margin') assert.equal(at[side], false, `the ${side} edge is held at its margin, so it is off the whole frame's edge`);
+          else if (kind !== 'snapped') assert.equal(at[side], true, `the ${side} edge is ${kind}, so it sits on the whole frame's edge`);
         }
       } else assert.equal(board0.cropEdges, undefined, 'an uncropped board has no crop edges');
       const allClean = { left: 'clean', top: 'clean', right: 'clean', bottom: 'clean' };
       assert.deepEqual(board0.frameEdges, fixture.expect?.frameEdges ?? allClean, 'each captured frame edge was clean, moved inward, moved outward or cut as expected');
+      if (layoutReport.sharedFrame) {
+        // A pair of one viewport framed twice is drawn from one frame, which never reaches past either capture's own.
+        for (const { captureReturn: own } of taken) assert.ok(own && inside(layoutReport.sharedFrame.map((n) => n * board0.scale), own.frame, 0), `the shared frame ${layoutReport.sharedFrame} reaches past a capture's frame ${own?.frame}`);
+      }
       if (captureReturn) {
-        const [cx, cy, cw, ch] = captureReturn.frame; const [kx, ky, kw, kh] = board0.cleanFrame;
+        const given = layoutReport.sharedFrame ? layoutReport.sharedFrame.map((n) => n * board0.scale) : captureReturn.frame;
+        const [cx, cy, cw, ch] = given; const [kx, ky, kw, kh] = board0.cleanFrame;
         const offset = { left: kx - cx, top: ky - cy, right: cx + cw - (kx + kw), bottom: cy + ch - (ky + kh) };
         for (const [side, kind] of Object.entries(board0.frameEdges)) {
           if (kind === 'clean' || kind === 'cut' || kind === 'image') assert.equal(offset[side], 0, `the ${side} edge is ${kind}, so it stays where the macro put it`);
@@ -226,8 +255,22 @@ for (const file of (await readdir(specDir)).filter((f) => f.endsWith('.json'))) 
         assert.deepEqual(board0.brackets.map((b) => b.inMargin), fixture.expect.brackets, 'each bracket sits inside the frame or in the margin as expected');
         assert.equal(board0.flats.length, fixture.expect.flats, 'bracketed rows are redrawn flat only under a wash');
       }
+      if (fixture.expect?.tightLift) {
+        const [lift] = board0.lifts; const frameW = board0.frame[2];
+        assert.ok(lift.source[2] < frameW / 2, `the lift is ${lift.source[2]} of a ${frameW} px frame: it took the row, not its words`);
+        assert.equal(lift.adopted, true, 'the ticks that lead the lines are inside the card');
+      }
+      if (fixture.expect?.bracketNear) {
+        const [bracket] = board0.brackets;
+        assert.equal(bracket.inMargin, false, 'the bracket stands beside the words, not in the margin');
+        assert.ok(bracket.rows[2] < board0.capture[2] / 2, `the bracket's rows are ${bracket.rows[2]} of a ${board0.capture[2]} px panel: the rows, not their words`);
+        assert.ok(bracket.rect[0] - (bracket.rows[0] + bracket.rows[2]) <= fixture.expect.bracketNear);
+        assert.ok(!layoutReport.warnings.includes('a bracket sits on page content'), 'a divider between rows is not content to a bracket');
+      }
       if (fixture.expect?.loupes) assert.deepEqual(board0.loupes.map((l) => l.zoom), fixture.expect.loupes, 'each loupe magnifies as asked');
       if (fixture.expect?.links !== undefined) assert.equal(board0.links.length, fixture.expect.links, 'each link is drawn');
+      if (fixture.expect?.pinned !== undefined) assert.equal(layoutReport.pinned, fixture.expect.pinned, 'the board draws pins and a legend only when no side takes every label');
+      if (fixture.expect?.stacked !== undefined) assert.equal(layoutReport.stacked, fixture.expect.stacked, 'the panels stand in a column only when a row of them would be a strip');
       const board = await readFile(report.out);
       const marks = fixture.panels[0].marks;
       const fill = [1, 3, 5].map((i) => parseInt(REDACT_FILL.slice(i, i + 2), 16));
@@ -257,7 +300,8 @@ for (const file of (await readdir(specDir)).filter((f) => f.endsWith('.json'))) 
         assert.deepEqual(Object.keys(redaction).sort(), ['fill', 'rect'], 'a redaction is its rect and fill alone: the fill marks it, no pill');
         const [rx, ry, rw, rh] = redaction.rect;
         sampled = 0;
-        const lifts = board0.lifts.filter((l) => intersects(l.rect, redaction.rect));
+        // A lift's 3px ring is drawn outside its rect, so a card that stands within it of a fill covers the fill's edge too.
+        const lifts = board0.lifts.filter((l) => intersects([l.rect[0] - 3, l.rect[1] - 3, l.rect[2] + 6, l.rect[3] + 6], redaction.rect));
         for (const l of lifts) {
           const [lx, ly, lw, lh] = l.rect;
           await sample([Math.max(lx, rx) + 3, Math.max(ly, ry) + 3, Math.min(lx + lw, rx + rw) - 3, Math.min(ly + lh, ry + rh) - 3], 24, 'under a lift');
@@ -272,9 +316,29 @@ for (const file of (await readdir(specDir)).filter((f) => f.endsWith('.json'))) 
         }
         assert.ok(sampled > 0, 'a redaction was never sampled');
       }
-      if (marks.some((m) => m.redact) && marks.some((m) => m.lift)) {
+      const redactMarks = marks.filter((m) => m.redact);
+      const redactedKeys = new Set(redactMarks.flatMap((m) => [].concat(m.redact)));
+      if (marks.some((m) => m.lift && [].concat(m.lift).some((key) => redactedKeys.has(key)))) {
         const crossed = board0.lifts.some((l) => board0.redactions.some((r) => intersects(l.rect, r.rect)));
         assert.ok(crossed, 'a lift overlaps a redaction');
+      }
+      if (captureReturn && board0.redactions.length === redactMarks.length) {
+        // What a fill leaves bare of its box and reach is ground in the capture. The fill is taken a pixel larger: its rect went through the board's scale.
+        const shot = await readFile(captureReturn.png);
+        const [cx, cy, cw] = board0.capture; const [fx, fy, fw, fh] = board0.frame; const k = fw / cw;
+        for (const [i, mark] of redactMarks.entries()) {
+          const [bx, by, bw, bh] = unionOf([].concat(mark.redact).map((key) => captureReturn.boxes[key]));
+          const x0 = Math.floor(bx - REDACT_REACH); const y0 = Math.floor(by - REDACT_REACH);
+          const reach = clipTo([x0, y0, Math.ceil(bx + bw + REDACT_REACH) - x0, Math.ceil(by + bh + REDACT_REACH) - y0], [fx, fy, fw, fh]);
+          const [rx, ry, rw, rh] = board0.redactions[i].rect;
+          const drawn = [fx + (rx - cx) * k - 1, fy + (ry - cy) * k - 1, rw * k + 2, rh * k + 2];
+          for (const [x, y, w, h] of minus(reach, drawn)) {
+            const rect = [Math.ceil(x), Math.ceil(y), Math.floor(x + w) - Math.ceil(x), Math.floor(y + h) - Math.ceil(y)];
+            if (rect[2] <= 0 || rect[3] <= 0) continue;
+            const bare = await countOffColor({ png: shot, rect, color: null, tolerance: 24, renderer });
+            assert.equal(bare.off, 0, `${bare.off} of ${bare.total} pixels a fill leaves bare (${rect}) are not ground`);
+          }
+        }
       }
       if (fixture.expect?.crops === undefined) assert.equal(report.redactions, undefined, 'a board with no imported redaction has no record');
       else {
@@ -290,14 +354,15 @@ for (const file of (await readdir(specDir)).filter((f) => f.endsWith('.json'))) 
           const [rx, ry, rw, rh] = layoutReport.panels[panel].redactions[redaction].rect;
           const [cx, cy] = layoutReport.crops[i].rect;
           const inner = [rx + 3, ry + 3, rw - 6, rh - 6];
-          // Only the part within a lift's shadow reach gets the loose tolerance; the rest of the fill is exact.
+          // Only the part within a lift's shadow reach gets the loose tolerance, which takes in a wash under that shadow.
+          // The rest of the fill is exact: the fill itself, or on a washed panel the fill seen through the wash.
           const shadowed = layoutReport.panels[panel].lifts.map((l) => [l.rect[0] - LIFT_SHADOW_REACH, l.rect[1] - LIFT_SHADOW_REACH, l.rect[2] + 2 * LIFT_SHADOW_REACH, l.rect[3] + 2 * LIFT_SHADOW_REACH]).filter((r) => intersects(r, inner));
           const clear = shadowed.reduce((pieces, hole) => pieces.flatMap((piece) => minus(piece, hole)), [inner]);
-          const parts = [...clear.map((r) => [r, 24]), ...shadowed.map((r) => [clipTo(r, inner), 70])];
-          for (const [part, tolerance] of parts) {
+          const parts = [...clear.map((r) => [r, 24, underWash(fill, layoutReport.panels[panel])]), ...shadowed.map((r) => [clipTo(r, inner), 70, fill])];
+          for (const [part, tolerance, color] of parts) {
             const rect = [part[0] - cx, part[1] - cy, part[2], part[3]].map((v) => Math.round(v * scale));
             if (rect[2] <= 0 || rect[3] <= 0) continue;
-            const off = await countOffColor({ png: bytes, rect, color: fill, tolerance, renderer });
+            const off = await countOffColor({ png: bytes, rect, color, tolerance, renderer });
             assert.equal(off.off, 0, `${off.off} pixels of a crop's redaction are not fill (tolerance ${tolerance})`);
           }
         }
@@ -314,10 +379,17 @@ for (const file of (await readdir(specDir)).filter((f) => f.endsWith('.json'))) 
         return;
       }
       if (fixture.expect?.cleanRows?.includes('top')) {
-        // The first rows past the rounded corners, which show what lies behind the board.
+        // The first rows past the rounded corners, which show what lies behind the board. A trimmed frame's edge
+        // stands near its lift, whose shadow (0 12px 28px, round a 3px ring) reaches 16px above the card and 31px
+        // to each side: the columns it darkens are left out.
         const [bx, by, bw] = board0.capture;
-        const r = await countOffColor({ png: board, rect: px([bx + 20, by + 1, bw - 40, 3]), color: null, tolerance: 6, renderer });
-        assert.equal(r.off, 0, `${r.off} pixels on the board's top edge are not ground: a glyph is cut there`);
+        const shaded = board0.lifts.filter((l) => l.rect[1] - LIFT_SHADOW_ABOVE < by + 4).map((l) => [l.rect[0] - LIFT_SHADOW_BESIDE, l.rect[0] + l.rect[2] + LIFT_SHADOW_BESIDE]);
+        const spans = shaded.reduce((open, [from, to]) => open.flatMap(([a, b]) => [[a, Math.min(b, from)], [Math.max(a, to), b]]).filter(([a, b]) => b - a >= 8), [[bx + 20, bx + bw - 20]]);
+        assert.ok(spans.length > 0, "none of the board's top edge is clear of a lift's shadow");
+        for (const [a, b] of spans) {
+          const r = await countOffColor({ png: board, rect: px([a, by + 1, b - a, 3]), color: null, tolerance: 6, renderer });
+          assert.equal(r.off, 0, `${r.off} pixels on the board's top edge are not ground: a glyph is cut there`);
+        }
       }
       const diff = await diffPngs({ a: board, b: await readFile(golden), renderer });
       assert.equal(diff.sameSize, true, 'board and golden differ in size');

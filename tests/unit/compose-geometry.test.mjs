@@ -205,8 +205,9 @@ test('a small marks box in a large frame tightens to the marks plus the crop mar
   assert.ok(area(out) < 0.5 * area(frame));
 });
 
+// Content within 24 px of the marks leaves an edge no band to come in to, so it looks outward alone.
 test('a tightened edge that cuts content moves outward to the first clean band', () => {
-  const px = canvas(600, 400).fill(295, 150, 46, 10, INK);
+  const px = canvas(600, 400).fill(255, 150, 86, 10, INK);
   const frame = [0, 0, 600, 400];
   const out = cropToMarks(px, frame, [200, 150, 40, 20]).box;
   assert.deepEqual(out, [136, 102, 217, 116]);
@@ -214,7 +215,7 @@ test('a tightened edge that cuts content moves outward to the first clean band',
 });
 
 test('an edge looks no further than 80px for a clean band', () => {
-  const px = canvas(600, 400).fill(295, 150, 280, 10, INK);
+  const px = canvas(600, 400).fill(255, 150, 320, 10, INK);
   const out = cropToMarks(px, [0, 0, 600, 400], [200, 150, 40, 20]).box;
   assert.deepEqual(out, [136, 102, 464, 116]);
 });
@@ -263,7 +264,7 @@ test('a left edge landing mid-text falls back to the frame edge while the others
 test('an edge that snaps to a clean band is reported as snapped', () => {
   const px = canvas(600, 400).fill(140, 95, 160, 10, INK);
   const { box, edges } = cropToMarks(px, [0, 0, 600, 400], [200, 150, 40, 20]);
-  assert.deepEqual(box, [128, 83, 184, 135]);
+  assert.deepEqual(box, [136, 107, 168, 111]);
   assert.deepEqual(edges, { left: 'snapped', top: 'snapped', right: 'snapped', bottom: 'snapped' });
 });
 
@@ -484,28 +485,57 @@ test('pixels inside an ignore rectangle never make a frame edge unclean', () => 
   assert.deepEqual(cleanFrame(px, frame, [200, 200, 40, 20], { ignore: [[90, 98, 230, 14]] }).edges, ALL_CLEAN);
 });
 
-const pickLeaderSide = (...args) => sandbox.__composeGeometry.pickLeaderSide(...args);
+const pickBoardSide = (...args) => ({ ...sandbox.__composeGeometry.pickBoardSide(...args) });
+const side = (open, hard, ink, run) => ({ open, hard, ink, run });
 
-test('the preferred leader side stays while it crosses fewer than 3 ink samples', () => {
-  assert.equal(pickLeaderSide([0, 0]), 0);
-  assert.equal(pickLeaderSide([2, 0]), 0);
-  assert.equal(pickLeaderSide([1, 0]), 0);
+test('pickBoardSide takes the side open to every panel', () => {
+  const surveys = [{ right: side(true, false, 0, 40), bottom: side(true, false, 0, 90) }, { right: side(false, false, 0, 0), bottom: side(true, false, 0, 60) }];
+  assert.deepEqual(pickBoardSide(surveys, { fallback: 'right' }), { side: 'bottom', pinned: false });
 });
 
-test('a side takes over only when it crosses at least 3 fewer samples than a preferred side that crosses at least 3', () => {
-  assert.equal(pickLeaderSide([3, 0]), 1);
-  assert.equal(pickLeaderSide([9, 7]), 0, 'only 2 fewer');
-  assert.equal(pickLeaderSide([9, 6]), 1);
+test('pickBoardSide prefers less content, then the bottom when its run is under half the right\'s, then the right', () => {
+  const dirty = [{ right: side(true, false, 9, 40), bottom: side(true, false, 2, 400) }];
+  assert.equal(pickBoardSide(dirty, { fallback: 'right' }).side, 'bottom', 'less content wins, however long the run');
+  const cleaner = [{ right: side(true, false, 2, 400), bottom: side(true, false, 9, 40) }];
+  assert.equal(pickBoardSide(cleaner, { fallback: 'right' }).side, 'right', 'and wins for the right as well');
+  const far = [{ right: side(true, false, 1, 400), bottom: side(true, false, 2, 40) }];
+  assert.equal(pickBoardSide(far, { fallback: 'right' }).side, 'bottom', 'a run under half the right\'s');
+  const shorter = [{ right: side(true, false, 0, 100), bottom: side(true, false, 0, 60) }];
+  assert.equal(pickBoardSide(shorter, { fallback: 'right' }).side, 'right', 'a shorter run below, but not under half');
+  const half = [{ right: side(true, false, 0, 100), bottom: side(true, false, 0, 50) }];
+  assert.equal(pickBoardSide(half, { fallback: 'right' }).side, 'right', 'exactly half is not under half');
+  const split = [{ right: side(true, false, 0, 60), bottom: side(true, false, 0, 10) }, { right: side(true, false, 0, 40), bottom: side(true, false, 0, 45) }];
+  assert.equal(pickBoardSide(split, { fallback: 'right' }).side, 'right', 'the runs are totalled over the panels: 55 below is not under half of 100');
+  const even = [{ right: side(true, false, 0, 50), bottom: side(true, false, 0, 50) }];
+  assert.equal(pickBoardSide(even, { fallback: 'right' }).side, 'right');
 });
 
-test('among several alternatives the least ink wins and a tie keeps the earlier side', () => {
-  assert.equal(pickLeaderSide([12, 4, 4]), 1);
-  assert.equal(pickLeaderSide([12, 5, 2]), 2);
+test('pickBoardSide pins a board with no easy side, and a board with no labels is not pinned', () => {
+  const hard = [{ right: side(true, true, 0, 10), bottom: side(false, false, 0, 10) }];
+  assert.deepEqual(pickBoardSide(hard, { fallback: 'bottom' }), { side: 'bottom', pinned: true });
+  const none = [{ right: side(true, false, 0, 0), bottom: side(true, false, 0, 0) }];
+  assert.deepEqual(pickBoardSide(none, { fallback: 'right' }), { side: 'right', pinned: false });
 });
 
-test('a lone side is the only choice and none is none', () => {
-  assert.equal(pickLeaderSide([40]), 0);
-  assert.equal(pickLeaderSide([]), -1);
+test('pickBoardSide takes a side whose only fault is a long run before it pins the board', () => {
+  const far = (open, hard, ink, run) => ({ ...side(open, hard, ink, run), far: true });
+  const longRight = [{ right: far(true, false, 0, 400), bottom: side(true, true, 9, 40) }];
+  assert.deepEqual(pickBoardSide(longRight, { fallback: 'bottom' }), { side: 'right', pinned: false }, 'a long clean run beats a way through content');
+  const nearBelow = [{ right: far(true, false, 0, 400), bottom: side(true, false, 0, 300) }];
+  assert.deepEqual(pickBoardSide(nearBelow, { fallback: 'right' }), { side: 'bottom', pinned: false }, 'a side with no long run beats one with');
+  const both = [{ right: far(true, false, 0, 400), bottom: far(true, false, 0, 300) }];
+  assert.deepEqual(pickBoardSide(both, { fallback: 'bottom' }), { side: 'right', pinned: false }, 'two long sides are chosen between as two easy ones are');
+  const across = [{ right: far(true, false, 0, 400), bottom: side(true, false, 0, 40) }, { right: side(true, false, 0, 40), bottom: far(true, false, 0, 300) }];
+  assert.deepEqual(pickBoardSide(across, { fallback: 'bottom' }), { side: 'right', pinned: false }, 'a long run in any panel makes the side a long one for the board');
+  const tangled = [{ right: far(true, true, 0, 400), bottom: side(true, true, 9, 40) }];
+  assert.deepEqual(pickBoardSide(tangled, { fallback: 'bottom' }), { side: 'bottom', pinned: true }, 'a long run does not excuse a hard side');
+  const shut = [{ right: far(false, false, 0, 400), bottom: side(true, true, 9, 40) }];
+  assert.deepEqual(pickBoardSide(shut, { fallback: 'right' }), { side: 'right', pinned: true }, 'nor a side that is not open');
+});
+
+test('pickBoardSide keeps a forced side', () => {
+  const surveys = [{ right: side(true, false, 5, 300), bottom: side(true, false, 0, 10) }];
+  assert.deepEqual(pickBoardSide(surveys, { forced: 'right', fallback: 'right' }), { side: 'right', pinned: false });
 });
 
 const collidingLifts = (items) => [...sandbox.__composeGeometry.collidingLifts(items)].map((p) => [...p]);
@@ -717,6 +747,15 @@ test('a fill whose pad reaches past a fixed frame leaves the frame no wider', ()
   assert.equal(free.frame[0] + free.frame[2], 312, 'a live frame still moves out to the fill far side');
 });
 
+test('a frame told to stay moves no edge: one through text is named cut where it stands, and one through a fill stays too', () => {
+  const px = canvas(600, 400).fill(100, 100, 200, 10, INK);
+  const frame = [0, 100, 600, 250];
+  assert.equal(cleanFrame(px, frame, [200, 200, 40, 20]).edges.top, 'inward', 'left to itself the edge moves');
+  assert.deepEqual(cleanFrame(px, frame, [200, 200, 40, 20], { stay: true }), { frame, edges: { ...ALL_CLEAN, top: 'cut' }, cut: true });
+  const filled = cleanFrame(canvas(400, 200), [100, 20, 200, 160], [150, 60, 40, 20], { keep: [[80, 60, 60, 24]], stay: true });
+  assert.deepEqual(filled.frame, [100, 20, 200, 160]);
+});
+
 test('a fill that the frame does not cut leaves the frame alone', () => {
   const c = canvas(400, 200);
   const { frame } = cleanFrame(c, [100, 20, 200, 160], null, { keep: [[150, 60, 60, 24], [10, 60, 30, 24]] });
@@ -746,14 +785,14 @@ test('content flush with the image edge names the edge image and reports no cut'
 });
 
 test('a snapped crop edge backs away from text until 12 clean lines lie inside it', () => {
-  const c = canvas(600, 400).fill(201, 180, 40, 60, INK);
+  const c = canvas(600, 400).fill(201, 180, 80, 60, INK);
   const { box, edges } = cropToMarks(c, [0, 0, 600, 400], [300, 200, 40, 20]);
   assert.equal(box[0], 189, 'the text starts at 201, so the edge sits 12px from it');
   assert.equal(edges.left, 'snapped', 'a move for air does not rename the edge');
 });
 
 test('a crop edge stops its move for air at the first unclean line', () => {
-  const c = canvas(600, 400).fill(201, 180, 40, 60, INK).fill(190, 180, 5, 60, INK);
+  const c = canvas(600, 400).fill(201, 180, 80, 60, INK).fill(190, 180, 5, 60, INK);
   const { box } = cropToMarks(c, [0, 0, 600, 400], [300, 200, 40, 20]);
   assert.equal(box[0], 195, 'five more clean lines lie outward, and the bar beyond them is not crossed');
 });
@@ -772,7 +811,7 @@ test('a crop edge on the frame edge stays on it', () => {
 });
 
 test('a snapped crop edge whose move for air ends on the frame bound is still named snapped', () => {
-  const c = canvas(600, 400).fill(201, 180, 40, 60, INK);
+  const c = canvas(600, 400).fill(201, 180, 80, 60, INK);
   const { box, edges } = cropToMarks(c, [195, 0, 405, 400], [300, 200, 40, 20]);
   assert.equal(box[0], 195, 'the air move stops at the frame bound');
   assert.equal(edges.left, 'snapped');
@@ -785,34 +824,67 @@ test('a snapped bottom crop edge backs away from content until 12 clean lines li
   assert.equal(edges.bottom, 'snapped');
 });
 
-const commonHeight = (frames) => ({ ...sandbox.__composeGeometry.commonHeight(frames) });
+const panelSizes = (...args) => ({ ...sandbox.__composeGeometry.panelSizes(...args) });
 
 test('two frames of one shape share the height their width budget allows', () => {
-  assert.deepEqual(commonHeight([[0, 0, 600, 300], [0, 0, 600, 300]]), { height: 280, floored: false });
+  assert.deepEqual(panelSizes([[0, 0, 600, 300], [0, 0, 600, 300]]), { stacked: false, height: 280 });
 });
 
 test('a frame three times the size of its neighbour gets the same height', () => {
-  assert.deepEqual(commonHeight([[0, 0, 1800, 900], [10, 10, 600, 300]]), { height: 280, floored: false });
+  assert.deepEqual(panelSizes([[0, 0, 1800, 900], [10, 10, 600, 300]]), { stacked: false, height: 280 });
 });
 
-test('small frames are not blown up past 1.25x', () => {
-  assert.deepEqual(commonHeight([[0, 0, 300, 120], [0, 0, 300, 120]]), { height: 150, floored: false });
+test('small frames are not blown up past 1x', () => {
+  assert.deepEqual(panelSizes([[0, 0, 300, 120], [0, 0, 300, 120]]), { stacked: false, height: 120 });
 });
 
 test('tall frames stop at 360', () => {
-  assert.equal(commonHeight([[0, 0, 300, 600], [0, 0, 300, 600]]).height, 360);
+  assert.equal(panelSizes([[0, 0, 300, 600], [0, 0, 300, 600]]).height, 360);
 });
 
 test('the height is rounded to a whole pixel, not cut off', () => {
-  assert.deepEqual(commonHeight([[0, 0, 1000, 300], [0, 0, 700, 300]]), { height: 198, floored: false });
+  assert.deepEqual(panelSizes([[0, 0, 1000, 300], [0, 0, 700, 300]]), { stacked: false, height: 198 });
 });
 
-test('a short frame whose 1.25x is under 96 is raised to 96 without the floored flag', () => {
-  assert.deepEqual(commonHeight([[0, 0, 200, 60], [0, 0, 200, 60]]), { height: 96, floored: false });
+test('a short frame whose 1x is under 96 is raised to 96', () => {
+  assert.deepEqual(panelSizes([[0, 0, 200, 60], [0, 0, 200, 60]]), { stacked: false, height: 96 });
 });
 
-test('a strip beside a card floors the height at 96 and says so', () => {
-  assert.deepEqual(commonHeight([[0, 0, 1500, 75], [0, 0, 450, 100]]), { height: 96, floored: true });
+test('a strip beside a card is stacked at the width of the narrower', () => {
+  assert.deepEqual(panelSizes([[0, 0, 1500, 75], [0, 0, 450, 100]]), { stacked: true, width: 450 });
+});
+
+test('panelSizes keeps ordinary panels in a row at one height, never above their size', () => {
+  const sizes = panelSizes([[0, 0, 400, 300], [0, 0, 400, 300]]);
+  assert.equal(sizes.stacked, false);
+  assert.equal(sizes.height, 300, 'a 300 px frame is not enlarged');
+});
+
+test('panelSizes stacks panels that would make a strip', () => {
+  const sizes = panelSizes([[0, 0, 1400, 220], [0, 0, 1400, 220]]);
+  assert.equal(sizes.stacked, true);
+  assert.equal(sizes.width, 720);
+});
+
+test('panelSizes never enlarges the narrowest stacked panel', () => {
+  assert.equal(panelSizes([[0, 0, 500, 60], [0, 0, 1400, 150]]).width, 500);
+});
+
+test('a row exactly 9 times as wide as it is high stays a row, above the floor, and one a pixel wider is stacked', () => {
+  assert.deepEqual(panelSizes([[0, 0, 900, 200], [0, 0, 900, 200]]), { stacked: false, height: 124 }, 'the widest row there is still has 124 px, over the least height of 96');
+  assert.equal(panelSizes([[0, 0, 901, 200], [0, 0, 900, 200]]).stacked, true);
+});
+
+test('three steps of 2.4 to 1 stay a row', () => {
+  assert.deepEqual(panelSizes([[0, 0, 480, 200], [0, 0, 480, 200], [0, 0, 480, 200]]), { stacked: false, height: 156 });
+});
+
+test('a crop is held to the least size it is given, above the context floor', () => {
+  const frame = [0, 0, 1000, 800];
+  assert.deepEqual(cropToMarks(canvas(1000, 800), frame, [480, 390, 40, 20], { floor: true, min: [500, 300] }).box, [250, 250, 500, 300]);
+  assert.deepEqual(cropToMarks(canvas(1000, 800), frame, [480, 390, 40, 20], { floor: true, min: [200, 120] }).box, [340, 300, 320, 200], 'a least size under the floor does not lower it');
+  assert.deepEqual(cropToMarks(canvas(1000, 800), frame, [480, 390, 40, 20], { min: [200, 120] }).box, [400, 340, 200, 120], 'and holds without the floor');
+  assert.deepEqual(cropToMarks(canvas(1000, 800), frame, [20, 20, 40, 20], { floor: true, min: [500, 300] }).box, [0, 0, 500, 300], 'a crop pushed against the frame keeps the size');
 });
 
 test('an imported frame is dark when its pixels are, whatever the rest of the image is', () => {
@@ -899,7 +971,7 @@ test('the card always covers the element it was lifted from', () => {
 
 test('a card pinned by the frame edge is reported as clamped', () => {
   const near = [3, 40, 20, 10];
-  assert.deepEqual(spotOn(canvas(200, 100), near), { L: 2, T: 30, clamped: true });
+  assert.deepEqual(spotOn(canvas(200, 100), near), { L: 5, T: 30, clamped: true });
 });
 
 test('a card no larger than its element stays centred', () => {
@@ -976,10 +1048,10 @@ const card = (frameW, frameH, at, size) => {
   return c;
 };
 
-test('a frame with 30px of ground and then a border trims to 2px outside the border', () => {
+test('a frame with 30px of ground and then a border trims to 12px outside the border', () => {
   const { box, trimmed } = trimBlank(card(300, 200, [30, 30], [240, 140]), [0, 0, 300, 200], null);
-  assert.deepEqual(box, [28, 28, 244, 144]);
-  assert.deepEqual(trimmed, { left: 28, top: 28, right: 28, bottom: 28 });
+  assert.deepEqual(box, [18, 18, 264, 164]);
+  assert.deepEqual(trimmed, { left: 18, top: 18, right: 18, bottom: 18 });
 });
 
 test('a frame tight to the border does not move', () => {
@@ -988,15 +1060,16 @@ test('a frame tight to the border does not move', () => {
   assert.deepEqual(trimmed, { left: 0, top: 0, right: 0, bottom: 0 });
 });
 
-test('a frame 1px or 2px outside the border does not move either', () => {
-  assert.deepEqual(trimBlank(card(300, 200, [30, 30], [240, 140]), [28, 28, 244, 144], null).box, [28, 28, 244, 144]);
-  assert.deepEqual(trimBlank(card(300, 200, [30, 30], [240, 140]), [27, 27, 246, 146], null).box, [28, 28, 244, 144]);
+test('a frame 11px or 12px outside the border does not move either', () => {
+  assert.deepEqual(trimBlank(card(300, 200, [30, 30], [240, 140]), [19, 19, 262, 162], null).box, [19, 19, 262, 162]);
+  assert.deepEqual(trimBlank(card(300, 200, [30, 30], [240, 140]), [18, 18, 264, 164], null).box, [18, 18, 264, 164]);
+  assert.deepEqual(trimBlank(card(300, 200, [30, 30], [240, 140]), [17, 17, 266, 166], null).box, [18, 18, 264, 164]);
 });
 
 test('each side trims on its own', () => {
   const { box, trimmed } = trimBlank(card(300, 200, [50, 10], [200, 180]), [0, 0, 300, 200], null);
-  assert.deepEqual(box, [48, 8, 204, 184]);
-  assert.deepEqual(trimmed, { left: 48, top: 8, right: 48, bottom: 8 });
+  assert.deepEqual(box, [38, 0, 224, 200]);
+  assert.deepEqual(trimmed, { left: 38, top: 0, right: 38, bottom: 0 });
 });
 
 test('a faint card border on near-white ground still stops the trim, so the card keeps its padding', () => {
@@ -1005,7 +1078,7 @@ test('a faint card border on near-white ground still stops the trim, so the card
   px.fill(40, 40, 220, 1, edge).fill(40, 159, 220, 1, edge).fill(40, 40, 1, 120, edge).fill(259, 40, 1, 120, edge);
   px.fill(70, 70, 60, 10, INK);
   const { box } = trimBlank(px, [0, 0, 300, 200], null);
-  assert.deepEqual(box, [38, 38, 224, 124], 'the frame ends 2px outside the border, not at the text inside it');
+  assert.deepEqual(box, [28, 28, 244, 144], 'the frame ends 12px outside the border, not at the text inside it');
 });
 
 test('a frame of nothing but ground is left as it is', () => {
@@ -1018,14 +1091,14 @@ test('a frame of nothing but ground is left as it is', () => {
 test('a trim stops at a full-width rule instead of passing it', () => {
   const px = canvas(300, 200).fill(0, 40, 300, 1, INK).fill(100, 100, 40, 20, INK);
   const { box } = trimBlank(px, [0, 0, 300, 200], null);
-  assert.equal(box[1], 38, 'the top edge stops 2px outside the rule');
+  assert.equal(box[1], 28, 'the top edge stops 12px outside the rule');
 });
 
 test('a trim never passes the marks, even over ground', () => {
   const px = canvas(300, 200).fill(100, 100, 40, 20, INK);
   const { box } = trimBlank(px, [0, 0, 300, 200], [20, 60, 30, 30]);
-  assert.equal(box[0], 18, 'a mark box over ground keeps its side');
-  assert.equal(box[1], 58);
+  assert.equal(box[0], 8, 'a mark box over ground keeps its side');
+  assert.equal(box[1], 48);
 });
 
 // Ink squares 11px wide every 16px: no line crosses them clean, and no gap is wide enough to be a band.
@@ -1054,7 +1127,7 @@ test('holding the margin leaves an edge that finds a band snapped and reports no
   const frame = [0, 0, 600, 400];
   const px = canvas(600, 400).fill(500, 150, 46, 10, INK);
   const { box, edges, cut } = cropToMarks(px, frame, [150, 120, 300, 120], { hold: true });
-  assert.deepEqual(box, [86, 72, 472, 216]);
+  assert.deepEqual(box, [86, 72, 412, 216]);
   assert.equal(edges.right, 'snapped');
   assert.equal(cut, false);
 });
@@ -1265,7 +1338,7 @@ test('at scale 2 a gap of 5px between letters is not a band, as at scale 1 (BAND
 });
 
 test('at scale 2 a crop edge snaps to a band 57px away, as at scale 1 (CROP_SNAP)', () => {
-  const px = canvas(600, 400).fill(295, 150, 66, 10, INK);
+  const px = canvas(600, 400).fill(255, 150, 106, 10, INK);
   const one = sameCropTwice(px, [0, 0, 600, 400], [200, 150, 40, 20]);
   assert.deepEqual(one.box, [136, 102, 237, 116], 'at 1x the right edge snaps to the band past the text');
 });
@@ -1279,7 +1352,7 @@ test('at scale 2 an inward frame edge stops 16px short of the marks (FRAME_MARGI
 });
 
 test('at scale 2 a snapped crop edge backs away 24 lines from text, as 12 at scale 1 (CROP_AIR)', () => {
-  const left = sameCropTwice(canvas(600, 400).fill(201, 180, 40, 60, INK), [0, 0, 600, 400], [300, 200, 40, 20]);
+  const left = sameCropTwice(canvas(600, 400).fill(201, 180, 80, 60, INK), [0, 0, 600, 400], [300, 200, 40, 20]);
   assert.equal(left.box[0], 189);
   const bottom = sameCropTwice(canvas(600, 400).fill(250, 150, 60, 30, INK), [0, 0, 600, 400], [260, 100, 40, 20]);
   assert.equal(bottom.box[1] + bottom.box[3], 192);
@@ -1301,22 +1374,22 @@ test('at scale 2 a bracket group crops 32 capture px beyond its rows, as 16 at s
   sameCropTwice(rows, frame, groupBox, { parts: [{ box: groupBox, bracket: true }, { box: lift, bracket: false }] });
 });
 
-test('at scale 2 a trim keeps 4 capture px of ground outside the first content, as 2 at scale 1 (TRIM_PAD)', () => {
+test('at scale 2 a trim keeps 24 capture px of ground outside the first content, as 12 at scale 1 (TRIM_PAD)', () => {
   const frame = [0, 0, 300, 200];
   const px = card(300, 200, [30, 30], [240, 140]);
   const one = trimBlank(px, frame, null);
   const two = atScale(2).trimBlank(doubled(px), times2(frame), null);
-  assert.deepEqual(one.box, [28, 28, 244, 144]);
+  assert.deepEqual(one.box, [18, 18, 264, 164]);
   assert.deepEqual([...two.box], times2(one.box));
-  assert.deepEqual({ ...two.trimmed }, { left: 56, top: 56, right: 56, bottom: 56 });
+  assert.deepEqual({ ...two.trimmed }, { left: 36, top: 36, right: 36, bottom: 36 });
 });
 
-test('at scale 2 a trim stops 4 capture px short of the marks, as 2 at scale 1 (TRIM_PAD)', () => {
+test('at scale 2 a trim stops 24 capture px short of the marks, as 12 at scale 1 (TRIM_PAD)', () => {
   const frame = [0, 0, 300, 200]; const marks = [20, 60, 30, 30];
   const px = canvas(300, 200).fill(100, 100, 40, 20, INK);
   const one = trimBlank(px, frame, marks);
   const two = atScale(2).trimBlank(doubled(px), times2(frame), times2(marks));
-  assert.deepEqual(one.box.slice(0, 2), [18, 58]);
+  assert.deepEqual(one.box.slice(0, 2), [8, 48]);
   assert.deepEqual([...two.box], times2(one.box));
 });
 
@@ -1340,6 +1413,22 @@ test('at scale 2 content under a card counts 4 times the pixels, over the same b
   }
 });
 
+// A card's edge is seldom on a pixel line. One that reaches 0.3 of a CSS px into a line takes that whole px by the
+// 1x count, and half of it by a count of the 2x capture's own pixels.
+test('at scale 2 a card whose edge falls within a CSS px hides and covers what its 1x twin does', () => {
+  const px = canvas(200, 100).fill(40, 20, 120, 8, INK);
+  const hidden = [contentUnder(px, [0, 0, 200, 100], 1, ELEMENT), atScale(2).contentUnder(doubled(px), [0, 0, 400, 200], 0.5, ELEMENT)];
+  const covered = [contentUnder(px, [0, 0, 200, 100], 1, ELEMENT, -0.5), atScale(2).contentUnder(doubled(px), [0, 0, 400, 200], 0.5, ELEMENT, -1)];
+  for (const top of [30.7, 30.4, 29.8]) {
+    const card = [70, top, 40, 30];
+    assert.ok(hidden[0](card) > 0, `a card at ${top} hides some of the line`);
+    assert.equal(hidden[1](card), 4 * hidden[0](card), `hidden by a card at ${top}`);
+    assert.equal(covered[1](card), 4 * covered[0](card), `covered by a card at ${top}`);
+  }
+  assert.equal(covered[0]([70, 30.7, 40, 30]), 0, 'a ring 0.3 px into the line covers no pixel by its centre');
+  assert.equal(covered[0]([70, 30.4, 40, 30]), 46, 'and one 0.6 px into it covers a row');
+});
+
 test('at scale 2 a lift keeps clear of a block the same board distance away (LIFT_CLEAR)', () => {
   const px = canvas(200, 100).fill(60, 30, 5, 40, INK);
   const one = liftSpot(contentUnder(px, [0, 0, 200, 100], 1, ELEMENT), [200, 100], ELEMENT, [40, 30]);
@@ -1352,4 +1441,469 @@ test('at scale 2 a rule keeps 8 capture px on its shorter side, as 4 at scale 1 
   const bottom = (below) => edgeAtBothScales(canvas(200, 200).fill(100, 40, 1, 98 + below, [200, 200, 200]), [20, 20, 160, 118], 'bottom');
   assert.deepEqual(bottom(3), [false, false], '3px below the line');
   assert.deepEqual(bottom(4), [true, true], '4px below the line');
+});
+
+test('liftSpot keeps a card its ring and 2 px inside the frame', () => {
+  const nothing = () => 0;
+  // element at x 3..43 in a 200 px room, card 60 wide: it must start at 5 or later to keep the ring inside
+  const spot = liftSpot(nothing, [200, 100], [3, 40, 40, 20], [60, 30]);
+  assert.ok(spot.L >= 5 - 1e-9, `card starts at ${spot.L}`);
+  assert.equal(spot.clamped, true, 'the element sits nearer the edge than a card may');
+});
+
+test('liftSpot leaves room for a dot on the right and the bottom while the element allows', () => {
+  // element ends 30 px from the right edge and 30 from the bottom; a card 20 px larger each way could reach both edges,
+  // and this measure prefers exactly that
+  const towardsEdge = ([L, T]) => 1000 - L - T;
+  const spot = liftSpot(towardsEdge, [200, 100], [130, 50, 40, 20], [60, 40]);
+  assert.ok(spot.L + 60 <= 200 - 16 + 1e-9, 'right edge keeps 16');
+  assert.ok(spot.T + 40 <= 100 - 16 + 1e-9, 'bottom edge keeps 16');
+});
+
+test('liftSpot gives the dot room up when the element itself sits nearer the edge', () => {
+  const spot = liftSpot(() => 0, [200, 100], [150, 40, 44, 20], [50, 26]);
+  assert.ok(spot.L + 50 >= 194 - 1e-9, 'the card still covers its element');
+  assert.ok(spot.L + 50 <= 200 - 5 + 1e-9, 'and keeps its ring inside');
+});
+
+test('liftSpot keeps the dot room only when it leaves the card a board px to move', () => {
+  // the element ends 16.2 px above the frame bottom, then 17.2: the room would hold the first card to 0.2 px of travel
+  const hangs = (bottom) => liftSpot((card) => Math.max(0, 60 - card[1]), [200, 100], [40, 60, 60, 100 - bottom - 60], [70, (100 - bottom - 60) + 4]).T;
+  assert.equal(hangs(16.2), 60, 'the card is free to hang from the top of its element');
+  assert.ok(hangs(17.2) < 60, 'with a px to move it stays clear of the dot room');
+});
+
+const { tightenBox, adoptLeading } = sandbox.__composeGeometry;
+const tight = (...args) => { const { box, moved } = tightenBox(...args); return { box: [...box], moved: { ...moved } }; };
+const RULE = [229, 231, 235];
+
+test('tightenBox shrinks a full-width row to its words', () => {
+  const px = canvas(400, 100).fill(40, 44, 90, 12, INK);
+  assert.deepEqual(tight(px, [20, 40, 360, 20]).box, [40, 44, 90, 12]);
+});
+
+test('tightenBox drops a divider on one edge and keeps the words', () => {
+  const px = canvas(400, 100).fill(40, 44, 90, 12, INK).fill(20, 59, 360, 1, RULE);
+  assert.deepEqual(tight(px, [20, 40, 360, 20]).box, [40, 44, 90, 12]);
+});
+
+test('tightenBox keeps a border that turns a corner, and the padding inside it', () => {
+  const px = canvas(400, 100);
+  px.fill(20, 40, 200, 1, RULE).fill(20, 69, 200, 1, RULE).fill(20, 40, 1, 30, RULE).fill(219, 40, 1, 30, RULE).fill(40, 50, 60, 10, INK);
+  assert.deepEqual(tight(px, [20, 40, 200, 30]).box, [20, 40, 200, 30]);
+});
+
+test('tightenBox keeps the padding of an element with its own background', () => {
+  const px = canvas(400, 100).fill(40, 40, 80, 24, [219, 234, 254]).fill(52, 47, 40, 10, INK);
+  assert.deepEqual(tight(px, [40, 40, 80, 24]).box, [40, 40, 80, 24]);
+});
+
+test('tightenBox keeps a thick accent border', () => {
+  const px = canvas(400, 100).fill(40, 40, 4, 24, [79, 70, 229]).fill(60, 46, 80, 12, INK);
+  const { box } = tight(px, [40, 40, 300, 24]);
+  assert.equal(box[0], 40, 'the left edge stays on the accent');
+  assert.equal(box[0] + box[2], 140, 'the right edge comes in to the words');
+});
+
+test('tightenBox keeps the fraction of a side that stays', () => {
+  const px = canvas(400, 100).fill(40, 40, 4, 24, [79, 70, 229]).fill(60, 46, 80, 12, INK);
+  const { box, moved } = tight(px, [40, 40.5, 300, 23.25]);
+  assert.deepEqual(moved, { left: 0, top: 0, right: 200, bottom: 0 });
+  assert.deepEqual(box, [40, 40.5, 100, 23.25], 'top and bottom stay where the element put them, not on the pixel grid');
+});
+
+test('tightenBox leaves a box with nothing in it alone', () => {
+  const px = canvas(400, 100);
+  assert.deepEqual(tight(px, [20, 40, 360, 20]).box, [20, 40, 360, 20]);
+});
+
+test('cleanPad stops before a hairline', () => {
+  const px = canvas(400, 100).fill(40, 44, 90, 12, INK).fill(20, 59, 360, 1, RULE);
+  const [, , , bottom] = cleanPad(px, [40, 44, 90, 12], 4, {});
+  assert.equal(bottom, 2, 'two lines of ground, then the line before the rule');
+});
+
+test('adoptLeading takes a tick that leads the line', () => {
+  const px = canvas(400, 100).fill(60, 44, 90, 12, INK).fill(40, 44, 12, 12, [22, 163, 74]);
+  assert.deepEqual([...adoptLeading(px, [60, 44, 90, 12], {})], [40, 44, 110, 12]);
+});
+
+test('adoptLeading leaves the word before a word space, a wide neighbour, and a taller thing alone', () => {
+  const word = canvas(400, 100).fill(60, 44, 90, 12, INK).fill(44, 44, 12, 12, INK);
+  assert.deepEqual([...adoptLeading(word, [60, 44, 90, 12], {})], [60, 44, 90, 12], 'a 4 px gap is a word space');
+  const wide = canvas(400, 100).fill(100, 44, 90, 12, INK).fill(50, 44, 42, 12, INK);
+  assert.deepEqual([...adoptLeading(wide, [100, 44, 90, 12], {})], [100, 44, 90, 12], 'wider than an icon');
+  const tall = canvas(400, 100).fill(60, 44, 90, 12, INK).fill(40, 30, 12, 40, INK);
+  assert.deepEqual([...adoptLeading(tall, [60, 44, 90, 12], {})], [60, 44, 90, 12], 'taller than the line');
+});
+
+test('adoptLeading never takes a box it was told to avoid', () => {
+  const px = canvas(400, 100).fill(60, 44, 90, 12, INK).fill(40, 44, 12, 12, INK);
+  assert.deepEqual([...adoptLeading(px, [60, 44, 90, 12], { avoid: [[38, 42, 16, 16]] })], [60, 44, 90, 12]);
+});
+
+test('tightenBox shrinks a row that lies under the divider of the row above', () => {
+  const px = canvas(400, 100).fill(40, 44, 90, 12, INK).fill(20, 39, 360, 1, RULE);
+  assert.deepEqual(tight(px, [20, 40, 360, 20]).box, [40, 44, 90, 12]);
+});
+
+test('tightenBox keeps a faint background of its own', () => {
+  const px = canvas(400, 100).fill(40, 40, 80, 24, [243, 244, 246]).fill(52, 47, 40, 10, INK);
+  assert.deepEqual(tight(px, [40, 40, 80, 24]).box, [40, 40, 80, 24]);
+});
+
+test('tightenBox takes its ground from outside the box, so a block of one colour is content', () => {
+  const px = canvas(600, 100).fill(40, 40, 80, 14, INK).fill(128, 40, 156, 14, [17, 24, 39]);
+  assert.deepEqual(tight(px, [40, 40, 500, 14]).box, [40, 40, 244, 14], 'the right edge stops at the block; the bar on the left edge stays');
+});
+
+test('tightenBox leaves the sides beside an edge that content runs on past', () => {
+  const px = canvas(400, 100).fill(40, 40, 120, 10, INK);
+  assert.deepEqual(tight(px, [30, 35, 60, 20]).box, [40, 35, 50, 20], 'the bar is cut on the right: top and bottom stay, so the cut still shows');
+  assert.deepEqual(growBox(px, tight(px, [30, 35, 60, 20]).box, 96, { band: LIFT_BAND }).box, [39, 35, 122, 20]);
+  const whole = canvas(400, 100).fill(40, 40, 50, 10, INK).fill(90, 44, 1, 2, [120, 120, 120]);
+  assert.deepEqual(tight(whole, [30, 35, 60, 20]).box, [40, 40, 50, 10], 'a pixel of overhang is not content running on');
+});
+
+test('tightenBox at the image edge takes the ground the other sides found, and keeps a background that has none', () => {
+  const row = canvas(400, 100).fill(40, 44, 90, 12, INK);
+  assert.deepEqual(tight(row, [0, 40, 400, 20]).box, [40, 44, 90, 12]);
+  const banner = canvas(400, 100).fill(0, 40, 200, 24, [219, 234, 254]).fill(20, 47, 40, 10, INK);
+  assert.deepEqual(tight(banner, [0, 40, 200, 24]).box, [0, 40, 200, 24]);
+});
+
+test('tightenBox never moves in past a fill it was told to keep', () => {
+  const FILL = [17, 24, 39];
+  const px = canvas(400, 100).fill(40, 44, 60, 12, INK).fill(108, 40, 94, 20, FILL);
+  assert.deepEqual(tight(px, [20, 40, 180, 20]).box, [40, 40, 68, 20], 'the fill runs past the right edge, so alone it reads as ground there');
+  assert.deepEqual(tight(px, [20, 40, 180, 20], { keep: [[108, 40, 94, 20]] }).box, [40, 40, 160, 20], 'kept, the box still holds the fill');
+  const grown = canvas(400, 100).fill(40, 44, 60, 12, INK).fill(106, 38, 98, 24, FILL);
+  assert.deepEqual(tight(grown, [20, 40, 180, 20], { keep: [[108, 40, 94, 20]], ignore: [[106, 38, 98, 24]] }).box, [40, 40, 160, 20],
+    'a fill drawn past the box on three sides is not content running on: the left still shrinks, and the fill holds the rest');
+});
+
+test('tightenBox is free of a fill that only grazes the box with its margin', () => {
+  const px = canvas(400, 100).fill(40, 44, 90, 12, INK).fill(18, 58, 364, 24, [17, 24, 39]);
+  assert.deepEqual(tight(px, [20, 40, 360, 20], { keep: [[20, 60, 360, 20]], ignore: [[18, 58, 364, 24]] }).box, [40, 44, 90, 12], 'the redaction is the row below');
+  assert.deepEqual(tight(px, [20, 40, 360, 20]).box, [40, 44, 90, 14], 'unread, the margin is a block on the bottom edge');
+});
+
+test('cleanPad reads a hairline through an ignored fill as it reads a clean line', () => {
+  const px = canvas(400, 100).fill(38, 42, 94, 16, [17, 24, 39]);
+  assert.deepEqual(cleanPad(px, [40, 44, 90, 12], 4, { ignore: [[38, 42, 94, 16]] }), [4, 4, 4, 4]);
+});
+
+const TICK = [22, 163, 74];
+
+test('adoptLeading takes an icon as tall as the element the box was tightened from', () => {
+  const px = canvas(400, 100).fill(60, 46, 90, 9, INK).fill(40, 43, 14, 14, TICK);
+  assert.deepEqual([...adoptLeading(px, [60, 46, 90, 9], {})], [60, 46, 90, 9], 'taller than the words alone');
+  assert.deepEqual([...adoptLeading(px, [60, 46, 90, 9], { element: [60, 42, 300, 16] })], [40, 43, 110, 14], 'the box takes the icon whole');
+  assert.deepEqual([...adoptLeading(px, [60, 46, 90, 9], { element: [60, 44, 300, 12] })], [60, 46, 90, 9], 'taller than the element');
+});
+
+test('adoptLeading leaves a short word that stands a word space from the word before it', () => {
+  const px = canvas(400, 100).fill(60, 44, 90, 12, INK).fill(40, 44, 14, 12, INK).fill(8, 44, 26, 12, INK);
+  assert.deepEqual([...adoptLeading(px, [60, 44, 90, 12], {})], [60, 44, 90, 12], '6 px before it, 6 px after it');
+  const led = canvas(400, 100).fill(60, 44, 90, 12, INK).fill(40, 44, 14, 12, INK).fill(8, 44, 23, 12, INK);
+  assert.deepEqual([...adoptLeading(led, [60, 44, 90, 12], {})], [40, 44, 110, 12], '9 px of ground beyond a 6 px gap');
+});
+
+test('adoptLeading takes an icon that stands at the edge of its bounds', () => {
+  const px = canvas(400, 100).fill(60, 44, 90, 12, INK).fill(40, 44, 12, 12, TICK);
+  assert.deepEqual([...adoptLeading(px, [60, 44, 90, 12], { bounds: [38, 0, 362, 100] })], [40, 44, 110, 12]);
+  assert.deepEqual([...adoptLeading(px, [60, 44, 90, 12], { bounds: [44, 0, 356, 100] })], [60, 44, 90, 12], 'cut by the bounds');
+});
+
+const rulesAcross = (...args) => [...sandbox.__composeGeometry.rulesAcross(...args)];
+
+test('rulesAcross names the rows of a divider the rect crosses, and nothing shorter or thicker', () => {
+  const px = canvas(400, 200).fill(20, 60, 360, 1, RULE).fill(20, 90, 360, 2, RULE).fill(20, 120, 360, 3, RULE).fill(196, 150, 16, 1, INK);
+  assert.deepEqual(rulesAcross(px, [200, 40, 210, 180]), [60, 90, 91], 'a 3 px band is a block and a 16 px dash is a glyph');
+  assert.deepEqual(rulesAcross(px, [200, 91, 210, 180]), [91], 'a rect that starts inside a rule still reads it whole');
+  const stub = canvas(400, 200).fill(20, 60, 200, 1, RULE);
+  assert.deepEqual(rulesAcross(stub, [200, 40, 210, 180]), [], 'a rule that ends beside the rect is not one it crosses');
+  assert.deepEqual(rulesAcross(stub, [200, 40, 210, 180], [0, 0, 220, 200]), [60], 'unless the bounds end there too');
+  const border = canvas(400, 200).fill(300, 20, 1, 160, RULE).fill(20, 60, 360, 1, RULE);
+  assert.deepEqual(rulesAcross(border, [280, 90, 320, 96], null, true), [300], 'upright, a border the rect crosses is a column of it');
+  assert.deepEqual(rulesAcross(border, [280, 90, 320, 96]), [], 'and no row');
+});
+
+test('at scale 2 tightening, a hairline pad stop and a leading icon give the 1x answers doubled (RULE_THICKNESS, TIGHT_MIN, ADOPT_*)', () => {
+  const row = canvas(400, 100).fill(60, 44, 90, 12, INK).fill(20, 59, 360, 1, RULE).fill(40, 44, 12, 12, [22, 163, 74]);
+  const twoRow = doubled(row);
+  assert.deepEqual([...atScale(2).tightenBox(twoRow, times2([20, 40, 360, 20])).box], times2(tight(row, [20, 40, 360, 20]).box));
+  assert.deepEqual([...atScale(2).cleanPad(twoRow, times2([60, 44, 90, 12]), 8)], [...cleanPad(row, [60, 44, 90, 12], 4)].map((n) => n * 2));
+  assert.deepEqual([...adoptLeading(row, [60, 44, 90, 12], {})], [40, 44, 110, 12]);
+  assert.deepEqual([...atScale(2).adoptLeading(twoRow, times2([60, 44, 90, 12]), {})], times2([40, 44, 110, 12]));
+  const half = doubled(canvas(400, 100).fill(40, 44, 90, 12, INK)).fill(79, 87, 182, 1, INK).fill(79, 87, 1, 26, INK).fill(260, 87, 1, 26, INK).fill(79, 112, 182, 1, INK);
+  assert.deepEqual([...atScale(2).tightenBox(half, times2([20, 40, 360, 20])).box], [78, 86, 184, 28], 'half a CSS px of ink on each side takes the whole CSS px, as its 1x twin would');
+  const tick = doubled(canvas(400, 100).fill(60, 44, 90, 12, INK).fill(40, 44, 12, 12, TICK)).fill(79, 87, 25, 1, TICK).fill(79, 87, 1, 25, TICK);
+  assert.deepEqual([...atScale(2).adoptLeading(tick, times2([60, 44, 90, 12]), { element: times2([60, 42, 90, 16]) })], [78, 86, 222, 26]);
+  const lines = canvas(400, 200).fill(20, 60, 360, 1, RULE).fill(20, 90, 360, 2, RULE).fill(20, 120, 360, 3, RULE);
+  assert.deepEqual([...atScale(2).rulesAcross(doubled(lines), times2([200, 40, 210, 180]))], [120, 121, 180, 181, 182, 183]);
+});
+
+const contentBox = (...args) => [...sandbox.__composeGeometry.contentBox(...args)];
+
+test('contentBox is the box less the full lines of ground at its edges', () => {
+  const px = canvas(300, 100).fill(50, 46, 80, 10, INK);
+  assert.deepEqual(contentBox(px, [40, 40, 120, 22]), [50, 46, 80, 10]);
+});
+
+test('contentBox keeps a blank box whole', () => {
+  assert.deepEqual(contentBox(canvas(300, 100), [40, 40, 120, 22]), [40, 40, 120, 22]);
+});
+
+test('contentBox does not shrink past a single faint pixel', () => {
+  const px = canvas(300, 100).fill(50, 46, 80, 10, INK).fill(41, 41, 1, 1, [240, 240, 240]);
+  const box = contentBox(px, [40, 40, 120, 22]);
+  assert.ok(box[0] <= 41 && box[1] <= 41, 'the faint pixel stays inside');
+});
+
+test('every pixel contentBox leaves out lies on a full line of one colour', () => {
+  const px = canvas(300, 100, [250, 250, 250]).fill(60, 44, 40, 14, INK).fill(120, 50, 30, 4, [200, 30, 30]);
+  const outer = [40, 40, 140, 24]; const [x, y, w, h] = contentBox(px, outer);
+  for (let yy = outer[1]; yy < outer[1] + outer[3]; yy += 1) for (let xx = outer[0]; xx < outer[0] + outer[2]; xx += 1) {
+    if (xx >= x && xx < x + w && yy >= y && yy < y + h) continue;
+    const at = (yy * px.width + xx) * 4;
+    assert.ok(px.data[at] >= 242, `pixel ${xx},${yy} outside the content box is not ground`);
+  }
+});
+
+test('contentBox keeps a box whole when the ground runs from its two sides meet', () => {
+  // each end column is within 8 of the middle but not of the other end, and one faint pixel keeps the rows from being one colour throughout
+  const px = canvas(300, 100, [240, 240, 240]).fill(40, 40, 1, 22, [245, 245, 245]).fill(159, 40, 1, 22, [235, 235, 235]).fill(40, 50, 1, 1, [252, 252, 252]);
+  const box = contentBox(px, [40, 40, 120, 22]);
+  assert.deepEqual(box, [40, 40, 120, 22], `a box with nothing to find came back ${box}`);
+});
+
+const edgeSliver = (...args) => [...sandbox.__composeGeometry.edgeSliver(...args)];
+const edgeAir = (...args) => Object.fromEntries(Object.entries(sandbox.__composeGeometry.edgeAir(...args)).map(([side, { have, ground }]) => [side, { have, ground: ground && [...ground] }]));
+const BORDER = [203, 213, 225];
+
+test('edgeSliver takes a border off every side it lies on', () => {
+  const px = canvas(300, 200);
+  px.fill(20, 20, 200, 1, BORDER).fill(20, 119, 200, 1, BORDER).fill(20, 20, 1, 100, BORDER).fill(219, 20, 1, 100, BORDER).fill(40, 50, 80, 12, INK);
+  assert.deepEqual(edgeSliver(px, [20, 20, 200, 100], null), [21, 21, 198, 98]);
+});
+
+test('edgeSliver takes a strip of the page behind a card and the border after it', () => {
+  const px = canvas(300, 200, [241, 245, 249]).fill(24, 0, 276, 200, [255, 255, 255]).fill(24, 0, 1, 200, BORDER).fill(60, 50, 80, 12, INK);
+  assert.equal(edgeSliver(px, [20, 20, 200, 100], null)[0], 25);
+});
+
+test('edgeSliver leaves a band wider than a sliver, content at the edge, and the marks alone', () => {
+  const header = canvas(300, 200).fill(20, 20, 200, 30, [30, 41, 59]).fill(40, 70, 80, 12, INK);
+  assert.equal(edgeSliver(header, [20, 20, 200, 100], null)[1], 20, 'a 30 px header bar is not a sliver');
+  const text = canvas(300, 200).fill(20, 50, 80, 12, INK);
+  assert.equal(edgeSliver(text, [20, 20, 200, 100], null)[0], 20, 'content at the edge is not a sliver');
+  const marked = canvas(300, 200).fill(20, 20, 1, 100, BORDER).fill(40, 50, 80, 12, INK);
+  assert.equal(edgeSliver(marked, [20, 20, 200, 100], [20, 48, 100, 16])[0], 20, 'an edge never moves into the marks');
+});
+
+test('edgeSliver leaves the margin of content that stands on the ground at the edge', () => {
+  const px = canvas(300, 200).fill(23, 50, 80, 12, INK);
+  assert.deepEqual(edgeSliver(px, [20, 20, 200, 100], null), [20, 20, 200, 100]);
+});
+
+// The capture's own frame: a card with a 1 px border on a tinted page, and 12 px of that page all round it.
+const PAGE = [241, 245, 249];
+const padded = (radius = 0) => {
+  const px = canvas(300, 200, PAGE).fill(32, 32, 176, 76, BORDER).fill(33, 33, 174, 74, [255, 255, 255]).fill(60, 60, 80, 12, INK);
+  for (const [x, y] of [[32, 32], [208 - radius, 32], [32, 108 - radius], [208 - radius, 108 - radius]]) px.fill(x, y, radius, radius, PAGE);
+  return px;
+};
+
+test('edgeSliver takes the strip of page the capture pads a frame with, and the border inside it, from all four sides', () => {
+  assert.deepEqual(edgeSliver(padded(), [20, 20, 200, 100], null), [33, 33, 174, 74]);
+});
+
+// A white card with a 1 px border and round corners on the tinted page, drawn a pixel at a time by its centre.
+const roundCard = (px, [x, y, w, h], radius) => {
+  const within = (cx, cy, inset) => {
+    const r = radius - inset; const [x0, y0, x1, y1] = [x + inset, y + inset, x + w - inset, y + h - inset];
+    if (cx < x0 || cy < y0 || cx > x1 || cy > y1) return false;
+    const dx = Math.max(x0 + r - cx, 0, cx - (x1 - r)); const dy = Math.max(y0 + r - cy, 0, cy - (y1 - r));
+    return dx * dx + dy * dy <= r * r;
+  };
+  for (let j = y; j < y + h; j += 1) for (let i = x; i < x + w; i += 1) {
+    if (within(i + 0.5, j + 0.5, 1)) px.fill(i, j, 1, 1, [255, 255, 255]); else if (within(i + 0.5, j + 0.5, 0)) px.fill(i, j, 1, 1, BORDER);
+  }
+  return px;
+};
+const CARD = [32, 32, 236, 116];
+const cardFrame = [20, 20, 260, 140];
+const oneColour = (px, [x, y, w, h]) => [[x, y, w, 1], [x, y + h - 1, w, 1], [x, y, 1, h], [x + w - 1, y, 1, h]].every(([lx, ly, lw, lh]) => {
+  for (let j = ly; j < ly + lh; j += 1) for (let i = lx; i < lx + lw; i += 1) if (px.data[(j * px.width + i) * 4] !== 255 || px.data[(j * px.width + i) * 4 + 2] !== 255) return false;
+  return true;
+});
+
+test('edgeSliver moves all four edges inside a card with round corners, past its border and its arcs', () => {
+  const px = roundCard(canvas(320, 200, PAGE), CARD, 12).fill(70, 70, 80, 12, INK);
+  const box = edgeSliver(px, cardFrame, null);
+  assert.deepEqual(box, [36, 36, 228, 108], 'the 12 px strip and 4 px more: the border, and as far as the arc of a 12 px corner reaches');
+  assert.ok(oneColour(px, box), "each of the four edge lines is the card's ground and nothing else");
+  assert.deepEqual(edgeSliver(roundCard(canvas(320, 200, PAGE), CARD, 24).fill(70, 70, 80, 12, INK), cardFrame, null), [40, 40, 220, 100], 'a rounder corner takes the edges further in: the arc is found, not assumed');
+});
+
+test('edgeSliver leaves a round card whole when content stands flush inside its border on one side', () => {
+  const px = roundCard(canvas(320, 200, PAGE), CARD, 12).fill(34, 70, 80, 12, INK);
+  assert.deepEqual(edgeSliver(px, cardFrame, null), cardFrame, 'no edge moves: an outline on three sides is worse than one on four');
+});
+
+test('edgeSliver enters a round card only as far as the marks, a fill or an imported frame allow', () => {
+  const px = roundCard(canvas(320, 200, PAGE), CARD, 12).fill(70, 70, 80, 12, INK);
+  assert.deepEqual(edgeSliver(px, cardFrame, [35, 70, 80, 12]), cardFrame, 'a mark 3 px inside the border holds every edge');
+  assert.deepEqual(edgeSliver(px, cardFrame, null, { fixed: true }), [36, 36, 228, 108], 'an imported frame may shrink onto 12 px of ground');
+  const near = roundCard(canvas(320, 200, PAGE), CARD, 12).fill(45, 70, 80, 12, INK);
+  assert.deepEqual(edgeSliver(near, cardFrame, null)[0], 36, 'a live frame moves in beside content 9 px away, and is given air');
+  assert.deepEqual(edgeSliver(near, cardFrame, null, { fixed: true }), cardFrame, 'an imported one would need air painted there, so it stays');
+});
+
+test('at scale 2 a round card is entered as its 1x twin is', () => {
+  const px = roundCard(canvas(320, 200, PAGE), CARD, 12).fill(70, 70, 80, 12, INK);
+  assert.deepEqual([...atScale(2).edgeSliver(doubled(px), times2(cardFrame), null)], times2(edgeSliver(px, cardFrame, null)));
+});
+
+test('edgeSliver leaves a strip wider than the pad, and a band wider than a sliver behind a strip', () => {
+  const wide = canvas(300, 200, PAGE).fill(33, 0, 267, 200, [255, 255, 255]).fill(33, 0, 1, 200, BORDER).fill(60, 50, 80, 12, INK);
+  assert.equal(edgeSliver(wide, [20, 20, 200, 100], null)[0], 20, '13 px of page is a band of its own');
+  const thick = canvas(300, 200, PAGE).fill(25, 0, 275, 200, [255, 255, 255]).fill(25, 0, 7, 200, BORDER).fill(60, 50, 80, 12, INK);
+  assert.equal(edgeSliver(thick, [20, 20, 200, 100], null)[0], 25, 'the strip goes and the 7 px band stays');
+});
+
+test('edgeSliver takes a border that content stands flush against', () => {
+  const px = canvas(300, 200).fill(20, 20, 1, 100, BORDER).fill(21, 50, 80, 12, INK);
+  assert.equal(edgeSliver(px, [20, 20, 200, 100], null)[0], 21);
+});
+
+test('edgeSliver leaves ground that ends at content, however near the edge', () => {
+  const px = canvas(300, 200).fill(28, 50, 80, 12, INK).fill(60, 28, 80, 12, INK);
+  assert.deepEqual(edgeSliver(px, [20, 20, 200, 100], null), [20, 20, 200, 100], 'the 8 px beside the text and above it are its margin');
+});
+
+test('edgeAir reads ground through a rule that crosses the edge', () => {
+  const px = canvas(300, 200).fill(0, 60, 300, 1, BORDER).fill(24, 80, 80, 12, INK);
+  const { left } = edgeAir(px, [20, 20, 200, 100]);
+  assert.equal(left.have, 4);
+  assert.deepEqual(left.ground, [255, 255, 255]);
+});
+
+test('edgeAir counts the ground inside each edge and names its colour', () => {
+  const px = canvas(300, 200).fill(23, 50, 80, 12, INK);
+  const air = edgeAir(px, [20, 20, 200, 100]);
+  assert.equal(air.left.have, 3);
+  assert.deepEqual(air.left.ground, [255, 255, 255]);
+  assert.equal(air.top.have, 12, 'counted up to the air it needs and no further');
+});
+
+test('edgeAir gives no ground for an edge that cuts content', () => {
+  const px = canvas(300, 200).fill(10, 50, 80, 12, INK);
+  assert.equal(edgeAir(px, [20, 20, 200, 100]).left.ground, null);
+});
+
+test('edgeAir finds no ground inside an edge that content stands flush against, and names the ground to paint', () => {
+  const px = canvas(300, 200).fill(19, 0, 1, 200, BORDER).fill(20, 50, 80, 12, INK);
+  const { left } = edgeAir(px, [20, 20, 200, 100]);
+  assert.equal(left.have, 0);
+  assert.deepEqual(left.ground, [255, 255, 255], 'the line outside is one colour, so the text ends at the edge and is not cut by it');
+});
+
+test('edgeAir gives no ground for an edge that lies on a rule', () => {
+  const px = canvas(300, 200).fill(20, 20, 2, 100, BORDER).fill(40, 50, 80, 12, INK);
+  assert.equal(edgeAir(px, [20, 20, 200, 100]).left.ground, null, 'a border the marks kept at the edge is not ground to paint more of');
+});
+
+test('edgeAir counts a strip wider than a sliver as ground, though a border ends it', () => {
+  const px = canvas(300, 200, PAGE).fill(28, 0, 272, 200, [255, 255, 255]).fill(28, 0, 1, 200, BORDER).fill(60, 50, 80, 12, INK);
+  const { left } = edgeAir(px, [20, 20, 200, 100]);
+  assert.equal(left.have, 8);
+  assert.deepEqual(left.ground, PAGE);
+});
+
+test('edgeAir counts a header bar as the ground of the edge it runs along', () => {
+  const bar = [30, 41, 59];
+  const px = canvas(300, 200).fill(20, 20, 200, 30, bar).fill(40, 27, 80, 12, [255, 255, 255]);
+  const { top } = edgeAir(px, [20, 20, 200, 100]);
+  assert.equal(top.have, 7);
+  assert.deepEqual(top.ground, bar);
+});
+
+test('at scale 2 a strip is 24 capture px, a sliver 12 and air 24, as 12, 6 and 12 at scale 1 (FRAME_PAD, SLIVER, AIR)', () => {
+  const frame = [20, 20, 200, 100];
+  const one = edgeSliver(padded(), frame, null);
+  assert.deepEqual([...atScale(2).edgeSliver(doubled(padded()), times2(frame), null)], times2(one));
+  const thick = canvas(300, 200, PAGE).fill(25, 0, 275, 200, [255, 255, 255]).fill(25, 0, 7, 200, BORDER).fill(60, 50, 80, 12, INK);
+  assert.equal(atScale(2).edgeSliver(doubled(thick), times2(frame), null)[0], 50, 'a 14 capture px band stays');
+  const text = canvas(300, 200).fill(23, 50, 80, 12, INK);
+  const two = atScale(2).edgeAir(doubled(text), times2(frame));
+  assert.deepEqual([two.left.have, two.top.have], [6, 24]);
+});
+
+// Lines of text 10 px apart, as rows of 6 px glyphs with 1 px gaps: a solid bar wider than the crop would be a line of one colour, which is clean.
+const paragraph = (from, to) => {
+  const px = canvas(600, 400);
+  for (let y = from; y < to; y += 10) for (let x = 41; x < 540; x += 7) px.fill(x, y, 6, 6, INK);
+  return px;
+};
+
+test('a crop edge that cuts a line looks inward for a clean band before it gives up', () => {
+  // a paragraph block ends 44 px above the mark; 48 px above the mark the margin line runs through it
+  const px = paragraph(60, 150).fill(200, 190, 100, 14, INK);
+  const { box, edges } = cropToMarks(px, [0, 0, 600, 400], [200, 190, 100, 14], { parts: [{ box: [200, 190, 100, 14], bracket: false }], hold: true });
+  assert.equal(edges.top, 'snapped');
+  assert.ok(box[1] >= 146 && box[1] <= 152, `the top edge sits in the gap under the paragraph (at ${box[1]})`);
+});
+
+test('a crop edge that looks inward keeps 24 px to the marks', () => {
+  // the block's last line ends 26 px above the mark, so the band under it ends nearer than the edge may go
+  const px = paragraph(38, 168).fill(200, 190, 100, 14, INK);
+  const { box, edges, cut } = cropToMarks(px, [0, 0, 600, 400], [200, 190, 100, 14], { parts: [{ box: [200, 190, 100, 14], bracket: false }], hold: true });
+  assert.equal(box[1], 142, 'the top edge stays at its margin');
+  assert.equal(edges.top, 'margin');
+  assert.equal(cut, true);
+});
+
+test('a crop edge with a band both ways takes the nearer one', () => {
+  const out = canvas(600, 400).fill(270, 150, 36, 10, INK);
+  assert.equal(cropToMarks(out, [0, 0, 600, 400], [200, 150, 40, 20]).box[2], 318 - 136, 'the ink ends 2 px out and starts 34 px in: the edge goes out, and 12 px on for air');
+  const back = canvas(600, 400).fill(295, 150, 46, 10, INK);
+  assert.equal(cropToMarks(back, [0, 0, 600, 400], [200, 150, 40, 20]).box[2], 293 - 136, 'the ink ends 37 px out and starts 9 px in: the edge comes in, 2 px into the band');
+});
+
+test("a link's crop keeps 96 px above its places", () => {
+  const px = canvas(800, 600).fill(100, 300, 80, 14, INK).fill(400, 300, 80, 14, INK);
+  const parts = [{ box: [100, 300, 80, 14], bracket: false, link: true }, { box: [400, 300, 80, 14], bracket: false, link: true }];
+  const { box } = cropToMarks(px, [0, 0, 800, 600], [100, 300, 380, 14], { parts });
+  assert.ok(box[1] <= 300 - 96, `the crop starts at ${box[1]}`);
+});
+
+test('at scale 2 a crop edge looks inward to 48 capture px of the marks and a link keeps 192 above (CROP_MARGIN_MIN, CROP_MARGIN_LINK)', () => {
+  const px = paragraph(60, 150).fill(200, 190, 100, 14, INK);
+  const marks = [200, 190, 100, 14];
+  sameCropTwice(px, [0, 0, 600, 400], marks, { parts: [{ box: marks, bracket: false }], hold: true });
+  const link = canvas(800, 600).fill(100, 300, 80, 14, INK).fill(400, 300, 80, 14, INK);
+  const two = sameCropTwice(link, [0, 0, 800, 600], [100, 300, 380, 14], { parts: [{ box: [100, 300, 380, 14], bracket: false, link: true }] });
+  assert.ok(two.box[1] <= 300 - 96);
+});
+
+test('a trim never enters the box it is told to keep', () => {
+  const px = canvas(400, 300).fill(100, 100, 120, 40, INK);
+  const { box, trimmed } = trimBlank(px, [0, 0, 400, 300], [100, 100, 120, 40], [70, 92, 190, 56]);
+  assert.deepEqual(box, [70, 88, 190, 64], 'the left and right edges stop at the kept box, the others 12 px from the marks');
+  assert.deepEqual(trimmed, { left: 70, top: 88, right: 140, bottom: 148 });
+});
+
+test('a trim is measured from ink, not from the faint fringe a glyph leaves beside it, and still stops at a faint rule', () => {
+  const fringe = [243, 243, 243];
+  const px = canvas(400, 300).fill(100, 100, 120, 40, INK).fill(100, 99, 20, 1, fringe).fill(99, 100, 1, 20, fringe);
+  assert.deepEqual(trimBlank(px, [0, 0, 400, 300], null).box, [88, 88, 144, 64], 'a fringe 20 px long is not where the content begins');
+  const ruled = canvas(400, 300).fill(100, 100, 120, 40, INK).fill(100, 80, 24, 1, fringe);
+  assert.equal(trimBlank(ruled, [0, 0, 400, 300], null).box[1], 68, 'a faint line 24 px long is a rule');
+});
+
+test('trimBlank keeps 12 px of ground', () => {
+  const px = canvas(400, 300).fill(100, 100, 120, 40, INK);
+  assert.deepEqual(trimBlank(px, [0, 0, 400, 300], null).box, [88, 88, 144, 64]);
 });
