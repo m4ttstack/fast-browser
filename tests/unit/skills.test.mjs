@@ -672,6 +672,24 @@ test('the browser-driver returns a flowProposal instead of asking a user it does
   assert.match(text, /skippedBySession/);
 });
 
+// A session holds its tab group in the user's Chrome until it closes, and
+// before this rule only the distill path closed one. The runtime's
+// 30-minute idle release is the backstop; every task-ending surface must
+// still say to close when finished, and say why, or groups pile up.
+test('every task-ending surface closes the browser when finished with it', async () => {
+  for (const file of [
+    'skills/fast-browsing/SKILL.md',
+    'agents/browser-driver.md',
+    'templates/codex/browser_driver.toml',
+  ]) {
+    const text = await readFile(path.join(pluginRoot, file), 'utf8');
+    assert.match(text, /finished with the browser/, file);
+    assert.match(text, /browser_close/, file);
+    assert.match(text, /tab group/, file);
+    assert.match(text, /30 minutes/, file);
+  }
+});
+
 // The delineation must hold from both sides: mine-macros stays the batch
 // path (2+ session evidence, conversational per-macro approval, macros
 // family) and names the flows fast path rather than absorbing it; the fast

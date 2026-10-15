@@ -120,6 +120,14 @@ includes a `saved-login` skip, say with the proposal that the flow starts
 after a saved login and assumes a signed-in session. Skip distillation
 entirely when the delegated task requires leaving the page open.
 
+When you are finished with the browser and did not distill, call
+`browser_close` before returning, whether a flow, a macro or discrete calls
+did the work. A session keeps its tab group in the user's Chrome until it
+closes; closing removes the tabs you opened and ungroups the user's own. Skip
+it only when the brief says to leave the page open. Distillation already
+closed the session, so never close twice. An idle session releases its group
+after 30 minutes on its own, but that is a backstop, not the end of a task.
+
 Fast Browser drives the real Chrome instance launched for its extension
 bridge. Do not claim access to arbitrary pre-existing Chrome windows, Incognito
 windows, other browser profiles, or non-Chrome browsers. Never log in on the
