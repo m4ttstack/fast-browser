@@ -687,6 +687,8 @@ test('every task-ending surface closes the browser when finished with it', async
     assert.match(text, /browser_close/, file);
     assert.match(text, /tab group/, file);
     assert.match(text, /30 minutes/, file);
+    assert.match(text, /leave (?:the page|it) open/i, file);
+    assert.match(text, /asked to see the page|verify again after the next edit|brief says to leave the page open/, file);
   }
 });
 
