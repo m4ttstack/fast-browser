@@ -92,6 +92,8 @@ digraph fast_browsing {
 
     "Did the task use 3+ discrete calls with no flow or macro?" [shape=diamond];
     "Distill the session after an ad hoc solve" [shape=box];
+    "Will anyone still look at the page?" [shape=diamond];
+    "browser_close {}" [shape=plaintext];
     "Return the distilled result" [shape=box];
 
     "Off-script gate: a flow step mutated before FLOW_RUNNER_FAILURE" [shape=box];
@@ -254,7 +256,10 @@ digraph fast_browsing {
     "Signed-in marker found?" -> "Off-script gate: the secrets login failed" [label="no: never retry, lockout risk"];
 
     "Did the task use 3+ discrete calls with no flow or macro?" -> "Distill the session after an ad hoc solve" [label="yes"];
-    "Did the task use 3+ discrete calls with no flow or macro?" -> "Return the distilled result" [label="no"];
+    "Did the task use 3+ discrete calls with no flow or macro?" -> "Will anyone still look at the page?" [label="no"];
+    "Will anyone still look at the page?" -> "browser_close {}" [label="no: finished with the browser"];
+    "Will anyone still look at the page?" -> "Return the distilled result" [label="yes, or more browser work is planned"];
+    "browser_close {}" -> "Return the distilled result";
     "Distill the session after an ad hoc solve" -> "Return the distilled result";
     "Return the distilled result" -> "Task done: distilled result returned";
 
@@ -656,6 +661,22 @@ and the known-good selectors are still in context.
 Distill at most once per completed task, never mid-task, and never loop back to
 re-close or re-compile.
 
+### Will anyone still look at the page?
+
+A session keeps its tab group in the user's Chrome until it closes. When you
+are finished with the browser, call `browser_close {}`: it closes the tabs this
+session opened and ungroups the user's own. The next browser call reconnects on
+its own, under a new group.
+
+You are finished with the browser when no more browser work is planned for this
+task and nobody was told to look at the page. Leave it open when the user asked
+to see the page, or when you will verify again after the next edit.
+
+The distill path already closed the session, so do not close it again. A
+`browser_close` with no session open starts one just to close it. An idle
+session releases its group after 30 minutes on its own, but that is a backstop,
+not the end of a task.
+
 ### Return the distilled result
 
 Return only the requested string, small object, URL or short list, plus any
@@ -943,6 +964,7 @@ Chrome.
 | Login screen, secrets file and operator-named secrets | Log in by secret NAME, then check the signed-in marker |
 | Login screen, anything else | Ask the human to sign in in Chrome |
 | Just solved a repeatable journey with discrete calls | `browser_close`, `flows compile`, offer the flow |
+| Finished with the browser, nobody needs the page | `browser_close`, then return |
 | Task complete | Return only the distilled result |
 
 ## Rationalizations
