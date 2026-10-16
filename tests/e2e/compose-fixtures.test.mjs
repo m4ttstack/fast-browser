@@ -459,9 +459,25 @@ for (const file of (await readdir(specDir)).filter((f) => f.endsWith('.json'))) 
         assert.ok(board0.frame[1] >= y + h, `the drawn frame's top ${board0.frame[1]} lies above the ${key} box's bottom ${y + h}`);
       }
       if (fixture.expect?.frameUnder) {
-        // The drawn frame is in capture px and the spec's in CSS px.
-        const [, , specW] = fixture.panels[0].frame; const drawnW = board0.frame[2] / board0.scale;
+        // The drawn frame is in capture px and the spec's in CSS px. A live capture's frame is its element's whole box.
+        const specW = fixture.panels[0].frame ? fixture.panels[0].frame[2] : board0.wholeFrame[2] / board0.scale;
+        const drawnW = board0.frame[2] / board0.scale;
         assert.ok(drawnW < specW * fixture.expect.frameUnder, `the drawn frame is ${drawnW} of the spec's ${specW} px: the blank ground went`);
+      }
+      if (fixture.expect?.trimmed) {
+        for (const [side, n] of Object.entries(fixture.expect.trimmed)) assert.equal(board0.trimmed[side], n, `the ${side} edge trimmed ${board0.trimmed[side]} capture px`);
+      }
+      if (fixture.expect?.trimTo) {
+        // The trimmed edge keeps TRIM_PAD (12 CSS px) of ground outside the target's box and no more than a glyph's fringe past that.
+        for (const [side, key] of Object.entries(fixture.expect.trimTo)) {
+          const [x, y, w, h] = captureReturn.boxes[key]; const [fx, fy, fw, fh] = board0.frame;
+          const gap = { left: x - fx, top: y - fy, right: fx + fw - (x + w), bottom: fy + fh - (y + h) }[side] / board0.scale;
+          assert.ok(gap >= 0 && gap <= 12 + 2, `the ${side} edge stands ${gap} CSS px outside the ${key} box`);
+        }
+      }
+      if (fixture.expect?.drawnOver) {
+        const drawn = board0.capture[2] / (board0.frame[2] / board0.scale);
+        assert.ok(drawn > fixture.expect.drawnOver, `the frame is drawn at ${drawn} board px per CSS px`);
       }
       if (fixture.expect?.leaderRunUnder) {
         const [[x0, y0], [x1, y1]] = board0.leaders[0].points;

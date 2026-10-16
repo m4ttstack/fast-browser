@@ -1,0 +1,5 @@
+{ "state": "AFTER", "title": "The nightly build carries the signed badge", "layout": "single", "out": "fx-header-row-rules.png",
+  "page": "header-row-rules", "frame": "[data-testid=row]",
+  "targets": { "badge": "[data-testid=badge]", "content": "[data-testid=content]" },
+  "expect": { "trimTo": { "right": "content" }, "frameUnder": 0.7, "drawnOver": 1 },
+  "panels": [{ "marks": [ { "loupe": "badge", "zoom": 4, "title": "Signed badge", "note": "Marks a signed build" } ] }] }
