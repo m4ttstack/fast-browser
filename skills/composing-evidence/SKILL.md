@@ -322,7 +322,7 @@ capture again with the same selectors and the same frame selector.
 | something was removed | `ghost` on the gap, or on the element now in its place; compose grows a small `ghost` to a readable size |
 | nothing rendered where something should | `empty` on the blank region; `text` says what is missing. If the region shows a message or placeholder text, `lift` that text instead: `empty` draws over whatever is in the box |
 | a personal detail in the frame, named in the brief or not | `redact` |
-| keep an element in a `steps` crop without drawing on it: what identifies the record, when it sits about one card from the step's mark | `context` (keys only, no words) |
+| keep an element in a `steps` crop without drawing on it: what identifies the record, when it sits about one card from the step's mark; or a line a redaction's refusal names that is the board's own, not the value's | `context` (keys only, no words) |
 
 - **One mark per point in the brief, and no others, redactions and
   `context` aside.** The board's `title` says what the board proves. Every
@@ -439,28 +439,36 @@ This is the one place you write coordinates.
    nothing of the value continues beyond it. If any letter shows, widen that
    box and render again. Compose grows an imported
    redaction over ink that reaches its edge, and says so in a message that
-   starts `a redaction on panel <n> (<mark>)`:
+   starts `a redaction on panel <n> (<mark>)`. A written board never shows
+   ink that may be the value's: where the fill could not cover it, compose
+   refuses the board instead, and the message ends with what to do.
 
    | Rest of the message | Kind |
    |---|---|
    | `grew to cover ink beside it` | warning |
    | `covered a line beside it to that line's end, past its <side> edge` | warning |
    | `covered ink past a gap at its <side> edge` | warning |
-   | `stopped at a gap with more ink just past its <side> edge` | warning |
-   | `met another mark's box with ink still at its <side> edge` | warning, or a refusal |
-   | `reached the frame with ink still at its <side> edge` | a refusal when the ink is on the value's own line, otherwise a warning |
-   | `reached its growth limit with ink still at its <side> edge` | always a refusal |
+   | `stopped at a gap with more ink just past its <side> edge` | warning: that ink lies off the value's columns, or past another line |
+   | `met another mark's box with ink still at its <side> edge` | warning; a refusal on the value's own line |
+   | `reached the frame with ink still at its <side> edge` | warning; a refusal on the value's own line |
+   | `reached its growth limit with ink still at its <side> edge` | refusal |
+   | `stopped at a rule past its <side> edge with a line of text just past it, at [x, y, w, h] in the image` | refusal: a row's border with text past it that may be the value's other line |
+   | `left a line past its <side> edge uncovered, at [x, y, w, h] in the image, as another row of its list` | refusal: a row of an icon-led list that may hold a second value |
+   | `met an empty slot at its <side> edge with text inside the slot's box, at [x, y, w, h] in the image` | refusal: the `empty` box was drawn over text |
+
+   A redact box the crop leaves out is a stray: `a redact mark on panel <n>
+   lies outside the board, so it hides nothing` is a warning, and `... but
+   the value's ink runs into the board past its <side> edge` is a refusal.
 
    - On a warning, read that redaction's crop and check that nothing of the
      value shows. A covered neighbouring line is expected, because hiding
      comes first.
-   - On `stopped at a gap`, if any of the value shows past the fill, draw
-     the redact box over the whole value, every line of it, and render
-     again.
-   - On a refusal, the message goes on
-     `Draw that redact box over the whole value` and no board was written.
-     Draw the redact box over the whole value, every line of it, or move the
-     frame edge so the rest is cropped out, then render again.
+   - On a refusal, no board was written. Do what the message says, then
+     render again: when the line it names is the value's, draw the redact
+     box over the whole value including that line; when it is the board's
+     own (another row, a neighbour's line), add a `context` mark on it, and
+     the fill stops at that box; otherwise move the frame edge so it is out
+     of the board, or move the `empty` box off the text.
 
    Either way, do not shrink the box to clear a neighbour.
 6. **Stop there.** The board is not done until the operator has looked at
