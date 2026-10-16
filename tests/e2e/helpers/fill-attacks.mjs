@@ -463,11 +463,82 @@ function listSets(cases) {
   }
 }
 
+// Sets NS to HI, from the review of the zero-bare round: a row's border with a short wrapped surname past it (NS),
+// or with the value at the end of a longer first line (NO); a mid-sentence link underlined in a lighter colour
+// (LU); the F4border shape inside a box, a card, a cell or sides (BX); an empty slot drawn too tall over a tile,
+// swallowing a short first line (SC); separator rows of other glyphs inside the value (TD); the refused shapes
+// with the box widened as the message says (RC); a hanging indent whose first line is a short word (HI). Only
+// the value's glyphs are the value.
+function reviewSets(cases) {
+  const forEachGround = (fn) => { for (const dpr of [1, 2, 3]) for (const [g, c] of Object.entries(GROUNDS)) fn(dpr, g, c); };
+  const adder = (dpr, g, c) => (set, name, page, measure, shown) => {
+    const body = (inner) => `<div style="position:absolute;left:0;top:0;width:100%;height:100%;background:${c.bg};color:${c.fg}">${page(inner)}</div>`;
+    cases.push({ set, name: `${name} ${g} ${dpr}x`, dpr, cell: [560, 300], rows: 4, masked: true, glyphs: true, measure: body(measure), shown: body(shown) });
+  };
+  const below = (inner, px) => inner.replace('<br>', `<br><span style="display:inline-block;margin-top:${px}px"></span>`);
+
+  forEachGround((dpr, g, c) => {
+    const add = adder(dpr, g, c);
+    for (const short of ['Ng', 'Li', 'Wu', 'Jr', 'Xu', 'Rivera']) for (const under of [4, 6, 8, 10]) for (const lh of [20, 28]) {
+      const page = (inner) => `<div style="position:absolute;left:40px;top:40px;width:420px;height:${lh}px;border-bottom:1px solid ${c.rule}"></div><div style="position:absolute;left:40px;top:40px;width:190px;line-height:${lh}px">Requested by <span class=vv>${below(inner, under)}</span></div>`;
+      add('NS', `"${short}" below${under} lh${lh} box l1`, page, `Samantha<br>${TG(short)}`, `Samantha<br>${short}`);
+      add('NS', `"${short}" below${under} lh${lh} box l2`, page, `${TG('Samantha')}<br>${short}`, `Samantha<br>${short}`);
+    }
+    for (const lead of ['Owner', 'Account owner', 'Reported today by', 'Requested on Friday by']) for (const under of [4, 8]) for (const lh of [20, 28]) for (const w of [190, 230]) {
+      const page = (inner) => `<div style="position:absolute;left:40px;top:40px;width:420px;height:${lh}px;border-bottom:1px solid ${c.rule}"></div><div style="position:absolute;left:40px;top:40px;width:${w}px;line-height:${lh}px">${lead} <span class=vv>${below(inner, under)}</span></div>`;
+      add('NO', `"${lead}" w${w} below${under} lh${lh} box l1`, page, `Samantha<br>${TG('Rivera-Okafor')}`, 'Samantha<br>Rivera-Okafor');
+    }
+    for (const colour of [c.dark, c.rule]) for (const off of ['2px', '4px', '6px']) for (const lh of [20, 24]) for (const b of ['Li', 'Ng', 'Rivera', 'Rivera-Okafor']) {
+      const deco = `text-decoration:underline ${colour};text-underline-offset:${off};text-decoration-skip-ink:none`;
+      const page = (inner) => `<div style="position:absolute;left:40px;top:40px;width:200px;line-height:${lh}px">Reported by <span class=vv style="${deco}">${inner}</span> today</div>`;
+      add('LU', `${colour === c.dark ? 'dark' : 'rule'} "${b}" off ${off} lh${lh} box l1`, page, `Samantha-Louise ${TG(b)}`, `Samantha-Louise ${b}`);
+      add('LU', `${colour === c.dark ? 'dark' : 'rule'} "${b}" off ${off} lh${lh} box l2`, page, `${TG('Samantha-Louise')} ${b}`, `Samantha-Louise ${b}`);
+    }
+    for (const kind of ['card', 'cell', 'sides']) for (const under of [4, 6, 8, 10]) for (const lh of [20, 28]) for (const b of ['Rivera-Okafor', 'Ng']) {
+      const border = kind === 'card' ? `border:1px solid ${c.rule};border-radius:8px` : kind === 'cell' ? `border:1px solid ${c.rule}` : `border-left:1px solid ${c.rule};border-right:1px solid ${c.rule};border-bottom:1px solid ${c.rule}`;
+      const page = (inner) => `<div style="position:absolute;left:40px;top:40px;width:420px;height:${lh + 8}px;${border};box-sizing:border-box"></div><div style="position:absolute;left:52px;top:44px;width:190px;line-height:${lh}px">Requested by <span class=vv>${below(inner, under)}</span></div>`;
+      add('BX', `${kind} "${b}" below${under} lh${lh} box l1`, page, `Samantha<br>${TG(b)}`, `Samantha<br>${b}`);
+      add('BX', `${kind} "${b}" below${under} lh${lh} box l2`, page, `${TG('Samantha')}<br>${b}`, `Samantha<br>${b}`);
+    }
+    for (const under of [4, 8]) for (const lh of [20, 28]) {
+      const td = `border:1px solid ${c.rule};padding:0 10px;vertical-align:top;height:${lh}px;line-height:${lh}px`;
+      const page = (inner) => `<table style="position:absolute;left:30px;top:30px;border-collapse:collapse"><tr><td style="${td}">Owner</td><td style="${td};width:170px"><div style="width:170px"><span class=vv>${below(inner, under)}</span></div></td><td style="${td}">Open</td></tr><tr><td style="${td}">Due</td><td style="${td}"></td><td style="${td}">-</td></tr></table>`;
+      add('BX', `table below${under} lh${lh} box l1`, page, `Samantha Rivera<br>${TG('Okafor-Delacroix')}`, 'Samantha Rivera<br>Okafor-Delacroix');
+      add('BX', `table below${under} lh${lh} box l2`, page, `${TG('Samantha Rivera')}<br>Okafor-Delacroix`, 'Samantha Rivera<br>Okafor-Delacroix');
+    }
+    for (const under of [4, 8]) for (const lh of [20, 28]) for (const b of ['Rivera-Okafor', 'Ng']) {
+      const page = (inner) => `<div style="position:absolute;left:40px;top:40px;width:420px;height:${lh}px;border-bottom:1px solid ${c.rule}"></div><div style="position:absolute;left:40px;top:40px;width:190px;line-height:${lh}px">Requested by <span class=vv>${below(inner, under)}</span></div>`;
+      add('RC', `rule widened "${b}" below${under} lh${lh}`, page, `Samantha<br>${b}`, `Samantha<br>${b}`);
+    }
+    for (const first of ['Dr', 'Mr', 'Ms', 'Jo']) for (const indent of [12, 16, 20, 24]) for (const lh of [18, 24]) {
+      const page = (inner) => `<div style="position:absolute;left:40px;top:40px;width:200px;line-height:${lh}px;padding-left:${indent}px;text-indent:-${indent}px"><span class=vv>${inner}</span></div>`;
+      add('HI', `"${first}" indent${indent} lh${lh} box l1`, page, `${first}<br>${TG('Samantha Rivera-Okafor')}`, `${first}<br>Samantha Rivera-Okafor`);
+    }
+  });
+
+  const tile = (lh, gapPx) => (inner) => `<div style="position:absolute;left:100px;top:20px;width:160px;height:100px;background:#eef2f7;border:1px solid #e2e6ec;border-radius:8px;box-sizing:border-box"></div><div style="position:absolute;left:100px;top:${120 + gapPx}px;width:150px;line-height:${lh}px"><span class=vv>${inner}</span></div>`;
+  for (const dpr of [1, 2, 3]) for (const lh of [16, 20]) for (const over of [8, 12, 16, 20]) for (const gapPx of [2, 4, 8]) for (const first of ['Ng', 'Dr', 'Samantha']) {
+    const page = tile(lh, gapPx);
+    cases.push({ set: 'SC', name: `"${first}" lh${lh} over${over} gap${gapPx} box l2 ${dpr}x`, dpr, cell: [640, 300], rows: 4, masked: true, glyphs: true, measure: page(`${TG(first)}<br>Okafor Delacroix`), shown: page(`${first}<br>Okafor Delacroix`), blanks: [[100, 20, 160, 100 + over]] });
+  }
+  for (const dpr of [1, 2, 3]) for (const colour of ['#111827', '#6b7280']) for (const rule of ['━━━━━━━━━━━━', '════════════', '▬▬▬▬▬▬▬▬▬', '■■■■■■■■■', '••••••••••••', '~~~~~~~~~~~~', '- - - - - - - -', '············', '▔▔▔▔▔▔▔▔▔', '▁▁▁▁▁▁▁▁▁', '============', '************', '############', '————————————']) for (const lh of [14, 18, 22]) {
+    const page = (inner) => `<div class=vv style="position:absolute;left:60px;top:50px;line-height:${lh}px;color:${colour}">${inner}</div>`;
+    const tag = `${rule.slice(0, 1)} ${colour === '#111827' ? 'ink' : 'grey'}`;
+    cases.push({ set: 'TD', name: `${tag} lh${lh} box l1 ${dpr}x`, dpr, cell: [560, 300], rows: 4, masked: true, glyphs: true, measure: page(`Samantha Rivera<br>${TG(rule)}<br>${TG('Okafor Delacroix')}`), shown: page(`Samantha Rivera<br>${rule}<br>Okafor Delacroix`) });
+    cases.push({ set: 'TD', name: `${tag} lh${lh} box l3 ${dpr}x`, dpr, cell: [560, 300], rows: 4, masked: true, glyphs: true, measure: page(`${TG('Samantha Rivera')}<br>${TG(rule)}<br>Okafor Delacroix`), shown: page(`Samantha Rivera<br>${rule}<br>Okafor Delacroix`) });
+  }
+  for (const dpr of [1, 2, 3]) for (const lh of [16, 20]) for (const over of [12, 16]) for (const gapPx of [8, 12]) {
+    const page = tile(lh, gapPx);
+    cases.push({ set: 'RC', name: `blank widened lh${lh} over${over} gap${gapPx} ${dpr}x`, dpr, cell: [640, 300], rows: 4, masked: true, glyphs: true, measure: page('Samantha Rivera<br>Okafor Delacroix'), shown: page('Samantha Rivera<br>Okafor Delacroix'), blanks: [[100, 20, 160, 100 + over]] });
+  }
+}
+
 export function fillAttackCases() {
   const cases = [];
   groundSets(cases);
   decorationSets(cases);
   listSets(cases);
+  reviewSets(cases);
   return cases;
 }
 
@@ -566,7 +637,52 @@ export function boardAttackScenes() {
     const html = doc('', `<div id=frame style="position:absolute;left:40px;top:40px;width:420px;height:200px;background:#fff;border:1px solid #e5e7eb;border-radius:12px"><div style="position:absolute;left:20px;top:20px;color:#6b7280">Contact</div><div style="position:absolute;left:20px;top:44px;width:120px;line-height:20px"><span id=v style="text-decoration:underline;text-underline-offset:${off}">Samantha-Louise <span id=l2>Rivera</span></span></div><div style="position:absolute;left:220px;top:44px;line-height:20px">Status open</div></div>`);
     scenes.push({ set: 'e1', name: `${dpr}x off ${off}`, dpr, viewport: [640, 360], html, value: '#v', glyphs: true, box: { sel: '#l2' } });
   }
+  reviewScenes(scenes);
   return scenes;
+}
+
+// Whole pages from the review of the zero-bare round. BX: a card header whose value overflows its bordered row,
+// the box on the overflowed second line. PG: the value's colour is the page's outside the frame. CX: a context or
+// lift mark drawn on the value's own wrapped line, or over the whole value. BR: an address whose last line sits
+// past a gap, with a chip beside the gap. SL: an empty slot drawn 12 CSS px too tall over a tile, swallowing a
+// short first line under it. BK: the value's second line past a row's border shares its row with a lifted badge,
+// another redacted field or a context mark, to the mark's right.
+function reviewScenes(scenes) {
+  const page = (bg, body) => `<!doctype html><meta charset=utf-8><style>body{margin:0;font:14px Helvetica,Arial,sans-serif;background:${bg};color:#111827}</style>${body}`;
+  const push = (set, name, dpr, html, value, box, marks = []) => scenes.push({ set, name, dpr, viewport: [640, 420], html, value, box, marks });
+  for (const dpr of [1, 2, 3]) for (const kind of ['card', 'cell']) for (const under of [4, 8]) {
+    const border = kind === 'card' ? 'border:1px solid #e5e7eb;border-radius:8px' : 'border:1px solid #e5e7eb';
+    const html = page('#f6f7f9', `<div id=frame style="position:absolute;left:40px;top:40px;width:420px;height:200px;background:#fff;border:1px solid #e5e7eb;border-radius:12px"><div style="position:absolute;left:20px;top:20px;width:360px;height:36px;${border};box-sizing:border-box"></div><div style="position:absolute;left:32px;top:24px;width:190px;line-height:28px">Requested by <span id=v>Samantha<br><span id=l2 style="display:inline-block;margin-top:${under}px">Rivera-Okafor</span></span></div><div style="position:absolute;left:32px;top:120px;color:#6b7280">Status open</div></div>`);
+    push('BX', `${kind} below${under} box l2 ${dpr}x`, dpr, html, '#v', { sel: '#l2' });
+    push('BX', `${kind} below${under} box l1 ${dpr}x`, dpr, html, '#v', { sel: '#v', firstText: true });
+  }
+  for (const dpr of [1, 2, 3]) for (const [name, bg, card, fg] of [['white-on-dark', '#fff', '#1f2937', '#fff'], ['gray50-on-dark', '#f9fafb', '#1f2937', '#f9fafb'], ['dark-on-white-darkpage', '#111827', '#fff', '#111827'], ['dark-on-white-near', '#0f172a', '#fff', '#111827']]) {
+    const html = page(bg, `<div id=frame style="position:absolute;left:40px;top:40px;width:420px;height:140px;background:${card};color:${fg};border-radius:8px"><div style="position:absolute;left:20px;top:24px;opacity:.7">Reviewer</div><div id=v style="position:absolute;left:220px;top:24px;width:110px;line-height:20px">Samantha <span id=l2>Rivera-Okafor</span></div><div style="position:absolute;left:220px;top:90px;opacity:.7">Status open</div></div>`);
+    push('PG', `${name} box l1 ${dpr}x`, dpr, html, '#v', { sel: '#v', firstText: true });
+    push('PG', `${name} box l2 ${dpr}x`, dpr, html, '#v', { sel: '#l2' });
+    push('PG', `${name} whole ${dpr}x`, dpr, html, '#v', { sel: '#v' });
+  }
+  for (const dpr of [1, 2]) {
+    const html = page('#f6f7f9', `<div id=frame style="position:absolute;left:40px;top:40px;width:420px;height:160px;background:#fff;border:1px solid #e5e7eb;border-radius:12px"><div id=hd style="position:absolute;left:20px;top:20px;color:#6b7280">Contact</div><div id=v style="position:absolute;left:20px;top:44px;width:120px;line-height:20px">Samantha-Louise <span id=l2>Rivera</span></div><div id=st style="position:absolute;left:220px;top:44px;line-height:20px">Status open</div></div>`);
+    push('CX', `context on line 2 ${dpr}x`, dpr, html, '#v', { sel: '#v', firstText: true }, [{ kind: 'context', sel: '#l2' }]);
+    push('CX', `context on heading (sane) ${dpr}x`, dpr, html, '#v', { sel: '#v', firstText: true }, [{ kind: 'context', sel: '#hd' }]);
+    push('CX', `lift on line 2 ${dpr}x`, dpr, html, '#v', { sel: '#v', firstText: true }, [{ kind: 'lift', sel: '#l2' }]);
+    push('CX', `context on whole value, box l1 ${dpr}x`, dpr, html, '#v', { sel: '#v', firstText: true }, [{ kind: 'context', sel: '#v' }]);
+  }
+  for (const dpr of [1, 2, 3]) for (const gap of [40, 48, 64]) for (const chip of ['beside', 'none']) {
+    const html = page('#f6f7f9', `<div id=frame style="position:absolute;left:40px;top:40px;width:520px;height:260px;background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:20px;box-sizing:border-box"><div style="color:#6b7280;line-height:20px">Ship to</div><div id=v style="line-height:20px;width:200px">14 Larkspur Lane<br>Apartment 3B<div style="margin-top:${gap}px">Springfield 62704</div></div>${chip === 'beside' ? `<div style="position:absolute;left:300px;top:${70 + gap / 2}px;background:#dbeafe;color:#1e3a8a;border-radius:10px;padding:2px 10px;font-size:13px;line-height:18px">Delivered</div>` : ''}<div style="margin-top:28px;color:#6b7280;line-height:20px">Delivery pending</div></div>`);
+    push('BR', `gap${gap} chip-${chip} ${dpr}x`, dpr, html, '#v', { sel: '#v', firstLines: 2 });
+  }
+  for (const dpr of [1, 2, 3]) for (const first of ['Dr', 'Samantha']) for (const gapPx of [2, 8]) {
+    const html = page('#f6f7f9', `<div id=frame style="position:absolute;left:40px;top:40px;width:420px;height:220px;background:#fff;border:1px solid #e5e7eb;border-radius:12px"><div id=tile style="position:absolute;left:20px;top:20px;width:160px;height:100px;background:#eef2f7;border:1px solid #e2e6ec;border-radius:8px;box-sizing:border-box"></div><div id=slotbox style="position:absolute;left:20px;top:20px;width:160px;height:112px"></div><div style="position:absolute;left:20px;top:${120 + gapPx}px;width:150px;line-height:16px"><span id=v>${first}<br><span id=l2>Okafor Delacroix</span></span></div></div>`);
+    push('SL', `"${first}" gap${gapPx} over12 ${dpr}x`, dpr, html, '#v', { sel: '#l2' }, [{ kind: 'empty', sel: '#slotbox' }]);
+  }
+  for (const dpr of [1, 2, 3]) for (const other of ['lift', 'redact', 'context']) {
+    const lh = 28;
+    const html = page('#f6f7f9', `<div id=frame style="position:absolute;left:40px;top:40px;width:420px;height:200px;background:#fff;border:1px solid #e5e7eb;border-radius:12px"><div style="position:absolute;left:20px;top:20px;width:360px;height:${lh + 8}px;border-bottom:1px solid #e5e7eb;box-sizing:border-box"></div><div style="position:absolute;left:32px;top:24px;width:260px;line-height:${lh}px;padding-left:90px;text-indent:-90px">By <span id=v>Samantha<br><span id=l2 style="display:inline-block;margin-top:8px">Rivera-Okafor</span></span></div><div id=w style="position:absolute;left:32px;top:${24 + lh + 10}px;line-height:20px;${other === 'lift' ? 'background:#dbeafe;color:#1e3a8a;border-radius:10px;padding:0 10px;' : ''}">${other === 'lift' ? 'Verified' : other === 'redact' ? 'jo@ex.io' : 'Open'}</div><div style="position:absolute;left:32px;top:120px;color:#6b7280">Status open</div></div>`);
+    push('BK', `${other} lh${lh} ${dpr}x`, dpr, html, '#v', { sel: '#v', firstText: true }, [{ kind: other, sel: '#w' }]);
+    push('BK', `${other} lh${lh} nomark ${dpr}x`, dpr, html, '#v', { sel: '#v', firstText: true }, []);
+  }
 }
 
 // The redact box in image px: the element's rect (or the first rect of its first text, or its first lines) grown by
