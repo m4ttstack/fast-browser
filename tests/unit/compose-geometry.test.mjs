@@ -1148,6 +1148,38 @@ test('a trim stops at a full-width rule instead of passing it', () => {
   assert.equal(box[1], 28, 'the top edge stops 12px outside the rule');
 });
 
+// A header row 400px wide: hairlines across its whole width at rows 10 and 69, its content on the left 55%.
+const DIVIDER = [200, 200, 200];
+const headerRow = () => canvas(400, 80).fill(0, 10, 400, 1, DIVIDER).fill(0, 69, 400, 1, DIVIDER).fill(20, 30, 200, 20, INK);
+
+test('the side trims cross the dead space over hairlines that run out to the frame edge', () => {
+  const { box, trimmed } = trimBlank(headerRow(), [0, 0, 400, 80], null);
+  assert.deepEqual(trimmed, { left: 8, top: 0, right: 168, bottom: 0 }, 'each side stops 12px outside the content');
+  assert.deepEqual(box, [8, 0, 224, 80]);
+});
+
+test('a card border parallel to the trimmed side still stops it there', () => {
+  const px = headerRow().fill(380, 0, 1, 80, DIVIDER);
+  const { box, trimmed } = trimBlank(px, [0, 0, 400, 80], null);
+  assert.equal(trimmed.right, 7, 'the right edge stays 12px outside the border');
+  assert.equal(box[0] + box[2], 393);
+});
+
+test('a hairline that ends short of the frame edge still stops the trim', () => {
+  const px = canvas(400, 80).fill(250, 60, 120, 1, DIVIDER).fill(20, 30, 200, 20, INK);
+  assert.equal(trimBlank(px, [0, 0, 400, 80], null).trimmed.right, 18, 'a rule ending 30px short of the edge stops the trim 12px outside it');
+});
+
+test('a band thicker than a rule running out to the edge is content, not a hairline', () => {
+  const px = headerRow().fill(0, 60, 400, 4, DIVIDER);
+  assert.equal(trimBlank(px, [0, 0, 400, 80], null).trimmed.right, 0);
+});
+
+test('a stroke that reaches the edge but runs in less than a rule length is content, not a hairline', () => {
+  const px = headerRow().fill(390, 60, 10, 1, INK);
+  assert.equal(trimBlank(px, [0, 0, 400, 80], null).trimmed.right, 0);
+});
+
 test('a trim never passes the marks, even over ground', () => {
   const px = canvas(300, 200).fill(100, 100, 40, 20, INK);
   const { box } = trimBlank(px, [0, 0, 300, 200], [20, 60, 30, 30]);
@@ -1436,6 +1468,14 @@ test('at scale 2 a trim keeps 24 capture px of ground outside the first content,
   assert.deepEqual(one.box, [18, 18, 264, 164]);
   assert.deepEqual([...two.box], times2(one.box));
   assert.deepEqual({ ...two.trimmed }, { left: 36, top: 36, right: 36, bottom: 36 });
+});
+
+test('at scale 2 a trim crosses hairlines that run out to the frame edge, as at scale 1', () => {
+  const frame = [0, 0, 400, 80];
+  const one = trimBlank(headerRow(), frame, null);
+  const two = atScale(2).trimBlank(doubled(headerRow()), times2(frame), null);
+  assert.deepEqual([...two.box], times2(one.box));
+  assert.equal(two.trimmed.right, 336);
 });
 
 test('at scale 2 a trim stops 24 capture px short of the marks, as 12 at scale 1 (TRIM_PAD)', () => {
