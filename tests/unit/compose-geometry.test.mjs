@@ -3025,12 +3025,17 @@ test('ink that resumes within one more lead past a gap is covered, and said so',
   assert.deepEqual(fill.bridged, ['bottom']);
 });
 
-test('ink farther past a gap is left, named, and inside what the gate shows', () => {
-  const px = textLine(textLine(canvas(240, 140), 20, 20, 60, 1), 20, 80, 60, 1);
-  const fill = importFill(px, [20, 20, 60, 10]);
-  assert.ok(fill.rect[1] + fill.rect[3] < 80, `the fill ${fill.rect} reaches the far line`);
+test('ink farther past a gap, under the value with nothing between, is covered through; with a line between, it is left, named, and inside what the gate shows', () => {
+  // The far line 78 rows under the pad's edge: past three leads of 21, within five.
+  const clear = textLine(textLine(canvas(240, 160), 20, 20, 60, 1), 20, 110, 60, 1);
+  const through = importFill(clear, [20, 20, 60, 10]);
+  assertValueHidden(clear, through.rects, [0, 0, 240, 160]);
+  assert.deepEqual(through.bridged, ['bottom']);
+  const between = textLine(clear, 160, 70, 50, 1);
+  const fill = importFill(between, [20, 20, 60, 10]);
+  assert.ok(fill.rect[1] + fill.rect[3] < 110, `the fill ${fill.rect} reaches the far line`);
   assert.deepEqual(fill.near, ['bottom']);
-  assert.ok(fill.peek[1] + fill.peek[3] >= 90, `the gate's view ${fill.peek} stops short of the far line`);
+  assert.ok(fill.peek[1] + fill.peek[3] >= 120, `the gate's view ${fill.peek} stops short of the far line`);
 });
 
 test('a border past a gap is neither covered through nor named: only text is', () => {
@@ -3304,7 +3309,7 @@ const headingPoints = (rtl = false, pitch = 40) => (rtl ? [[150, 65 - pitch], [1
 const assertBare = (fill, points, d, label) => { for (const [x, y] of points) assert.ok(!covers(fill.rects, x * d, y * d), `${label}: ${x},${y} is covered by ${JSON.stringify(fill.rects)}`); };
 const inPeek = (fill, points, d, label) => { for (const [x, y] of points) assert.ok(inRect(x * d, y * d, fill.peek), `${label}: ${x},${y} lies outside the gate's view ${fill.peek}`); };
 
-test('a redaction of one row of an icon-led list spares the other rows and the heading above, names them and shows them to the gate', () => {
+test('a redaction of one row of an icon-led list spares the other rows and the heading above, and refuses the board naming each', () => {
   for (const d of [1, 2, 3]) for (const rtl of [false, true]) {
     const px = iconList(d, { rtl });
     const fill = importFill(px, ROW_BOX(d, rtl));
@@ -3313,7 +3318,23 @@ test('a redaction of one row of an icon-led list spares the other rows and the h
     assertBare(fill, [...otherRows(rtl), ...headingPoints(rtl)], d, label);
     assert.deepEqual(fill.spared, ['top', 'bottom'], label);
     inPeek(fill, [...otherRows(rtl), ...headingPoints(rtl)], d, label);
-    assert.deepEqual([fill.capped, fill.extended, fill.bridged], [[], [], []], label);
+    assert.deepEqual(fill.capped.map((c) => [c.side, c.why, c.refuse]), [['top', 'row', true], ['bottom', 'row', true]], label);
+    // The rows named lie where the spared lines are: the heading above, the two rows below.
+    const [top, bottom] = fill.capped.map((c) => c.at);
+    assert.ok(top[1] + top[3] <= 60 * d && top[1] >= 16 * d, `${label}: the heading's box ${top}`);
+    assert.ok(bottom[1] >= 85 * d && bottom[1] + bottom[3] >= 114 * d, `${label}: the rows' box ${bottom}`);
+    assert.deepEqual([fill.extended, fill.bridged], [[], []], label);
+  }
+});
+
+test('a context box on a list\'s next row holds the walk there, though the pad reaches it, so the board is written', () => {
+  for (const d of [1, 2]) {
+    const px = iconList(d);
+    const row = [38 * d, 85 * d, 116 * d, 16 * d];
+    const fill = importFill(px, ROW_BOX(d), { held: [row] });
+    assertValueHidden(px, fill.rects, [36 * d, 56 * d, 120 * d, 18 * d]);
+    assert.ok(!fill.capped.some((c) => c.why === 'row' && c.side === 'bottom'), `${d}x: ${JSON.stringify(fill.capped)}`);
+    assert.ok(!fill.rects.some((r) => r[1] + r[3] > 85 * d + 2 * d), `${d}x: the fill ${JSON.stringify(fill.rects)} enters the held row`);
   }
 });
 
