@@ -779,7 +779,7 @@ test('an imported fill hides capitals, digits, values wrapped onto several lines
   // spare is written, hidden.
   const list = results.filter((r) => r.set === 'list');
   assert.equal(list.length, 210);
-  const sparing = list.filter((r) => /^(one row of an icon-led list|text that runs right to left|the next row is a second value),/.test(r.name));
+  const sparing = list.filter((r) => /^(one row of an icon-led list|text that runs right to left|the next row is a second value)/.test(r.name));
   assert.equal(sparing.length, 60);
   assert.deepEqual(sparing.filter((r) => !(r.refused && r.whys.includes('row'))).map((r) => r.name), [], 'a row of an icon-led list, either way round, refuses the board for the rows it spares');
   assert.deepEqual(list.filter((r) => r.refused && !r.whys.includes('row')).map((r) => `${r.name}: ${r.whys}`), [], 'a list case is refused only for a spared row');

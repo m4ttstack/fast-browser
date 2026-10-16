@@ -1,8 +1,115 @@
-{ "state": "FOUND", "title": "The location tile beside the icon list is blank", "layout": "single", "out": "fx-import-icon-list.png",
-  "expect": { "origin": [true], "cropped": false, "slotCallout": "leader", "crops": 2, "grownFills": 1, "bare": ["lead", "second", "third", "tileTop"], "covered": ["name", "where"],
-    "warnings": ["a redaction on panel 1 (name) grew to cover ink beside it", "a redaction on panel 1 (name) stopped at a gap with more ink just past its top edge", "a redaction on panel 1 (name) left a line past its top edge uncovered, as another row of its list", "a redaction on panel 1 (name) left a line past its bottom edge uncovered, as another row of its list", "a redaction on panel 1 (where) stopped at a gap with more ink just past its top edge"] },
+{
+  "state": "FOUND",
+  "title": "The location tile beside the icon list is blank",
+  "layout": "single",
+  "out": "fx-import-icon-list.png",
+  "expect": {
+    "origin": [
+      true
+    ],
+    "cropped": false,
+    "slotCallout": "leader",
+    "crops": 2,
+    "grownFills": 1,
+    "bare": [
+      "lead",
+      "second",
+      "third",
+      "tileTop"
+    ],
+    "covered": [
+      "name",
+      "where"
+    ],
+    "warnings": [
+      "a redaction on panel 1 (name) grew to cover ink beside it",
+      "a redaction on panel 1 (name) covered ink past a gap at its top edge",
+      "a redaction on panel 1 (name) met another mark's box with ink still at its top edge",
+      "a redaction on panel 1 (name) met another mark's box with ink still at its bottom edge",
+      "a redaction on panel 1 (where) stopped at a gap with more ink just past its top edge"
+    ]
+  },
   "panels": [
-    { "fixture": { "import": { "page": "icon-list", "dpr": 1, "format": "png", "width": 1180 } },
-      "frame": [40, 40, 1100, 190],
-      "boxes": { "tile": [941, 53, 160, 116], "tileTop": [941, 53, 160, 100], "lead": [64, 58, 300, 20], "name": [65, 105, 162, 16], "second": [62, 128, 130, 20], "third": [62, 155, 110, 20], "where": [943, 176, 100, 36] },
-      "marks": [ { "empty": "tile", "text": "Tile is blank" }, { "redact": "name" }, { "redact": "where" } ] } ] }
+    {
+      "fixture": {
+        "import": {
+          "page": "icon-list",
+          "dpr": 1,
+          "format": "png",
+          "width": 1180
+        }
+      },
+      "frame": [
+        40,
+        40,
+        1100,
+        190
+      ],
+      "boxes": {
+        "tile": [
+          941,
+          53,
+          160,
+          116
+        ],
+        "tileTop": [
+          941,
+          53,
+          160,
+          100
+        ],
+        "lead": [
+          64,
+          58,
+          300,
+          20
+        ],
+        "name": [
+          65,
+          105,
+          162,
+          16
+        ],
+        "second": [
+          62,
+          128,
+          130,
+          20
+        ],
+        "third": [
+          62,
+          155,
+          110,
+          20
+        ],
+        "where": [
+          943,
+          176,
+          100,
+          36
+        ]
+      },
+      "marks": [
+        {
+          "empty": "tile",
+          "text": "Tile is blank"
+        },
+        {
+          "redact": "name"
+        },
+        {
+          "redact": "where"
+        },
+        {
+          "context": "lead"
+        },
+        {
+          "context": "second"
+        },
+        {
+          "context": "third"
+        }
+      ]
+    }
+  ]
+}
