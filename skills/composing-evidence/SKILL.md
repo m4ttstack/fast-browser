@@ -448,15 +448,17 @@ This is the one place you write coordinates.
    | `grew to cover ink beside it` | warning |
    | `covered a line beside it to that line's end, past its <side> edge` | warning |
    | `covered ink past a gap at its <side> edge` | warning |
-   | `stopped at a gap with more ink just past its <side> edge` | warning: that ink lies off the value's columns, or past another line |
-   | `stopped at a rule with more ink just past its <side> edge` | warning: that ink lies off the value's columns, or is the rule's own chrome |
+   | `stopped at a gap with more ink just past its <side> edge` | warning: that ink lies in another column, past another line, or past a rule by more than a line-height |
+   | `stopped at a rule with more ink just past its <side> edge` | warning: that ink is the rule's own chrome, another cell's past a divider, or less than a word |
    | `met another mark's box with ink still at its <side> edge` | warning; a refusal on the value's own line, or when the ink in that box lies under or over the value's columns |
    | `met a context mark's box over a line that continues the value, at [x, y, w, h] in the image` | refusal: the `context` mark sits on the value's own wrapped line |
    | `reached the frame with ink still at its <side> edge` | warning; a refusal on the value's own line |
    | `reached its growth limit with ink still at its <side> edge` | refusal |
-   | `stopped at a rule past its <side> edge with a line of text just past it, at [x, y, w, h] in the image` | refusal: a row's border with text past it that may be the value's other line |
+   | `stopped at a rule past its <side> edge with a line of text just past it, at [x, y, w, h] in the image` | refusal: a row's border with text a lead past it, under the value's columns or to either side, that may be the value's other line |
    | `left a line past its <side> edge uncovered, at [x, y, w, h] in the image, as another row of its list` | refusal: a row of an icon-led list that may hold a second value |
    | `met an empty slot at its <side> edge with text inside the slot's box, at [x, y, w, h] in the image` | refusal: the `empty` box was drawn over text |
+   | `left ink past its <side> edge uncovered, at [x, y, w, h] in the image, where the value may go on` | refusal: the next line above or below the value, in its column and within two line-heights, is bare with nothing to prove it apart |
+   | `met another mark's box over a line the value may go on to, past its <side> edge, at [x, y, w, h] in the image` | refusal: a lift, loupe or ghost box holds a line within the value's reach |
 
    A redact box the crop leaves out is a stray: `a redact mark on panel <n>
    lies outside the board, so it hides nothing` is a warning, and `... but
@@ -473,6 +475,9 @@ This is the one place you write coordinates.
      of the board, or move the `empty` box off the text. A `context` mark on
      a line that continues the value is refused in turn: compose reads the
      line as the value's where it sits beside the fill or wraps from it.
+     A `context` mark clears only the ink inside its box: draw it over the
+     whole line it names. A lift, loupe or ghost box never clears a line in
+     the value's reach; move that mark, or the redact box, apart.
 
    Either way, do not shrink the box to clear a neighbour.
 6. **Stop there.** The board is not done until the operator has looked at
