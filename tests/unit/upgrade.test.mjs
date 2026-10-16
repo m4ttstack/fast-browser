@@ -537,6 +537,13 @@ test('countsAsDrift ignores an unreadable-profile warn but still counts a failin
   assert.equal(countsAsDrift({ id: 'runtime-checksum', status: 'pass' }), false);
 });
 
+// Setup never installs Chrome, so a missing one is a prerequisite to name,
+// not drift, whichever way the chrome check reports it.
+test('countsAsDrift never counts the chrome prerequisite check', () => {
+  assert.equal(countsAsDrift({ id: 'chrome', status: 'warn' }), false);
+  assert.equal(countsAsDrift({ id: 'chrome', status: 'fail' }), false);
+});
+
 test('classifyLockUpgrade explains a genuine upgrade while extension-installed only warns', async () => {
   const paths = await tempPaths('fast-browser-upgrade-unit-unreadable-profile-');
   const oldLock = lockFor('0.1.0-alpha.1', '0.2.1');

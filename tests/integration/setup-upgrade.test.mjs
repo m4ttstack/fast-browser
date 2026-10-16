@@ -973,6 +973,103 @@ test('setup treats a real, fully composed doctor report as unchanged when only t
   assert.match(failing[1].remediation, /brew install ffmpeg/);
 });
 
+// A Mac with no Google Chrome: the app bundle is absent and so is Chrome's
+// user data directory. Every other adapter reports a healthy install, so the
+// composed doctor runs every real check.
+async function chromelessMachine(prefix) {
+  const lock = lockFor('0.1.0-alpha.5', '0.2.2');
+  const paths = await fixtureHome(prefix);
+  await writeRuntimeInstall(paths, lock);
+  await writeExtensionInstall(paths, lock);
+  await saveConfig(paths, configFor(lock, { profile: 'safe' }));
+  const deps = {
+    paths,
+    checkPlatform: async () => {},
+    detectHosts: async () => ['claude'],
+    loadConfig,
+    loadRuntimeLock: async () => lock,
+    installRuntime: async () => ({ version: lock.productVersion }),
+    installExtension: async () => ({ unpacked: extensionInstallLocation(paths).unpacked }),
+    ...untouchedDuringUpgrade([]),
+    saveConfig,
+    platform: 'darwin',
+    nodeVersion: '22.0.0',
+    checkChrome: async () => {
+      throw Object.assign(new Error('no such file or directory'), { code: 'ENOENT' });
+    },
+    chromeUserDataDir: path.join(paths.homeDir, 'no-chrome-profile'),
+    preflightClaude: async () => ({ installed: true }),
+    preflightRouting: async () => ({ files: [], blocks: [] }),
+    rendererVersion: async () => '2.58.0',
+    gifRendererVersion: async () => '7.0',
+    openMcpTransport: async () => ({
+      request: async (message) => (
+        message.method === 'initialize'
+          ? { jsonrpc: '2.0', id: message.id, result: { protocolVersion: '2025-03-26' } }
+          : {
+            jsonrpc: '2.0',
+            id: message.id,
+            result: {
+              tools: [
+                { name: 'browser_navigate' },
+                { name: 'browser_snapshot' },
+                { name: 'browser_click' },
+                {
+                  name: 'browser_run_code_unsafe',
+                  annotations: { destructiveHint: true, openWorldHint: true },
+                },
+              ],
+            },
+          }
+      ),
+      notify: async () => {},
+      close: async () => {},
+    }),
+  };
+  return { lock, paths, deps };
+}
+
+const chromelessRequest = {
+  hosts: ['claude'], profile: 'safe', source: '/repo/mattstack', runtimeLock: null,
+};
+
+// Setup never installs Chrome, so its absence is a missing prerequisite, not
+// drift: every rerun on such a Mac refused, failing every routine update.
+test('rerunning setup on a Mac with no Chrome succeeds and reports that Chrome is missing', async () => {
+  const { deps } = await chromelessMachine('fast-browser-no-chrome-');
+
+  const first = await setup(chromelessRequest, deps);
+  const second = await setup(chromelessRequest, deps);
+
+  for (const report of [first, second]) {
+    assert.equal(report.changed, false);
+    const byId = Object.fromEntries(report.doctor.checks.map((check) => [check.id, check]));
+    assert.equal(byId.chrome.status, 'fail');
+    assert.match(byId.chrome.message, /Google Chrome is not installed/);
+    assert.equal(byId['extension-installed'].status, 'warn');
+    assert.equal(byId['extension-loaded'].status, 'pass');
+    assert.equal(byId['retired-extension'].status, 'pass');
+    assert.deepEqual(
+      report.doctor.checks.filter((check) => check.status === 'fail').map((check) => check.id),
+      ['chrome'],
+    );
+  }
+});
+
+test('a missing Chrome does not excuse genuine drift', async () => {
+  const { deps } = await chromelessMachine('fast-browser-no-chrome-drift-');
+
+  await assert.rejects(
+    setup(chromelessRequest, {
+      ...deps,
+      checkExtensionArtifact: async () => {
+        throw new Error('content digest mismatch');
+      },
+    }),
+    /external drift/,
+  );
+});
+
 // A successful rollback returned undefined, so the CLI threw while rendering
 // its report -- after every file had already been restored. The user saw a
 // crash for a rollback that had fully succeeded, which invites them to
