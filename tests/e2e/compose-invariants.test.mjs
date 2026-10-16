@@ -2030,6 +2030,23 @@ test('a lift with one K limited by what fits the frame leaves its sibling at tha
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
 
+test('a tiny lift beside a sized one draws at the panel\'s one scale, even where it holds less than a lift on another row, at 1x and at 2x', { skip }, async () => {
+  // The top line has open ground to 1.15. The second row pairs a sized line with a short line set between two lines
+  // 5 px above and below it, which its card covers once enlarged.
+  const top = [60, 40, 120, 16]; const sized = [60, 150, 120, 14]; const tiny = [300, 151, 60, 10];
+  const bars = [top, sized, tiny, [300, 136, 60, 10], [300, 166, 60, 10]];
+  const boards = await twinBoards([{ lift: 'a', title: 'Top' }, { lift: 'b', title: 'Sized' }, { lift: 't', title: 'Tiny' }, ...holdMarks],
+    { size: [640, 300], bars, boxes: { a: top, b: sized, t: tiny, ...holdBoxes([640, 300]) } });
+  for (const report of boards) {
+    const { lifts } = p0(report);
+    assert.equal(lifts.length, 3);
+    assert.ok(lifts.every((lift) => !lift.tiny), 'the short line is drawn as a sized lift beside its row');
+    assert.ok(lifts.every((lift) => Math.abs(lift.k - lifts[0].k) < 1e-6), `scales ${lifts.map((l) => l.k)}`);
+    assert.ok(lifts[0].k < LIFT_CSS - 0.02, 'the short line held the top line below what it has room for');
+    assertInvariants(report);
+  }
+});
+
 test('on a frame drawn at 0.55 a two-line lift covers neither line beside it, or is drawn at 1', { skip }, async () => {
   // neighbours one line above and below; a far lift keeps the frame wide, and a low line keeps it under 10 to 1, so no strip
   const bars = [[60, 38, 140, 16], [60, 60, 140, 16], [60, 82, 140, 16], [60, 104, 140, 16], [1400, 60, 60, 16], [1400, 200, 60, 16]];
