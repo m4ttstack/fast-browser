@@ -33,6 +33,15 @@ test('a label that copies the title warns', () => {
   assert.equal(warns('Plan checks', { title: 'Plan checks' }), true, 'a short title copied whole');
 });
 
+test('a whole-title copy warns with its clauses swapped, words around it, or a short word dropped', () => {
+  const title = "Atlas has its budget approved; Borealis's budget is pending";
+  assert.equal(warns(title, { title: "Borealis's budget is pending; Atlas has its budget approved" }), true, 'clauses swapped');
+  assert.equal(warns(title, { note: "Here, Atlas has its budget approved; Borealis's budget is pending, as shown" }), true, 'words added around it');
+  assert.equal(warns('Ana leads the release', { title: 'Note: Ana leads the release' }), true, 'a word added before a short title');
+  assert.equal(warns('The build is green', { title: 'Build green' }), true, 'a short non-article word dropped');
+  assert.equal(warns(title, { title: 'Atlas: Budget approved' }), false, 'a callout naming one record');
+});
+
 test('a label of four counted words that runs in the title\'s order warns', () => {
   const title = "The leased van is on the fleet plan; the rental van's cover is unknown";
   assert.equal(warns(title, { note: 'Leased van on fleet plan' }), true);
