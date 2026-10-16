@@ -775,7 +775,7 @@ test('an imported fill hides capitals, digits, values wrapped onto several lines
   // A refused board is never written, so what its fill left bare is never shown. A line spared as another row of
   // the value's list is named, and the gate's view takes it in: a value in such a row is bare only with that note.
   assert.deepEqual(results.filter((r) => r.bare > 0 && !r.refused && !r.spared).map((r) => `${r.set} ${r.name}: ${r.bare} px`), [], 'no written board shows a pixel of its value without naming a spared row');
-  assert.deepEqual(results.filter((r) => r.bare > 0 && r.unseen > 0).map((r) => `${r.set} ${r.name}: ${r.unseen} px`), [], 'every bare pixel lies in the gate\'s view');
+  assert.deepEqual(results.filter((r) => r.bare > 0 && !r.refused && r.unseen > 0).map((r) => `${r.set} ${r.name}: ${r.unseen} px`), [], 'every bare pixel of a written board lies in the gate\'s view');
   const list = results.filter((r) => r.set === 'list');
   assert.equal(list.length, 210);
   assert.deepEqual(list.filter((r) => /^(one row of an icon-led list|text that runs right to left),/.test(r.name) && r.spared !== 2).map((r) => r.name), [], 'a row of an icon-led list, either way round, spares the rows below and the heading a clear gap above it');
