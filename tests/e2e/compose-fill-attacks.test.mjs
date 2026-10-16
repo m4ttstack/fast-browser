@@ -77,7 +77,7 @@ test('an imported fill hides the value or refuses the board on every case of the
   assert.deepEqual(results.filter((r) => r.set === 'RC' && r.refused).map((r) => r.name), [], 'every widened box is written');
 });
 
-const BOARDS = { run: 4, run3: 7, run6: 30, run7: 39, run8: 30, run9: 24, run10: 18, run11: 4, run12: 8, run13: 5, run14: 3, run15: 3, e1: 3, BX: 24, PG: 36, CX: 8, BR: 18, SL: 12, BK: 18 };
+const BOARDS = { run: 4, run3: 7, run6: 30, run7: 39, run8: 30, run9: 24, run10: 18, run11: 4, run12: 8, run13: 5, run14: 3, run15: 3, e1: 3, BX: 24, PG: 36, CX: 8, BR: 18, SL: 12, BK: 18, AR: 24, AW2: 42, AR2: 15 };
 
 test('a composed board hides the value or is refused on every imported attack page', { skip }, async () => {
   const { chromium } = await import(renderer.playwrightCore);

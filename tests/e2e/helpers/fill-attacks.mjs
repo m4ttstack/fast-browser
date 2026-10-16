@@ -638,7 +638,41 @@ export function boardAttackScenes() {
     scenes.push({ set: 'e1', name: `${dpr}x off ${off}`, dpr, viewport: [640, 360], html, value: '#v', glyphs: true, box: { sel: '#l2' } });
   }
   reviewScenes(scenes);
+  rereviewScenes(scenes);
   return scenes;
+}
+
+// Whole pages from the re-review of the zero-bare round's first fixes. AR: the value's second line past a row's
+// border, a mark on it or on a badge over part of it, the line under the value's columns or at a hanging indent
+// wholly beside them. AW2: a bold label set off by a margin, the value after it wrapping under the label to the
+// container's left edge, off the fill's columns, with a mark on that line or on the word after it. AR2: a short
+// hanging label, the value's lines under each other with a row's border between them and a mark on the second.
+// A context mark on a line past a rule is the driver's word that the line is not the value (`word`): what lies
+// inside its box is not counted as the value's, and everything else is.
+function rereviewScenes(scenes) {
+  const card = (h, inner) => `<!doctype html><meta charset=utf-8><style>body{margin:0;font:14px Helvetica,Arial,sans-serif;background:#f6f7f9;color:#111827}</style><div id=frame style="position:absolute;left:40px;top:40px;width:520px;height:${h}px;background:#fff;border:1px solid #e5e7eb;border-radius:12px">${inner}</div>`;
+  const push = (set, name, dpr, html, box, marks = [], word = false) => scenes.push({ set, name, dpr, viewport: [680, 420], html, value: '#v', box, marks, ...(word ? { word } : {}) });
+  for (const dpr of [1, 2, 3]) for (const shape of ['hang', 'under']) for (const kind of ['lift', 'loupe', 'badge-lift', 'none']) {
+    const lh = 28;
+    const lead = shape === 'hang' ? `<div style="position:absolute;left:32px;top:24px;width:260px;line-height:${lh}px;padding-left:90px;text-indent:-90px">By ` : `<div style="position:absolute;left:32px;top:24px;width:190px;line-height:${lh}px">Requested by `;
+    const badge = kind === 'badge-lift' ? `<div id=bd style="position:absolute;left:${shape === 'hang' ? 110 : 20}px;top:${24 + lh + 6}px;width:90px;height:28px;background:rgba(219,234,254,.35);border-radius:10px"></div>` : '';
+    const html = card(200, `<div style="position:absolute;left:20px;top:20px;width:360px;height:${lh + 8}px;border-bottom:1px solid #e5e7eb;box-sizing:border-box"></div>${lead}<span id=v>Samantha<br><span id=l2 style="display:inline-block;margin-top:8px;text-indent:0">Rivera-Okafor</span></span></div>${badge}<div style="position:absolute;left:32px;top:120px;color:#6b7280">Status open</div>`);
+    const marks = kind === 'none' ? [] : kind === 'badge-lift' ? [{ kind: 'lift', sel: '#bd' }] : [{ kind, sel: '#l2' }];
+    push('AR', `${shape} ${kind} ${dpr}x`, dpr, html, { sel: '#v', firstText: true }, marks);
+  }
+  for (const dpr of [1, 2, 3]) for (const lh of [20, 24]) for (const tail of ['', 'today']) {
+    const html = card(200, `<div style="position:absolute;left:20px;top:30px;width:260px;line-height:${lh}px"><b style="margin-right:60px">Requested by</b><span id=v><span id=l1>Samantha</span> <span id=l2>Rivera-Okafor</span></span>${tail ? ` <span id=tail>${tail}</span>` : ''}</div><div style="position:absolute;left:20px;top:140px;color:#6b7280">Status open</div>`);
+    const t = tail ? 'tail' : 'notail';
+    push('AW2', `lift on l2 lh${lh} ${t} ${dpr}x`, dpr, html, { sel: '#l1' }, [{ kind: 'lift', sel: '#l2' }]);
+    push('AW2', `context on l2 lh${lh} ${t} ${dpr}x`, dpr, html, { sel: '#l1' }, [{ kind: 'context', sel: '#l2' }]);
+    if (tail) push('AW2', `context on tail lh${lh} ${t} ${dpr}x`, dpr, html, { sel: '#l1' }, [{ kind: 'context', sel: '#tail' }]);
+    push('AW2', `nomark lh${lh} ${t} ${dpr}x`, dpr, html, { sel: '#l1' }, []);
+  }
+  for (const dpr of [1, 2, 3]) for (const kind of ['lift', 'loupe', 'ghost', 'context', 'none']) {
+    const lh = 28;
+    const html = card(200, `<div style="position:absolute;left:20px;top:20px;width:360px;height:${lh + 4}px;border-bottom:1px solid #e5e7eb;box-sizing:border-box"></div><div style="position:absolute;left:32px;top:24px;width:200px;line-height:${lh}px;padding-left:24px;text-indent:-24px">By <span id=v>Samantha<br><span id=l2 style="display:inline-block;margin-top:6px;text-indent:0">Rivera-Okafor</span></span></div><div style="position:absolute;left:32px;top:140px;color:#6b7280">Status open</div>`);
+    push('AR2', `${kind} on l2 ${dpr}x`, dpr, html, { sel: '#v', firstText: true }, kind === 'none' ? [] : [{ kind, sel: '#l2' }], kind === 'context');
+  }
 }
 
 // Whole pages from the review of the zero-bare round. BX: a card header whose value overflows its bordered row,
@@ -754,12 +788,15 @@ export async function runBoardScene({ browser, renderer, scene }) {
       throw error;
     }
     const panel = layout.panels[0];
-    const bare = await valueInk(browser, shown, hidden, { frame: panel.frame, capture: panel.capture, painted: panel.redactions.flatMap((r) => r.rects) });
+    // A glyph's antialiased edge reaches 2 CSS px past the element's box.
+    const word = scene.word ? marks.filter((m) => m.kind === 'context').map(({ box: [x, y, w, h] }) => [x - 2 * scene.dpr, y - 2 * scene.dpr, w + 4 * scene.dpr, h + 4 * scene.dpr]) : [];
+    const bare = await valueInk(browser, shown, hidden, { frame: panel.frame, capture: panel.capture, painted: panel.redactions.flatMap((r) => r.rects), word });
     return { set: scene.set, name: scene.name, refused: false, bare, warnings };
   } finally { await rm(home, { recursive: true, force: true }); }
 }
 
-// The value's pixels (more than 8 apart between the shown and hidden draws), or with `board` those the board shows.
+// The value's pixels (more than 8 apart between the shown and hidden draws), or with `board` those the board shows,
+// less those inside a box the driver marked context (`word`).
 async function valueInk(browser, shown, hidden, board) {
   const page = await browser.newPage();
   try {
@@ -778,6 +815,7 @@ async function valueInk(browser, shown, hidden, board) {
         if (!board) { n += 1; continue; }
         const [fx, fy, fw, fh] = board.frame;
         if (x < fx || y < fy || x >= fx + fw || y >= fy + fh) continue;
+        if (board.word.some(([wx, wy, ww, wh]) => x >= wx && y >= wy && x < wx + ww && y < wy + wh)) continue;
         const bx = board.capture[0] + (x + 0.5 - fx) * scale; const by = board.capture[1] + (y + 0.5 - fy) * scale;
         if (!board.painted.some(([rx, ry, rw, rh]) => bx >= rx && bx <= rx + rw && by >= ry && by <= ry + rh)) n += 1;
       }
