@@ -1065,7 +1065,9 @@ async function setupManagedExtension(version, files) {
   return { extensionDir, unpacked, lock };
 }
 
-async function extensionInstalledStatus({ extensionDir, lock, profiles }) {
+async function extensionInstalledStatus({
+  extensionDir, lock, profiles, checkChrome = async () => {},
+}) {
   const stubbed = Object.fromEntries(DOCTOR_CHECK_IDS
     .filter((id) => id !== 'extension-installed')
     .map((id) => [id, async () => ({ status: 'pass', message: `${id} passed.`, remediation: null })]));
@@ -1083,6 +1085,7 @@ async function extensionInstalledStatus({ extensionDir, lock, profiles }) {
       },
       lock,
       detectChromeExtension: async () => profiles,
+      checkChrome,
     },
   );
   return report.checks.find(({ id }) => id === 'extension-installed');
@@ -1175,6 +1178,76 @@ test('extension-installed fails with the Web Store install first when the extens
       + ' To run a local or unpublished build instead, open chrome://extensions,'
       + ` turn on Developer mode, click Load unpacked, and choose ${unpacked}.`,
   });
+});
+
+const chromeAbsent = async () => {
+  throw Object.assign(new Error('no such file or directory'), { code: 'ENOENT' });
+};
+
+// Without Chrome there is nowhere to install the extension, so its absence
+// says nothing about the install and repeats the chrome check's warning.
+test('extension-installed warns rather than fails when Google Chrome is not installed', async () => {
+  const { extensionDir, lock } = await setupManagedExtension('1.0.0', {
+    'manifest.json': '{"version":"1.0.0"}',
+  });
+
+  const status = await extensionInstalledStatus({
+    extensionDir, lock, profiles: [], checkChrome: chromeAbsent,
+  });
+
+  assert.deepEqual(status, {
+    id: 'extension-installed',
+    status: 'warn',
+    message: 'Google Chrome is not installed, so the extension cannot be installed yet.',
+    remediation: 'Install Google Chrome, then run doctor again.',
+  });
+});
+
+// Doctor still fails: a Mac without Chrome cannot drive a browser. Only the
+// setup drift guard treats it as a prerequisite rather than drift.
+test('the chrome check names the missing app and its fix when Google Chrome is not installed', async () => {
+  const report = await doctor(
+    { profile: 'safe', checks: ['chrome'] },
+    { paths: { homeDir: '/unused' }, checkChrome: chromeAbsent },
+  );
+
+  assert.equal(report.ok, false);
+  assert.deepEqual(report.checks, [{
+    id: 'chrome',
+    status: 'fail',
+    message: 'Google Chrome is not installed.',
+    remediation: 'Install Google Chrome, then run doctor again.',
+  }]);
+});
+
+// Without admin rights Chrome is dragged into ~/Applications instead.
+test('the chrome check finds Google Chrome installed in the user Applications folder', async () => {
+  const homeDir = await mkdtemp(path.join(tmpdir(), 'fast-browser-user-chrome-'));
+  await mkdir(path.join(homeDir, 'Applications', 'Google Chrome.app'), { recursive: true });
+
+  const report = await doctor(
+    { profile: 'safe', checks: ['chrome'] },
+    {
+      paths: { homeDir },
+      systemChromeApp: path.join(homeDir, 'no-system-chrome', 'Google Chrome.app'),
+    },
+  );
+
+  assert.equal(report.checks[0].status, 'pass');
+});
+
+test('the chrome check still fails on an error other than a missing app', async () => {
+  const report = await doctor(
+    { profile: 'safe', checks: ['chrome'] },
+    {
+      paths: { homeDir: '/unused' },
+      checkChrome: async () => {
+        throw Object.assign(new Error('permission denied'), { code: 'EACCES' });
+      },
+    },
+  );
+
+  assert.equal(report.checks[0].status, 'fail');
 });
 
 // A terminal without Full Disk Access is refused Chrome's profile by macOS,
@@ -3735,6 +3808,41 @@ test('CLI main reports newly installed built-in macros as a count without naming
         assert.ok(!output.includes(name), `the human ending must not name ${name}`);
       }
     }
+  }
+});
+
+// A rerun on a Mac without Chrome succeeds, so the human ending is the only
+// place the user learns the plugin still cannot drive a browser.
+test('CLI main warns that Google Chrome is missing at the end of setup', async () => {
+  for (const [status, warned] of [['fail', true], ['pass', false]]) {
+    const writes = [];
+    await main(
+      { command: 'setup', json: false },
+      {
+        commands: {
+          setup: async () => ({
+            command: 'setup',
+            hosts: ['claude'],
+            profile: 'safe',
+            extensionPath: null,
+            extensionManual: false,
+            changed: false,
+            doctor: {
+              checks: [{
+                id: 'chrome',
+                status,
+                message: 'Google Chrome is not installed.',
+                remediation: 'Install Google Chrome, then run doctor again.',
+              }],
+            },
+          }),
+        },
+        write: (text) => writes.push(text),
+      },
+    );
+    const output = writes.join('');
+    const line = 'Warning: Google Chrome is not installed. Install Google Chrome, then run doctor again.';
+    assert.equal(output.includes(line), warned, output);
   }
 });
 
