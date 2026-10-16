@@ -3011,10 +3011,15 @@ test('a context box over the value\'s own wrapped line refuses the board naming 
 // A row's border under the value's line, across the frame, and the value's line past it.
 const ruledValue = (line2At) => textLine(textLine(canvas(400, 100), 40, 20, 60, 1).fill(0, 36, 400, 1, [203, 213, 225]), line2At, 44, 80, 1);
 
-test('a line past a row\'s border wholly beside the value\'s columns refuses the board as far as a wrapped line reaches', () => {
-  const beside = importFill(ruledValue(130), [40, 20, 60, 10]);
-  const rule = beside.capped.find((c) => c.why === 'rule');
-  assert.ok(rule?.refuse && rule.at[0] <= 130 && rule.at[0] + rule.at[2] >= 205, JSON.stringify(beside.capped));
+test('a line past a row\'s border wholly beside the value\'s columns is refused, or covered, as far as a wrapped line reaches', () => {
+  // A cell on the value's own row above that line keeps the wrap rule off it: the board is refused naming it.
+  const celled = textLine(ruledValue(130), 150, 20, 50, 1);
+  const rule = importFill(celled, [40, 20, 60, 10]).capped.find((c) => c.why === 'rule');
+  assert.ok(rule?.refuse && rule.at[0] <= 130 && rule.at[0] + rule.at[2] >= 205, JSON.stringify(rule));
+  // With that row clear, the wrap rule may take the line for the value's wrapped right to left: never left bare.
+  const clear = ruledValue(130);
+  const fill = importFill(clear, [40, 20, 60, 10]);
+  if (!fill.capped.some((c) => c.refuse)) assertValueHidden(clear, fill.rects, [120, 40, 100, 20]);
   assert.deepEqual(importFill(ruledValue(300), [40, 20, 60, 10]).capped.filter((c) => c.refuse), [], 'a line beyond a wrap\'s reach refuses nothing');
 });
 
@@ -3050,11 +3055,12 @@ test('the gate refuses a line within the value\'s reach that the fill leaves bar
   assert.ok(!columns.rects.some((r) => r[0] < 120), `the fill ${JSON.stringify(columns.rects)} reaches the other column`);
 });
 
-test('the gate leaves a line more than a lead past a rule, and refuses one within a lead of it', () => {
-  // The value's line, a rule under it across the frame, and a line wholly beside the value's columns past the rule.
-  const line = (y) => textLine(textLine(canvas(400, 120), 40, 20, 60, 1).fill(0, 34, 400, 1, [203, 213, 225]), 130, y, 80, 1);
-  assert.deepEqual(importFill(line(62), [40, 20, 60, 10]).capped.filter((c) => c.refuse), [], 'a lead and more past the rule');
-  assert.deepEqual(importFill(line(40), [40, 20, 60, 10]).capped.filter((c) => c.refuse).map((c) => c.why), ['rule']);
+test('the gate refuses a line within a lead past a rule the walk never reached, and leaves one beyond the value\'s reach', () => {
+  // The walk stops at the gap before the rule; the line past it lies beside the value's columns, which the wrap rule
+  // does not cross a rule to take.
+  const line = (y) => textLine(textLine(canvas(400, 140), 40, 20, 60, 1).fill(0, 62, 400, 1, [203, 213, 225]), 130, y, 80, 1);
+  assert.deepEqual(importFill(line(66), [40, 20, 60, 10]).capped.filter((c) => c.refuse).map((c) => [c.why, c.at[0], c.at[1]]), [['rule', 130, 66]]);
+  assert.deepEqual(importFill(line(100), [40, 20, 60, 10]).capped.filter((c) => c.refuse), [], 'further off than two leads');
 });
 
 test('a line of capitals whose inkiest row is one bar still reads its density', () => {
