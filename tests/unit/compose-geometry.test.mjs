@@ -2989,8 +2989,11 @@ test('ink that runs into another mark\'s box is named, and refuses the board und
   // is the driver's word, and the walk stops at it.
   const px = textLine(textLine(canvas(300, 100), 40, 20, 60, 1), 40, 44, 60, 1);
   assert.deepEqual(importFill(px, [40, 20, 60, 10], { keep: [[38, 42, 64, 14]] }).capped, [{ side: 'bottom', why: 'mark', refuse: true }]);
+  // Off the value's columns a mark is still no reason to leave a line its reach takes in; further off, it is.
   const beside = textLine(textLine(canvas(300, 100), 40, 20, 60, 1), 160, 44, 60, 1);
-  assert.deepEqual(importFill(beside, [40, 20, 60, 10], { keep: [[158, 42, 64, 14]] }).capped.filter((c) => c.refuse), [], 'a mark over a line off the value\'s columns refuses nothing');
+  assert.deepEqual(importFill(beside, [40, 20, 60, 10], { keep: [[158, 42, 64, 14]] }).capped.filter((c) => c.refuse).map((c) => [c.why, c.at[0], c.at[1]]), [['mark', 160, 44]]);
+  const off = textLine(textLine(canvas(300, 160), 40, 20, 60, 1), 160, 130, 60, 1);
+  assert.deepEqual(importFill(off, [40, 20, 60, 10], { keep: [[158, 128, 64, 14]] }).capped.filter((c) => c.refuse), [], 'a mark over a line beyond the value\'s reach refuses nothing');
   const long = textLine(textLine(canvas(600, 80), 20, 20, 40, 1), 20, 38, 560, 1);
   const capped = importFill(long, [20, 20, 40, 10], { keep: [[400, 30, 40, 30]] }).capped;
   assert.ok(capped.some((c) => c.side === 'right' && c.why === 'mark' && c.refuse), JSON.stringify(capped));
@@ -3003,6 +3006,55 @@ test('a context box over the value\'s own wrapped line refuses the board naming 
   assert.ok(!fill.rects.some((r) => r[1] + r[3] > 44), `the fill ${JSON.stringify(fill.rects)} paints into the context box`);
   const fenced = textLine(textLine(canvas(300, 100), 40, 20, 60, 1), 40, 50, 60, 1).fill(0, 40, 300, 1, [203, 213, 225]);
   assert.deepEqual(importFill(fenced, [40, 20, 60, 10], { held: [[38, 48, 64, 14]] }).capped.filter((c) => c.refuse), [], 'the line past the rule is the driver\'s to keep');
+});
+
+// A row's border under the value's line, across the frame, and the value's line past it.
+const ruledValue = (line2At) => textLine(textLine(canvas(400, 100), 40, 20, 60, 1).fill(0, 36, 400, 1, [203, 213, 225]), line2At, 44, 80, 1);
+
+test('a line past a row\'s border wholly beside the value\'s columns refuses the board as far as a wrapped line reaches', () => {
+  const beside = importFill(ruledValue(130), [40, 20, 60, 10]);
+  const rule = beside.capped.find((c) => c.why === 'rule');
+  assert.ok(rule?.refuse && rule.at[0] <= 130 && rule.at[0] + rule.at[2] >= 205, JSON.stringify(beside.capped));
+  assert.deepEqual(importFill(ruledValue(300), [40, 20, 60, 10]).capped.filter((c) => c.refuse), [], 'a line beyond a wrap\'s reach refuses nothing');
+});
+
+test('a lift\'s box over the line past a row\'s border is read, so that line refuses the board', () => {
+  const px = textLine(textLine(canvas(400, 100), 40, 20, 60, 1).fill(0, 36, 400, 1, [203, 213, 225]), 40, 44, 60, 1);
+  const fill = importFill(px, [40, 20, 60, 10], { keep: [[38, 42, 64, 14]] });
+  assert.deepEqual(fill.capped.filter((c) => c.refuse).map((c) => [c.why, [...c.at]]), [['rule', [40, 44, 58, 10]]]);
+});
+
+test('a mark\'s or a context box over the value\'s line wrapped to its container\'s edge refuses the board naming that line', () => {
+  // The value ends a line at 200 and wraps to the left edge under it, off the fill's columns.
+  const px = textLine(textLine(canvas(400, 100), 200, 20, 60, 1), 20, 40, 80, 1);
+  const lift = importFill(px, [200, 20, 60, 10], { keep: [[18, 38, 84, 14]] });
+  assert.deepEqual(lift.capped.filter((c) => c.refuse).map((c) => [c.why, c.at[0], c.at[1]]), [['mark', 20, 40]]);
+  const context = importFill(px, [200, 20, 60, 10], { held: [[18, 38, 84, 14]] });
+  assert.deepEqual(context.capped.filter((c) => c.refuse).map((c) => [c.why, c.at[0], c.at[1]]), [['context', 20, 40]]);
+  assertValueHidden(px, importFill(px, [200, 20, 60, 10]).rects, [0, 0, 400, 100]);
+});
+
+test('the gate refuses a line within the value\'s reach that the fill leaves bare, unless a context mark holds it alone', () => {
+  // Above the value past a gap of more than a lead, overlapping its columns too little to be taken for its line.
+  const above = (y) => textLine(textLine(canvas(400, 140), 100, 80, 60, 1), 150, y, 100, 1);
+  const fill = importFill(above(42), [100, 80, 60, 10]);
+  assert.deepEqual(fill.capped.filter((c) => c.refuse).map((c) => [c.why, c.side, [...c.at]]), [['reach', 'top', [150, 42, 100, 10]]]);
+  const held = importFill(above(42), [100, 80, 60, 10], { held: [[148, 40, 104, 14]] });
+  assert.deepEqual(held.capped.filter((c) => c.refuse), [], 'the driver\'s word on that line');
+  assert.deepEqual(importFill(above(14), [100, 80, 60, 10]).capped.filter((c) => c.refuse), [], 'a line further off than two leads');
+  // A line wholly left of the value past a clear gutter, with a label beside the value on its row, is another
+  // column's.
+  const apart = textLine(textLine(textLine(canvas(400, 140), 200, 80, 60, 1), 20, 80, 60, 1), 20, 42, 100, 1);
+  const columns = importFill(apart, [200, 80, 60, 10]);
+  assert.deepEqual(columns.capped.filter((c) => c.refuse), [], 'another column');
+  assert.ok(!columns.rects.some((r) => r[0] < 120), `the fill ${JSON.stringify(columns.rects)} reaches the other column`);
+});
+
+test('the gate leaves a line more than a lead past a rule, and refuses one within a lead of it', () => {
+  // The value's line, a rule under it across the frame, and a line wholly beside the value's columns past the rule.
+  const line = (y) => textLine(textLine(canvas(400, 120), 40, 20, 60, 1).fill(0, 34, 400, 1, [203, 213, 225]), 130, y, 80, 1);
+  assert.deepEqual(importFill(line(62), [40, 20, 60, 10]).capped.filter((c) => c.refuse), [], 'a lead and more past the rule');
+  assert.deepEqual(importFill(line(40), [40, 20, 60, 10]).capped.filter((c) => c.refuse).map((c) => c.why), ['rule']);
 });
 
 test('a line of capitals whose inkiest row is one bar still reads its density', () => {
