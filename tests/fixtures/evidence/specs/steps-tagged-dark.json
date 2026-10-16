@@ -1,0 +1,7 @@
+{ "state": "FLOW", "title": "Reviewing a task from its activity page, dark", "layout": "steps", "out": "fx-steps-tagged-dark.png",
+  "expect": { "headNotes": true, "dark": [true, true] },
+  "panels": [
+    { "label": "Open its activity", "tag": "NEW", "note": "The activity tab lists every change to the task, newest first.", "fixture": { "page": "dense-text-dark", "targets": { "tab": "[data-testid=activity-tab]" }, "frame": "[data-testid=activity]" },
+      "marks": [ { "lift": "tab" } ] },
+    { "label": "Filter to review", "tag": "ISSUE", "note": "Review shows only open comments.", "fixture": { "page": "dense-text-dark", "targets": { "tab": "[data-testid=review-tab]" }, "frame": "[data-testid=activity]" },
+      "marks": [ { "lift": "tab" } ] } ] }

@@ -1,0 +1,19 @@
+<!doctype html><meta charset="utf-8">
+<style>body{margin:0;font:14px Helvetica,Arial,sans-serif;background:#f6f7f9;color:#111827}
+.block{position:absolute;background:#fff;border-radius:10px;box-sizing:border-box}
+.header{left:40px;top:40px;width:420px;height:110px;padding:18px 20px}
+.header h3{margin:0 0 14px;font-size:18px}
+.tabs{display:flex;gap:22px;color:#6b7280}
+.tabs span{padding-bottom:4px}
+.rail{left:40px;top:200px;width:140px;height:260px;padding:14px 0}
+.rail div{padding:12px 20px;color:#6b7280}
+.rail .on{color:#111827;background:#eef2ff}
+.detail{left:520px;top:40px;width:360px;height:150px;padding:20px}
+.detail .who{display:flex;align-items:center;gap:14px}
+.avatar{width:48px;height:48px;border-radius:999px;background:#1f2937;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700}
+.detail h4{margin:0 0 6px;font-size:16px}
+.chip{display:inline-block;padding:2px 9px;border-radius:999px;background:#dcfce7;color:#166534;font-size:12px}
+.muted{color:#6b7280;margin-top:16px}</style>
+<div class="block header" data-testid="header"><h3>Project Atlas</h3><div class="tabs"><span>Overview</span><span data-testid="tasks">Tasks</span><span>Files</span><span>Settings</span></div></div>
+<div class="block detail" data-testid="detail"><div class="who"><div class="avatar">RB</div><div><h4>Release board</h4><span class="chip" data-testid="owner">Owner</span></div></div><div class="muted">Twelve open tasks across three lanes</div></div>
+<div class="block rail" data-testid="rail"><div>Summary</div><div>Members</div><div>Labels</div><div class="on" data-testid="archive">Archive</div><div>Export</div></div>

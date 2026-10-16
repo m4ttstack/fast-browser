@@ -1,0 +1,7 @@
+{ "state": "FLOW", "title": "Opening a report keeps the project in view", "layout": "steps", "out": "fx-steps-context.png",
+  "expect": { "contextIn": { "panel": 1, "key": "project" } },
+  "panels": [
+    { "label": "Create", "fixture": { "page": "steps-context", "targets": { "new": "[data-testid=new-task]" }, "frame": "[data-testid=tracker]" },
+      "marks": [ { "lift": "new", "title": "New task" } ] },
+    { "label": "Reports", "fixture": { "page": "steps-context", "targets": { "reports": "[data-testid=reports]", "project": "[data-testid=project]" }, "frame": "[data-testid=tracker]" },
+      "marks": [ { "lift": "reports", "title": "Reports" }, { "context": "project" } ] } ] }

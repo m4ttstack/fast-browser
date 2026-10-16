@@ -8,7 +8,7 @@ import { rendererLaunches } from '../../lib/compose/renderer.mjs';
 import { IMPORT_MAX_SIDE, rasterizeImage, renderBoard } from '../../lib/compose/engine.mjs';
 import { readPngSize } from '../../lib/annotate/png.mjs';
 import { buildBoardHtml, REDACT_FILL } from '../../lib/compose/page.mjs';
-import { assertInvariants, assertPanel, inside, intersects, rectDistance, segmentHitsRect } from './helpers/invariants.mjs';
+import { assertInvariants, assertPanel, assertPanelSizes, inside, intersects, rectDistance, segmentHitsRect } from './helpers/invariants.mjs';
 import { countOffColor } from './helpers/png-diff.mjs';
 import { readPixels } from './helpers/png-pixels.mjs';
 import { rendererForTests } from './helpers/renderer.mjs';
@@ -48,8 +48,13 @@ async function render(spec, capture) {
 }
 
 // Content in two corners of the default 600 by 300 capture keeps the whole of it in the frame: a scene written
-// for one frame size reads the same once every layout trims blank ground. A px in from the edge, so no frame edge cuts it.
-const CORNERS_600 = [[1, 1, 4, 4], [595, 295, 4, 4]];
+// for one frame size reads the same once every layout trims blank ground. A px in from the edge, so no frame edge cuts it,
+// and longer than ORPHAN (16 px), so no edge comes off it as a lone small item.
+const CORNERS_600 = [[1, 1, 20, 4], [579, 295, 20, 4]];
+// The same at 700 wide: a frame at least 640 CSS px wide is drawn at 1x or less, which the lift-room tests assume.
+// A ghost mark far out to the right keeps a cropped frame at least 640 CSS px wide, so it is drawn at 1x or less.
+const holdOf = ([w]) => [w - 40, 10, 30, 14];
+const CORNERS_700 = [[1, 1, 20, 4], [679, 295, 20, 4]];
 
 const spec = (marks, title = 'Board') => ({ state: 'AFTER', title, layout: 'single', out: 'o.png', panels: [{ capture: 'c.json', marks }] });
 const p0 = (report) => report.panels[0];
@@ -58,6 +63,8 @@ const LENS_BOARD_PX = 110;
 const BASE_K = 1.06;
 // A copy of LIFT_CSS in lib/compose/page-layout.js, for the same reason.
 const LIFT_CSS = 1.15;
+// A copy of STRAY_CSS in lib/compose/page-layout.js, for the same reason.
+const STRAY_CSS = 12;
 
 test('two adjacent lifts with labels hold every invariant', { skip }, async () => {
   const { report, dir } = await render(spec([
@@ -157,7 +164,8 @@ test('a redaction is drawn as its fill alone, with no pill', { skip }, async () 
   const { report, dir } = await render(spec([{ redact: 'a' }]), await syntheticCapture());
   try {
     assert.equal(p0(report).redactions.length, 1);
-    assert.deepEqual(Object.keys(p0(report).redactions[0]).sort(), ['fill', 'rect']);
+    assert.deepEqual(Object.keys(p0(report).redactions[0]).sort(), ['fill', 'rect', 'rects']);
+    assert.deepEqual(p0(report).redactions[0].rects, [p0(report).redactions[0].rect], 'a live fill is one rect');
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
 
@@ -292,7 +300,7 @@ test('with no clean spot for a dot on any open side the board is pinned, and no 
 test('a connector dot slides off page content like a leader dot', { skip }, async () => {
   // The two lifts stand near enough that the connector's run is a short one; the block lies under the middle of the second.
   const bars = [[40, 40, 40, 20], [120, 40, 60, 20], [140, 76, 20, 14]];
-  const { report, dir } = await render(spec([{ lift: ['a', 'c'], title: 'Both ends' }]), await syntheticCapture({ size: [600, 400], bars, boxes: { a: bars[0], c: bars[1] } }));
+  const { report, dir } = await render(spec([{ lift: ['a', 'c'], title: 'Both ends' }, { ghost: 'hold' }]), await syntheticCapture({ size: [740, 400], bars: [...bars, holdOf([740, 400])], boxes: { a: bars[0], c: bars[1], hold: holdOf([740, 400]) } }));
   try {
     assertInvariants(report);
     assert.equal(report.pinned, false);
@@ -318,7 +326,7 @@ test('lifts that cannot be kept apart at their smallest scale are reported', { s
 
 test('a later lift gives way, down toward the base scale, when moving apart is not enough', { skip }, async () => {
   const bars = [[100, 100, 40, 8], [100, 122, 40, 8]];
-  const report = await board([{ lift: 'a' }, { lift: 'b' }], { bars, boxes: { a: bars[0], b: bars[1] } });
+  const report = await board([{ lift: 'a' }, { lift: 'b' }, { ghost: 'hold' }], { size: [740, 300], bars: [...bars, holdOf([740, 300])], boxes: { a: bars[0], b: bars[1], hold: holdOf([740, 300]) } });
   assertInvariants(report);
   const [first, later] = p0(report).lifts;
   assert.equal(intersects(first.rect, later.rect), false, 'the two cards do not overlap');
@@ -339,7 +347,7 @@ test('a dot that slides past a neighbour keeps its leader track clear of the nei
   // Ink beside the tall lift runs from its top to just above the middle of its right side, and the small lift
   // sits below that middle, so the dot slides down past the small lift to the first spot clear of both.
   // The block under the small lift leaves it no clean way down, so the board's labels leave by the right.
-  const bars = [[40, 20, 60, 200], [135, 140, 60, 20], [108, 20, 10, 97], [116, 236, 100, 16]];
+  const bars = [[32, 16, 48, 160], [108, 112, 48, 16], [86, 16, 8, 78], [93, 189, 80, 13]];
   const report = await board([{ lift: 'a', title: 'Tall' }, { lift: 'b', title: 'Small' }], { size: [600, 300], bars, boxes: { a: bars[0], b: bars[1] } });
   assertInvariants(report);
   const tall = p0(report).dots.find((d) => d.target === 0);
@@ -374,7 +382,7 @@ test('a point whose connector has no side clear of other lifts is pinned', { ski
 
 test('a connector joins a leader that leaves by the bottom', { skip }, async () => {
   // The second lift stands across the first one's way right, and near enough that the connector's run is a short one.
-  const bars = [[100, 100, 40, 20], [180, 100, 60, 20]];
+  const bars = [[100, 100, 40, 20], [170, 100, 60, 20]];
   const report = await board([{ lift: ['a', 'b'], title: 'Both' }], { size: [1200, 300], bars, boxes: { a: bars[0], b: bars[1] } });
   assertInvariants(report);
   assert.equal(report.pinned, false);
@@ -511,6 +519,40 @@ test('a ghost slot sits on its box and takes a label', { skip }, async () => {
   assert.equal(p0(report).dots.length, 1);
 });
 
+test('a ghost inside a redaction fill is an outline alone: the fill is no blank to hatch', { skip }, async () => {
+  const report = await board([{ redact: 'v' }, { ghost: 'g', title: 'Removed' }], { bars: [[110, 110, 180, 20]], boxes: { v: [100, 100, 200, 40], g: [150, 112, 60, 16] } });
+  assertInvariants(report);
+  const [slot] = p0(report).slots;
+  assert.equal(slot.hatched, false);
+  const open = await board([{ ghost: 'g', title: 'Removed' }], { bars: [], boxes: { g: [150, 112, 60, 16] } });
+  assert.equal(p0(open).slots[0].hatched, true, 'on blank ground the same ghost is hatched');
+});
+
+// Copies of GHOST_MIN and SLOT_FILL_GAP in lib/compose/page-layout.js, kept apart so the check does not read the code it checks.
+const [GHOST_MIN, SLOT_FILL_GAP] = [24, 4];
+// A small ghost beside one fill, with room to move clear of it; the same against the frame's edge, with none; and
+// one between two fills, where a move off one lands on the other. The tight board is pinned and its pin stands on a
+// fill, a fault of the pin's placement that the board has without any stand-off rule, so it is held to the fills alone.
+for (const [name, size, bars, boxes, keepsSize, invariants = true] of [
+  ['with room to move', [600, 300], [[100, 100, 80, 16]], { v: [100, 100, 80, 16], g: [184, 104, 12, 8] }, true],
+  ['against the frame edge', [200, 300], [[100, 100, 80, 16]], { v: [100, 100, 80, 16], g: [184, 104, 12, 8] }, false],
+  ['between two fills', [600, 300], [[100, 100, 40, 80], [162, 100, 40, 16], [20, 20, 10, 10], [400, 250, 10, 10]], { v: [100, 100, 40, 80], w: [162, 100, 40, 16], g: [146, 110, 10, 8] }, false],
+  ['between two fills, tight', [600, 300], [[100, 100, 40, 80], [158, 96, 40, 20], [20, 20, 10, 10], [400, 250, 10, 10]], { v: [100, 100, 40, 80], w: [158, 96, 40, 20], g: [144, 108, 8, 6] }, false, false],
+]) {
+  test(`a small ghost beside a fill never lands on one, ${name}`, { skip }, async () => {
+    const fills = Object.keys(boxes).filter((key) => key !== 'g').map((key) => ({ redact: key }));
+    const report = await board([...fills, { ghost: 'g', title: 'Removed' }], { size, bars, boxes });
+    if (invariants) assertInvariants(report);
+    const [slot] = p0(report).slots;
+    const [sx, sy, sw, sh] = slot.rect;
+    for (const { rect: [fx, fy, fw, fh] } of p0(report).redactions) {
+      const apart = Math.max(fx - (sx + sw), sx - (fx + fw), fy - (sy + sh), sy - (fy + fh));
+      assert.ok(apart >= SLOT_FILL_GAP - 1e-6, `the ghost ${slot.rect} stands ${apart} px from the fill ${[fx, fy, fw, fh]}`);
+    }
+    if (keepsSize) assert.ok(sw >= GHOST_MIN - 1e-6 && sh >= GHOST_MIN - 1e-6, `with room to move, the ghost keeps its least size: ${sw} by ${sh}`);
+  });
+}
+
 test('the real renderer launches and reports a version', { skip }, async () => {
   const result = await rendererLaunches({ executable: renderer.executablePath });
   assert.equal(result.ok, true);
@@ -575,6 +617,29 @@ test('a target too large for the lens is zoomed out, with a warning', { skip }, 
   assert.ok(report.warnings.includes('a loupe was zoomed out to fit its target'));
 });
 
+test('a zoom capped by a quarter or less stays quiet, and one capped by more warns', { skip }, async () => {
+  const at = async (side) => {
+    const bars = [[300, 150, side, side]];
+    const report = await board([{ loupe: 'icon', zoom: 4, title: 'Icon' }], { bars, boxes: { icon: bars[0] } });
+    assertInvariants(report);
+    return { zoom: p0(report).loupes[0].zoom, warned: report.warnings.includes('a loupe was zoomed out to fit its target') };
+  };
+  const slight = await at(16);
+  assert.ok(slight.zoom < 4 && slight.zoom >= 3, `a 16px target caps 4x to ${slight.zoom}`);
+  assert.equal(slight.warned, false);
+  const steep = await at(24);
+  assert.ok(steep.zoom < 3, `a 24px target caps 4x to ${steep.zoom}`);
+  assert.equal(steep.warned, true);
+});
+
+test('a target too large for the default zoom is zoomed out without a warning: the mark asked for none', { skip }, async () => {
+  const bars = [[100, 100, 120, 40]];
+  const report = await board([{ loupe: 'big' }], { bars, boxes: { big: bars[0] } });
+  assertInvariants(report);
+  assert.ok(p0(report).loupes[0].zoom < 4);
+  assert.ok(!report.warnings.includes('a loupe was zoomed out to fit its target'));
+});
+
 test('a lens shows the frame and nothing beyond it', { skip }, async () => {
   const capture = await syntheticCapture({ bars: [[282, 140, 10, 10]], boxes: { tiny: [282, 140, 10, 10] }, tints: [[304, 100, 80, 100, '#dc2626']] });
   const { report, outPath, dir } = await render(spec([{ loupe: 'tiny', zoom: 2 }]), { ...capture, frame: [0, 0, 300, 300] });
@@ -591,21 +656,52 @@ test('a lens shows the frame and nothing beyond it', { skip }, async () => {
 test('a lens shows the crop of a single board and nothing the crop left out', { skip }, async () => {
   const bars = [[700, 580, 1000, 30]];
   const capture = await syntheticCapture({ size: [2400, 1200], bars, boxes: { wide: bars[0] },
-    tints: [[1150, 495, 100, 20, '#dc2626'], [1150, 675, 100, 18, '#dc2626']] });
+    tints: [[1150, 505, 100, 20, '#dc2626'], [1150, 665, 100, 18, '#dc2626']] });
   const { report, outPath, dir } = await render(spec([{ loupe: 'wide', zoom: 8 }]), capture);
   try {
     assert.equal(p0(report).cropped, true, 'the board crops, so the blocks lie in the frame but outside the crop');
     const [, cropTop, , cropHeight] = p0(report).frame;
-    assert.ok(515 < cropTop && 675 > cropTop + cropHeight, 'the blocks lie clear of the crop');
+    assert.ok(525 < cropTop && 665 > cropTop + cropHeight, 'the blocks lie clear of the crop');
     const loupe = p0(report).loupes[0];
     const png = await readFile(outPath);
     const scale = png.readUInt32BE(16) / report.stage[2];
     const reach = (LENS_BOARD_PX / 2) / (loupe.zoom * (p0(report).capture[2] / p0(report).frame[2]));
-    assert.ok(595 - reach < 495 && 595 + reach > 693, 'an unbounded lens would reach both blocks');
+    assert.ok(595 - reach < 505 && 595 + reach > 683, 'an unbounded lens would reach both blocks');
     const rect = loupe.lens.map((v) => Math.round(v * scale));
     const red = await countOffColor({ png, rect, color: [220, 38, 38], tolerance: 90, renderer });
     assert.equal(red.total - red.off, 0, 'the lens shows page that the crop left out');
   } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+// A 12 px blue badge and a red glyph to its left, on a 300 by 200 frame drawn at 1.25: a 4x lens about the badge
+// is a circle of 11 CSS px, which reaches the glyph's right column.
+const lensScene = async (glyph) => {
+  const size = [300, 200]; const badge = [140, 90, 12, 12];
+  const capture = await syntheticCapture({ size, bars: [], tints: [[...badge, '#2563eb'], [...glyph, '#dc2626']], boxes: { badge, ...holdBoxes(size) } });
+  const { report, outPath, dir } = await render(spec([{ loupe: 'badge', zoom: 4, title: 'Badge' }, ...holdMarks]), capture);
+  try {
+    const png = await readFile(outPath);
+    const loupe = p0(report).loupes[0];
+    const scale = png.readUInt32BE(16) / report.stage[2];
+    const red = await countOffColor({ png, rect: loupe.lens.map((v) => Math.round(v * scale)), color: [220, 38, 38], tolerance: 90, renderer });
+    // Image px per CSS px inside the lens.
+    const zoom = loupe.zoom * (p0(report).capture[2] / p0(report).frame[2]) * scale;
+    return { loupe, red: red.total - red.off, area: glyph[2] * glyph[3] * zoom ** 2 };
+  } finally { await rm(dir, { recursive: true, force: true }); }
+};
+
+test('a lens leaves out a glyph its circle would cut to a sliver', { skip }, async () => {
+  const { loupe, red } = await lensScene([133, 91, 3, 10]);
+  assert.deepEqual(loupe.moved, [0, 0], 'the lens stays on the badge');
+  assert.ok(loupe.hidden > 0, 'the glyph is painted out');
+  assert.equal(red, 0, 'none of the glyph shows in the lens');
+});
+
+test('a lens moves to take in whole a glyph its circle would cut', { skip }, async () => {
+  const { loupe, red, area } = await lensScene([134, 92, 2, 8]);
+  assert.deepEqual(loupe.moved, [-2, 0], 'the lens moves 2 CSS px left');
+  assert.equal(loupe.hidden, 0);
+  assert.ok(red > 0.6 * area, `${red} px of the glyph show in the lens, of ${area}`);
 });
 
 test('a loupe over a redacted key magnifies the fill, never the original pixels', { skip }, async () => {
@@ -793,8 +889,8 @@ test('a lift whose every side strikes content is pinned, and no dot sits on cont
 });
 
 const DOT_OUTER = 5.5;
-const onFill = (panel, point) => panel.redactions.some((r) => rectDistance(point, r.rect) < DOT_OUTER);
-const crossesFill = (panel, points) => panel.redactions.some((r) => points.slice(1).some((q, i) => segmentHitsRect(points[i], q, r.rect)));
+const onFill = (panel, point) => panel.redactions.some((r) => r.rects.some((rect) => rectDistance(point, rect) < DOT_OUTER));
+const crossesFill = (panel, points) => panel.redactions.some((r) => r.rects.some((rect) => points.slice(1).some((q, i) => segmentHitsRect(points[i], q, rect))));
 
 test('a slot whose bottom edge lies on a redaction fill puts its dot on open ground, not on the fill', { skip }, async () => {
   const slot = [100, 60, 500, 40]; const under = [90, 70, 470, 230];
@@ -846,7 +942,7 @@ test('a slot\'s leader drops through the gap between two words and touches neith
   const words = Array.from({ length: 7 }, (_, i) => [60 + 39 * i, 130, 30, 12]);
   const slots = [[100, 60, 200, 40], [340, 50, 100, 60]];
   const bars = [...words, [500, 270, 30, 10]];
-  const report = await board([{ empty: 'mine', text: 'Nothing rendered here at all' }, { empty: 'wall', text: 'Walled' }, { ghost: 'far' }], { bars: [...bars, ...CORNERS_600], boxes: { mine: slots[0], wall: slots[1], far: bars.at(-1) } });
+  const report = await board([{ empty: 'mine', text: 'Nothing rendered here at all' }, { empty: 'wall', text: 'Walled' }, { ghost: 'far' }], { size: [700, 300], bars: [...bars, ...CORNERS_700], boxes: { mine: slots[0], wall: slots[1], far: bars.at(-1) } });
   assertInvariants(report);
   const panel = p0(report);
   const leader = panel.leaders.find((l) => panel.targets[l.target].mark === 0);
@@ -889,34 +985,89 @@ const liftBox = (lift) => {
 };
 const overlapArea = (a, b) => Math.max(0, Math.min(a[0] + a[2], b[0] + b[2]) - Math.max(a[0], b[0])) * Math.max(0, Math.min(a[1] + a[3], b[1] + b[3]) - Math.max(a[1], b[1]));
 
-for (const gap of [10, 5]) {
-  test(`a lift keeps ${LIFT_CLEAR} capture px of ground between its card and a bar ${gap}px from its element`, { skip }, async () => {
-    const element = [200, 100, 40, 12];
-    const bar = [200 - gap - 40, 103, 40, 6];
-    const report = await board([{ lift: 'a', title: 'Small' }, { ghost: 'far' }], { bars: [bar, [560, 260, 30, 20]], boxes: { a: element, far: [560, 260, 30, 20] } });
-    assertInvariants(report);
-    const panel = p0(report); const [lift] = panel.lifts;
-    const S = panel.capture[2] / panel.frame[2];
-    const [bx, , bw] = boardOf(panel, bar);
-    const ground = lift.rect[0] - (bx + bw);
-    assert.ok(ground >= LIFT_CLEAR * S - 0.01, `${(ground / S).toFixed(2)} capture px of ground lie between the card and the bar`);
+// The lift-room scenes run below 1x, at about 1.07x and at 1.25x, where whole board px fall between capture px. A case
+// names the range its frame must be drawn in, so a frame that drifts out of it fails instead of testing another scale.
+const drawnAt = (panel, [label, low, high]) => {
+  const S = panel.capture[2] / panel.frame[2];
+  assert.ok(S >= low && S <= high, `drawn at ${S}x, not ${label}`);
+  return S;
+};
+
+// Capture px of ground between a lift's card and a bar to its left, at the scale the card was placed at: the capture's
+// board width is rounded to a whole px, so its ratio to the frame is off the layout's own by up to half a px across it.
+const groundLeftOf = (panel, lift, bar) => {
+  const S = lift.rect[2] / (lift.k * liftBox(lift)[2]);
+  return (lift.rect[0] - panel.capture[0] - (bar[0] + bar[2] - panel.frame[0]) * S) / S;
+};
+const clearScene = async (width, gap) => {
+  const element = [200, 100, 40, 12];
+  const bar = [200 - gap - 40, 103, 40, 6];
+  const far = [width - 40, 260, 30, 20];
+  const report = await board([{ lift: 'a', title: 'Small' }, { ghost: 'far' }], { size: [width, 300], bars: [bar, far], boxes: { a: element, far } });
+  assertInvariants(report);
+  return { panel: p0(report), ground: groundLeftOf(p0(report), p0(report).lifts[0], bar) };
+};
+
+for (const gap of [10, 5]) for (const [width, ...scale] of [[840, 'below 1x', 0.9, 0.95], [738, 'about 1.07x', 1.05, 1.1], [600, '1.25x', 1.24, 1.26]]) {
+  test(`a lift keeps ${LIFT_CLEAR} capture px of ground between its card and a bar ${gap}px from its element, drawn ${scale[0]}`, { skip }, async () => {
+    const { panel, ground } = await clearScene(width, gap);
+    drawnAt(panel, scale);
+    assert.ok(ground >= LIFT_CLEAR - 0.01, `${ground.toFixed(2)} capture px of ground lie between the card and the bar`);
   });
 }
 
+// Whether a card placed at whole board px loses its clearance depends on where those px fall between capture px, which
+// moves with every frame width: the widths run from the 1.25x cap down past 1x.
+test(`a lift keeps ${LIFT_CLEAR} capture px of ground beside a bar 5px from its element at every single-board scale`, { skip }, async () => {
+  const short = [];
+  for (let width = 500; width <= 760; width += 6) {
+    const { panel, ground } = await clearScene(width, 5);
+    if (ground < LIFT_CLEAR - 0.01) short.push(`${width} wide at ${(panel.capture[2] / panel.frame[2]).toFixed(3)}x: ${ground.toFixed(2)}`);
+  }
+  assert.deepEqual(short, [], 'capture px of ground between the card and the bar');
+});
+
 const OVER = [[100, 138, 110, 6], [100, 166, 110, 6]];
 const SHORT = [200, 150, 40, 10];
+// At 1.25x the card is short enough to stand between rows 22 px apart, so there they stand 4 px off the element.
+const OVER_CLOSE = [[100, 140, 110, 6], [100, 164, 110, 6]];
 
-test('an enlarged lift between two rows reaches for the open ground beside them and hides less of the rows than a centred card', { skip }, async () => {
-  const report = await board([{ lift: 'a', title: 'Short' }, { ghost: 'far' }], { bars: [...OVER, [560, 260, 30, 20], ...CORNERS_600], boxes: { a: SHORT, far: [560, 260, 30, 20] } });
-  assertInvariants(report);
-  const panel = p0(report); const [lift] = panel.lifts;
-  const [x, y, w, h] = boardOf(panel, liftBox(lift));
-  const [, , W, H] = lift.rect;
-  assert.ok(W > w && H > h, 'the lift is enlarged');
-  const centred = [x + w / 2 - W / 2, y + h / 2 - H / 2, W, H];
-  const hidden = (card) => OVER.reduce((sum, row) => sum + overlapArea(card, boardOf(panel, row)), 0);
-  assert.ok(hidden(lift.rect) < hidden(centred), `the card hides ${hidden(lift.rect).toFixed(0)} board px of the rows, a centred card ${hidden(centred).toFixed(0)}`);
-  assert.ok(lift.rect[0] <= x + 0.01 && lift.rect[0] + W >= x + w - 0.01 && lift.rect[1] <= y + 0.01 && lift.rect[1] + H >= y + h - 0.01, 'the card still covers its element');
+for (const [width, rows, ...scale] of [[700, OVER, 'below 1x', 0.9, 0.95], [600, OVER, 'about 1.07x', 1.05, 1.1], [500, OVER_CLOSE, '1.25x', 1.24, 1.26]]) {
+  test(`an enlarged lift between two rows it cannot clear at a readable height gives way, hides no more than a stray edge of them and reaches for the open ground beside them, drawn ${scale[0]}`, { skip }, async () => {
+    const far = [width - 40, 260, 30, 20];
+    const corners = [[1, 1, 20, 4], [width - 21, 295, 20, 4]];
+    const report = await board([{ lift: 'a', title: 'Short' }, { ghost: 'far' }], { size: [width, 300], bars: [...rows, far, ...corners], boxes: { a: SHORT, far } });
+    assertInvariants(report);
+    const panel = p0(report); const [lift] = panel.lifts;
+    const S = drawnAt(panel, scale);
+    const [x, y, w, h] = boardOf(panel, liftBox(lift));
+    const [, , W, H] = lift.rect;
+    assert.ok(W > w && H > h, 'the lift is enlarged');
+    assert.ok(H < 24, `the card gave way below a readable height (${H.toFixed(1)} px)`);
+    const hidden = rows.reduce((sum, row) => sum + overlapArea(lift.rect, boardOf(panel, row)), 0) / S ** 2;
+    assert.ok(hidden <= STRAY_CSS, `the card hides ${hidden.toFixed(1)} CSS px squared of the rows`);
+    // A card stands on whole board px, so it may start up to one px before its element.
+    assert.ok(lift.rect[0] > x - 1 && lift.rect[0] + W > x + w + 1, `the card grows away from the rows, toward the open ground (${lift.rect[0]} against ${x.toFixed(2)})`);
+    assert.ok(lift.rect[0] <= x + 0.01 && lift.rect[0] + W >= x + w - 0.01 && lift.rect[1] <= y + 0.01 && lift.rect[1] + H >= y + h - 0.01, 'the card still covers its element');
+  });
+}
+
+test('a tiny lift that cannot clear its neighbours even at the base scale hides less of them than a centred card, at 1x and at 2x', { skip }, async () => {
+  // A wide line between a tall narrow column 14 px to its left and a line 3 px to its right: at BASE_K the card's ring
+  // reaches one or the other wherever it stands. Moving left clears most of the line from the card's margin and puts
+  // the whole column under its face.
+  const wide = [200, 150, 300, 10]; const column = [181, 135, 5, 40]; const line = [503, 150, 100, 10];
+  const boards = await twinBoards([{ lift: 'w', title: 'Wide' }, ...holdMarks], { size: GRID_SIZE, bars: [wide, column, line], boxes: { w: wide, ...holdBoxes(GRID_SIZE) } });
+  assertSameLayout(...boards, [2]);
+  for (const report of boards) {
+    const panel = p0(report); const [lift] = panel.lifts;
+    assert.ok(lift.tiny && Math.abs(lift.k - BASE_K) < 1e-9, `the card stays at the base scale (k ${lift.k})`);
+    const [x, y, w, h] = boardOf(panel, liftBox(lift));
+    const [, , W, H] = lift.rect;
+    const centred = [x + w / 2 - W / 2, y + h / 2 - H / 2, W, H];
+    const hidden = (card) => [column, line].reduce((sum, bar) => sum + overlapArea(card, boardOf(panel, bar.map((n) => n * panel.scale))), 0);
+    assert.ok(hidden(lift.rect) < hidden(centred), `the card hides ${hidden(lift.rect).toFixed(1)} board px of its neighbours, a centred card ${hidden(centred).toFixed(1)}`);
+  }
 });
 
 test('an enlarged lift on open ground stays centred on its element', { skip }, async () => {
@@ -932,8 +1083,8 @@ test('an enlarged lift on open ground stays centred on its element', { skip }, a
 const outlineOf = ([x, y, w, h]) => [[x, y, w, 1], [x, y + h - 1, w, 1], [x, y, 1, h], [x + w - 1, y, 1, h]];
 
 test('a lift beside a card\'s right border stays centred on its element and its leader leaves by the right', { skip }, async () => {
-  // The border is 7 capture px outside the lift's padded box: inside its count margin, and a card hung off it can clear it.
-  const element = [562, 134, 4, 4];
+  // The border is 5 capture px outside the lift's padded box: inside its count margin, and a card hung off it can clear it.
+  const element = [564, 134, 4, 4];
   const report = await board([{ lift: 'a', title: 'Version' }], { size: [700, 300], bars: [...outlineOf([20, 20, 558, 260]), element], boxes: { a: element } });
   assertInvariants(report);
   const panel = p0(report); const [lift] = panel.lifts;
@@ -962,7 +1113,7 @@ const multi = (layout, panels, title = 'Board') => ({ state: 'FLOW', title, layo
 
 test('a pair draws two captures of very different sizes at one height', { skip }, async () => {
   // Content in two corners keeps each frame whole: trimmed to its one line, either would be a strip, and the pair stacked.
-  const big = await syntheticCapture({ size: [1800, 900], bars: [[300, 300, 600, 60], [1, 1, 4, 4], [1795, 895, 4, 4]], boxes: { a: [300, 300, 600, 60] } });
+  const big = await syntheticCapture({ size: [1800, 900], bars: [[300, 300, 600, 60], [1, 1, 20, 4], [1779, 895, 20, 4]], boxes: { a: [300, 300, 600, 60] } });
   const small = await syntheticCapture({ size: [600, 300], bars: [[100, 100, 200, 20], ...CORNERS_600], boxes: { a: [100, 100, 200, 20] } });
   const { report, pixels, dir } = await render(multi('pair', [[], [{ lift: 'a', title: 'After' }]]), [big, small]);
   try {
@@ -1172,7 +1323,8 @@ test('a steps lift whose second solve merges grows only inside the crop it was c
 });
 
 // A grid of 11px squares every 16px: no clean line crosses it and no gap is a band.
-const denseBars = (size) => Array.from({ length: Math.ceil(size[0] / 16) * Math.ceil(size[1] / 16) }, (_, n) => [(n % Math.ceil(size[0] / 16)) * 16, Math.floor(n / Math.ceil(size[0] / 16)) * 16, 11, 11]);
+// Squares 14 px wide every 16: the 2 px between them is no word space, let alone a band.
+const denseBars = (size) => Array.from({ length: Math.ceil(size[0] / 16) * Math.ceil(size[1] / 16) }, (_, n) => [(n % Math.ceil(size[0] / 16)) * 16, Math.floor(n / Math.ceil(size[0] / 16)) * 16, 14, 14]);
 
 test('a steps board crops a dense page to its margins and says the edges cut through content', { skip }, async () => {
   const mark = [400, 304, 64, 16];
@@ -1211,6 +1363,93 @@ test('a pair whose frames cleaning moved differently still shows each whole', { 
   const [a, b] = report.panels;
   assert.notDeepEqual(a.cleanFrame, b.cleanFrame, 'cleaning moved the two frames differently');
   shownWhole(a); shownWhole(b);
+});
+
+test('a pair takes a word step outward past a sidebar only where both states do', { skip }, async () => {
+  // A sidebar strip down the left and text rows down to y 342. Above the rows the first state shows ground within
+  // WORD_REACH of its frame's top, which only the strip crosses; the second state's rows run on up to y 200.
+  const mark = [70, 350, 60, 20];
+  const rows = (from) => Array.from({ length: Math.floor((342 - from) / 7) }, (_, n) => Array.from({ length: 72 }, (_, m) => [60 + 7 * m, from + 7 * n, 6, 6])).flat();
+  const scene = (from) => syntheticCapture({ size: [600, 500], bars: [[20, 0, 16, 500], mark, ...rows(from)], boxes: { a: mark } });
+  const frame = [0, 302, 600, 190];
+  const alone = await render(spec([{ lift: 'a', title: 'Alone' }]), { ...(await scene(300)), frame });
+  await rm(alone.dir, { recursive: true, force: true });
+  assert.equal(p0(alone.report).frameEdges.top, 'word', 'on its own the first state steps out past the strip');
+  const { report, dir } = await render(multi('pair', [[{ lift: 'a', title: 'First' }], [{ lift: 'a', title: 'Second' }]]), [{ ...(await scene(300)), frame }, { ...(await scene(202)), frame }]);
+  await rm(dir, { recursive: true, force: true });
+  assertInvariants(report);
+  assert.deepEqual(report.panels.map((p) => [p.frameEdges.top, p.cleanFrame[1]]), [['cut', 302], ['cut', 302]], 'neither state steps out, so both show the same top row');
+});
+
+test('a pair of one region whose states reflow differently takes no word step where they would settle apart, at 1x and at 2x', { skip }, async () => {
+  // Rows of words 30 px wide and 4 apart, which the frame's right edge at x 400 cuts: a word space is the only clean
+  // column near it. The second state's words start 11 px further right, so its nearest word space lies elsewhere.
+  const mark = [20, 20, 60, 16];
+  const rows = (from) => Array.from({ length: 11 }, (_, n) => Array.from({ length: Math.ceil((600 - from) / 34) }, (_, m) => [from + 34 * m, 60 + 20 * n, 30, 12])).flat();
+  const frame = [0, 0, 400, 300];
+  const css = (panel, box) => box.map((n) => n / panel.scale);
+  const boards = [];
+  for (const scale of [1, 2]) {
+    const states = [];
+    for (const from of [20, 31]) {
+      const capture = await syntheticCapture({ size: [600, 300], bars: [mark, ...rows(from)], boxes: { a: mark }, scale });
+      states.push({ ...capture, frame: frame.map((n) => n * scale) });
+    }
+    if (scale === 1) {
+      const alone = [];
+      for (const state of states) {
+        const { report, dir } = await render(spec([{ lift: 'a', title: 'Alone' }]), state);
+        await rm(dir, { recursive: true, force: true });
+        alone.push(p0(report));
+      }
+      assert.deepEqual(alone.map((p) => p.frameEdges.right), ['word', 'word'], 'on its own each state settles its right edge in a word space');
+      assert.notEqual(alone[0].cleanFrame[2], alone[1].cleanFrame[2], 'and the two word spaces lie apart');
+    }
+    const { report, dir } = await render(multi('pair', [[{ lift: 'a', title: 'Before' }], [{ lift: 'a', title: 'After' }]]), states);
+    await rm(dir, { recursive: true, force: true });
+    assertInvariants(report);
+    const [a, b] = report.panels;
+    assert.deepEqual(css(b, b.frame), css(a, a.frame), `both panels show one rectangle at ${scale}x`);
+    assert.deepEqual(report.panels.map((p) => p.frameEdges.right), ['cut', 'cut'], 'neither state takes its own word space');
+    for (const panel of report.panels) assert.ok(panel.fades.some((f) => f.side === 'right'), 'the right edge, cutting words, fades');
+    boards.push({ ...report, imageSizes: states.map((state) => state.size) });
+  }
+  assertSameLayout(...boards, [2, 2]);
+});
+
+test('a pair of two viewports whose states reflow differently agrees on its word steps too, at 1x and at 2x', { skip }, async () => {
+  // As above, but the second viewport is 10 px shorter, so the two frames are not one size.
+  const mark = [20, 20, 60, 16];
+  const rows = (from) => Array.from({ length: 11 }, (_, n) => Array.from({ length: Math.ceil((600 - from) / 34) }, (_, m) => [from + 34 * m, 60 + 20 * n, 30, 12])).flat();
+  const css = (panel, box) => box.map((n) => n / panel.scale);
+  const boards = [];
+  for (const scale of [1, 2]) {
+    const states = [];
+    for (const [from, height] of [[20, 300], [31, 290]]) {
+      const capture = await syntheticCapture({ size: [600, height], bars: [mark, ...rows(from)], boxes: { a: mark }, scale });
+      states.push({ ...capture, frame: [0, 0, 400, height].map((n) => n * scale) });
+    }
+    const { report, dir } = await render(multi('pair', [[{ lift: 'a', title: 'Before' }], [{ lift: 'a', title: 'After' }]]), states);
+    await rm(dir, { recursive: true, force: true });
+    assertInvariants(report);
+    const [a, b] = report.panels;
+    assert.deepEqual(report.panels.map((p) => p.frameEdges.right), ['cut', 'cut'], `neither state takes its own word space at ${scale}x`);
+    assert.deepEqual([css(b, b.cleanFrame)[2], css(b, b.frame)[2]], [css(a, a.cleanFrame)[2], css(a, a.frame)[2]], `both panels show one width of the region at ${scale}x`);
+    boards.push({ ...report, imageSizes: states.map((state) => state.size) });
+  }
+  assertSameLayout(...boards, [2, 2]);
+});
+
+test('a steps crop edge held through a button fades: a button ends at its corners, so it is no strip', { skip }, async () => {
+  const mark = [400, 300, 60, 20];
+  const scene = await syntheticCapture({ size: [1000, 800], bars: [mark, [100, 330, 600, 30]], boxes: { a: mark } });
+  const { report, dir } = await render(multi('steps', [[{ lift: 'a', title: 'One' }], [{ lift: 'a', title: 'Two' }]]), [scene, scene]);
+  await rm(dir, { recursive: true, force: true });
+  assertInvariants(report);
+  for (const panel of report.panels) {
+    assert.deepEqual([panel.cropEdges.left, panel.cropEdges.right], ['margin', 'margin']);
+    assert.deepEqual(panel.fades.map((f) => f.side).filter((side) => side === 'left' || side === 'right'), ['left', 'right'], 'both cut sides fade');
+  }
 });
 
 // A card of the capture's own colour drawn as a 2px outline.
@@ -1267,11 +1506,11 @@ test('a pair of one region with no border shows one region at one size, whatever
 });
 
 test('a single board trims a frame that carries blank ground, as a pair does', { skip }, async () => {
-  const card = [20, 20, 560, 260];
-  const report = await board([{ lift: 'a', title: 'First' }], { bars: [...outline(card), [60, 50, 480, 200]], boxes: { a: [60, 50, 480, 200] } });
+  const card = [20, 20, 640, 260];
+  const report = await board([{ lift: 'a', title: 'First' }], { size: [680, 300], bars: [...outline(card), [60, 50, 560, 200]], boxes: { a: [60, 50, 560, 200] } });
   assertInvariants(report);
   assert.deepEqual(p0(report).trimmed, { left: 0, top: 8, right: 0, bottom: 8 }, '12 px stay outside the outline; the sides keep the room the lift\'s card wants');
-  assert.deepEqual(p0(report).frame, [0, 8, 600, 284]);
+  assert.deepEqual(p0(report).frame, [0, 8, 680, 284]);
 });
 
 test('a single board trims the blank half of its frame', { skip }, async () => {
@@ -1756,7 +1995,7 @@ test('two lifts of one panel share one scale, whatever their sizes', { skip }, a
 test('a lift gives up enlargement before it covers the line above or below', { skip }, async () => {
   // three lines 24 px apart (8 px of ground between them); lifting the middle one at 1.15 would cover its neighbours
   const bars = [[40, 40, 200, 16], [40, 64, 200, 16], [40, 88, 200, 16]];
-  const { report, dir } = await render(spec([{ lift: 'b', title: 'Middle' }]), await syntheticCapture({ size: [400, 200], bars, boxes: { a: bars[0], b: bars[1], c: bars[2] } }));
+  const { report, dir } = await render(spec([{ lift: 'b', title: 'Middle' }, { ghost: 'hold' }]), await syntheticCapture({ size: [740, 200], bars: [...bars, holdOf([740, 200])], boxes: { a: bars[0], b: bars[1], c: bars[2], hold: holdOf([740, 200]) } }));
   try {
     assertInvariants(report);
     const [lift] = p0(report).lifts; const S = p0(report).capture[2] / p0(report).frame[2];
@@ -1779,8 +2018,8 @@ test('a lift beside the frame edge keeps its ring inside the frame', { skip }, a
 
 test('a lift with one K limited by what fits the frame leaves its sibling at that same K', { skip }, async () => {
   // the wide lift fills its frame, so it fits below 1.15; the small one has room for more and must not take it
-  const bars = [[20, 60, 360, 20], [150, 160, 60, 16]];
-  const { report, dir } = await render(spec([{ lift: 'a', title: 'Wide' }, { lift: 'b', title: 'Small' }]), await syntheticCapture({ size: [400, 260], bars, boxes: { a: bars[0], b: bars[1] } }));
+  const bars = [[20, 60, 640, 20], [150, 160, 60, 16]];
+  const { report, dir } = await render(spec([{ lift: 'a', title: 'Wide' }, { lift: 'b', title: 'Small' }]), await syntheticCapture({ size: [680, 260], bars, boxes: { a: bars[0], b: bars[1] } }));
   try {
     assertInvariants(report);
     const lifts = p0(report).lifts; const S = p0(report).capture[2] / p0(report).frame[2];
@@ -1792,8 +2031,8 @@ test('a lift with one K limited by what fits the frame leaves its sibling at tha
 });
 
 test('on a frame drawn at 0.55 a two-line lift covers neither line beside it, or is drawn at 1', { skip }, async () => {
-  // neighbours one line above and below; a far lift keeps the frame wide
-  const bars = [[60, 38, 140, 16], [60, 60, 140, 16], [60, 82, 140, 16], [60, 104, 140, 16], [1400, 60, 60, 16]];
+  // neighbours one line above and below; a far lift keeps the frame wide, and a low line keeps it under 10 to 1, so no strip
+  const bars = [[60, 38, 140, 16], [60, 60, 140, 16], [60, 82, 140, 16], [60, 104, 140, 16], [1400, 60, 60, 16], [1400, 200, 60, 16]];
   const { report, dir } = await render(spec([{ lift: ['b', 'c'], title: 'Two lines' }, { lift: 'far', title: 'Far' }]),
     await syntheticCapture({ size: [1500, 240], bars, boxes: { a: bars[0], b: bars[1], c: bars[2], d: bars[3], far: bars[4] } }));
   try {
@@ -1936,10 +2175,10 @@ test('a link whose connector would run long makes a pinned board, and one whose 
   assert.equal(p0(near).connectors.length, 1);
 });
 
-// Three columns of three lines over one full line, 620 by 300: the middle line of the middle column has content
+// Three columns of three lines over one full line, 708 by 330: the middle line of the middle column has content
 // to its right and below it at every spot. A ghost slot in each of two opposite corners keeps the whole capture in the
 // frame, where a single board would crop to its marks and leave the lift a clean way out.
-const GRID_SIZE = [620, 300];
+const GRID_SIZE = [708, 330];
 const gridLines = [];
 for (let c = 0; c < 3; c += 1) for (let r = 0; r < 3; r += 1) gridLines.push([40 + c * 190, 90 + r * 24, 150, 14]);
 const gridBars = [...gridLines, [40, 170, 530, 14]];
@@ -2378,9 +2617,10 @@ test('a pin is the accent in a white ring, drawn over its card, on a dark frame 
 
 // A board drawn at one board px per capture px, held whole: a narrow slot with a wide one 3px to its right, so the
 // labels leave by the bottom. A block under the wide slot leaves it a clean spot at its left end, 12px from the
-// narrow slot's dot.
-const SLOTS_SIZE = [560, 240];
-const slotMarks = [{ ghost: 'narrow', title: 'Narrow' }, { ghost: 'wide', title: 'Wide' }, ...holdMarks];
+// narrow slot's dot. The slots are empty ones, whose text does not fit and becomes their label: a ghost this
+// narrow grows to GHOST_MIN.
+const SLOTS_SIZE = [640, 240];
+const slotMarks = [{ empty: 'narrow', text: 'Narrow' }, { empty: 'wide', text: 'Wide' }, ...holdMarks];
 const slotBoxes = { narrow: [100, 100, 6, 20], wide: [109, 100, 80, 20], ...holdBoxes(SLOTS_SIZE) };
 const dotOf = (panel, mark) => panel.dots.find((d) => panel.targets[d.target].mark === mark);
 
@@ -2410,7 +2650,7 @@ test('a dot whose only clean spot another dot has taken sits by content, and the
 
 test('a connector that crosses another mark\'s leader is reported on a board with leaders', { skip }, async () => {
   // The pair's upper lift joins the leader of its lower one along the pair's track, down past the leader of the lift between them.
-  const bars = [[200, 40, 60, 16], [100, 80, 60, 16], [220, 120, 60, 16]];
+  const bars = [[170, 40, 50, 13], [90, 72, 50, 13], [180, 104, 50, 13]];
   const report = await board([{ lift: ['s', 'p'], title: 'Pair' }, { lift: 'i', title: 'Between' }], { bars, boxes: { s: bars[0], i: bars[1], p: bars[2] } });
   assertInvariants(report);
   assert.deepEqual([report.side, report.pinned], ['right', false]);
@@ -2727,6 +2967,90 @@ test('a boxed-in lift lays out the same at 2x as at 1x, its card at one scale', 
   assert.ok(Math.abs(k2 - k1) < 1e-6, `the card is drawn at ${k1} at 1x and at ${k2} at 2x`);
 });
 
+test('two lifts in one row are drawn at one scale though the shorter alone would be tiny, at 1x and at 2x', { skip }, async () => {
+  // At the frame's scale the taller line, with its padding, reaches a readable height at the wanted K and the shorter does not.
+  const tall = [100, 100, 80, 14]; const short = [300, 101, 80, 12];
+  const boards = await twinBoards([{ lift: 't', title: 'Taller' }, { lift: 's', title: 'Shorter' }, ...holdMarks], { size: GRID_SIZE, bars: [tall, short], boxes: { t: tall, s: short, ...holdBoxes(GRID_SIZE) } });
+  assertSameLayout(...boards, [2]);
+  for (const report of boards) {
+    const lifts = p0(report).lifts;
+    assert.deepEqual(lifts.map((lift) => lift.tiny), [false, false], 'a row with a sized lift has no tiny one');
+    assert.ok(Math.abs(lifts[0].k - lifts[1].k) < 1e-6, `the row is drawn at ${lifts.map((lift) => lift.k)}`);
+  }
+});
+
+test('two tiny lifts in one row are drawn at one scale, the taller at a readable height, at 1x and at 2x', { skip }, async () => {
+  const low = [100, 150, 40, 6]; const high = [300, 149, 40, 8];
+  const boards = await twinBoards([{ lift: 'l', title: 'Lower' }, { lift: 'h', title: 'Higher' }, ...holdMarks], { size: GRID_SIZE, bars: [low, high], boxes: { l: low, h: high, ...holdBoxes(GRID_SIZE) } });
+  assertSameLayout(...boards, [2]);
+  for (const report of boards) {
+    const lifts = p0(report).lifts;
+    assert.deepEqual(lifts.map((lift) => lift.tiny), [true, true]);
+    assert.ok(Math.abs(lifts[0].k - lifts[1].k) < 1e-6, `the row is drawn at ${lifts.map((lift) => lift.k)}`);
+    assert.ok(lifts[1].rect[3] >= 23.5, `the taller card is ${lifts[1].rect[3]} px tall`);
+  }
+});
+
+test('a staircase of chips, each half a line below the last, keeps them readable beside a boxed-in lift, at 1x and at 2x', { skip }, async () => {
+  // Each chip shares a row with the next alone, and the large lift is held at 1 by the lines round it.
+  const chips = [0, 1, 2, 3, 4].map((n) => [60 + n * 80, 100 + n * 4, 40, 8]);
+  const big = [480, 116, 100, 30]; const round = [[470, 108, 120, 4], [470, 150, 120, 4], [462, 116, 6, 30], [592, 116, 6, 30]];
+  const marks = [...chips.map((_, n) => ({ lift: `c${n}`, title: `Chip ${n}` })), { lift: 'big', title: 'Big' }, ...holdMarks];
+  const boxes = { ...Object.fromEntries(chips.map((chip, n) => [`c${n}`, chip])), big, ...holdBoxes(GRID_SIZE) };
+  const boards = await twinBoards(marks, { size: GRID_SIZE, bars: [...chips, big, ...round], boxes });
+  assertSameLayout(...boards, [2]);
+  for (const report of boards) {
+    const lifts = p0(report).lifts;
+    lifts.slice(0, 5).forEach((chip, n) => assert.ok(chip.tiny && chip.rect[3] >= 23.5, `chip ${n} is ${chip.rect[3].toFixed(1)} px tall (k ${chip.k})`));
+    assert.ok(Math.abs(lifts[5].k - 1) < 1e-9, `the boxed-in lift is held at 1 (k ${lifts[5].k})`);
+  }
+});
+
+test('a chip level with the middle of a tall lift is not in its row, and is raised to a readable height, at 1x and at 2x', { skip }, async () => {
+  const tall = [40, 60, 120, 220]; const chip = [500, 150, 40, 8];
+  const boards = await twinBoards([{ lift: 't', title: 'Tall' }, { lift: 'c', title: 'Chip' }, ...holdMarks], { size: GRID_SIZE, bars: [tall, chip], boxes: { t: tall, c: chip, ...holdBoxes(GRID_SIZE) } });
+  assertSameLayout(...boards, [2]);
+  for (const report of boards) {
+    const [side, small] = p0(report).lifts;
+    assert.equal(side.tiny, false);
+    assert.ok(small.tiny && small.rect[3] >= 23.5, `the chip is ${small.rect[3].toFixed(1)} px tall (k ${small.k})`);
+  }
+});
+
+test('a tiny lift holding a fill gives way when the fill would drift off its place, though nothing lies beside it, at 1x and at 2x', { skip }, async () => {
+  const chip = [300, 150, 80, 8]; const secret = [350, 150, 30, 8];
+  for (const scale of [1, 2]) {
+    const capture = await syntheticCapture({ size: GRID_SIZE, bars: [chip], boxes: { c: chip, s: secret, ...holdBoxes(GRID_SIZE) }, scale });
+    const { report, outPath, dir } = await render(spec([{ lift: 'c', title: 'Chip' }, { redact: 's' }, ...holdMarks]), capture);
+    try {
+      assertInvariants(report);
+      const panel = p0(report); const [fill] = panel.redactions; const [lift] = panel.lifts;
+      assert.ok(lift.tiny && lift.rect[3] < 23.5 && lift.k > BASE_K, `the card gave way short of a readable height (k ${lift.k})`);
+      // An edge of a fill on a card may stand 2 board px inside its place (FILL_SHIFT), and a px more is antialiased.
+      const [x0, y0] = [Math.max(lift.rect[0], fill.rect[0]) + 3, Math.max(lift.rect[1], fill.rect[1]) + 3];
+      const [x1, y1] = [Math.min(lift.rect[0] + lift.rect[2], fill.rect[0] + fill.rect[2]) - 3, Math.min(lift.rect[1] + lift.rect[3], fill.rect[1] + fill.rect[3]) - 3];
+      const png = await readFile(outPath); const px = png.readUInt32BE(16) / report.stage[2];
+      const off = await countOffColor({ png, rect: [x0, y0, x1 - x0, y1 - y0].map((v) => Math.round(v * px)), color: [0xCB, 0xD5, 0xE1], tolerance: 24, renderer });
+      assert.ok(off.total > 0);
+      assert.equal(off.off, 0, `${off.off} of ${off.total} pixels of the fill's place under the card are not the fill, at ${scale}x`);
+    } finally { await rm(dir, { recursive: true, force: true }); }
+  }
+});
+
+test('a tiny lift between two neighbours on its line gives way until its card hides no more of them than a stray edge, at 1x and at 2x', { skip }, async () => {
+  const chip = [300, 150, 40, 8]; const neighbours = [[230, 150, 60, 8], [350, 150, 60, 8]];
+  const boards = await twinBoards([{ lift: 'c', title: 'Chip' }, ...holdMarks], { size: GRID_SIZE, bars: [chip, ...neighbours], boxes: { c: chip, ...holdBoxes(GRID_SIZE) } });
+  assertSameLayout(...boards, [2]);
+  for (const report of boards) {
+    const panel = p0(report); const [lift] = panel.lifts;
+    assert.equal(lift.tiny, true);
+    assert.ok(lift.k >= BASE_K - 1e-9, `the card stays at the base scale or more (k ${lift.k})`);
+    const perCss = (panel.capture[2] / panel.frame[2]) * panel.scale;
+    const hidden = neighbours.reduce((sum, bar) => sum + overlapArea(lift.rect, boardOf(panel, bar.map((n) => n * panel.scale))), 0) / perCss ** 2;
+    assert.ok(hidden <= STRAY_CSS, `the card hides ${hidden.toFixed(1)} CSS px squared of its neighbours (k ${lift.k})`);
+  }
+});
+
 // A tab near the top of a tall page, and a value to hide that lies far below it or just beside it.
 const TAB = [100, 60, 80, 20];
 const FAR_VALUE = [600, 560, 160, 16];
@@ -2850,9 +3174,9 @@ test('steps keep one size when a crop grown to the shared size meets a redaction
   }
 });
 
-// Rows of words 3 px tall and 3 apart, staggered, fill the page under a tab, so no steps crop edge finds a clean band and each is held
-// at its margin: the bottom one at y 200. The value's box starts there, and its fill a px above it, on the row's ink.
-const DENSE_ROWS = Array.from({ length: 52 }, (_, n) => Array.from({ length: 23 }, (_, m) => [(n % 2) * 22 + 44 * m, 87 + 6 * n, 40, 3])).flat();
+// Rows of words 4 px tall and 2 apart, staggered, fill the page under a tab, so no steps crop edge finds a clean band or a word space
+// and each is held at its margin: the bottom one at y 200. The value's box starts there, and its fill reaches a px above it.
+const DENSE_ROWS = Array.from({ length: 52 }, (_, n) => Array.from({ length: 23 }, (_, m) => [(n % 2) * 22 + 44 * m, 87 + 6 * n, 40, 4])).flat();
 const ROW_VALUE = [150, 200, 300, 4];
 const denseSteps = async (scale) => {
   const captures = [];
@@ -2870,5 +3194,256 @@ test('a redaction whose fill meets a held crop edge, though its box does not, is
     assert.equal(panel.cropped, true);
     assert.ok(holds(cssFrames(report)[0], [ROW_VALUE[0] - 2, ROW_VALUE[1] - 2, ROW_VALUE[2] + 4, ROW_VALUE[3] + 4]), `the crop ${cssFrames(report)[0]} holds the whole fill`);
     assert.equal(panel.redactions.length, 1);
+  }
+});
+
+test('an imported frame edge that cuts content fades into its ground, cut around a fill it meets', { skip }, async () => {
+  // Rows 4 px tall and 2 apart of 2 px strokes 2 apart, staggered by a stroke: the frame's right edge at x 700 finds no
+  // band and no word space, and the page is more ground than ink. The value sits in a clearing of them: an imported
+  // fill grows over strokes that run on from its edge.
+  const clearing = [600, 200, 200, 90];
+  const rows = Array.from({ length: 83 }, (_, n) => Array.from({ length: 200 }, (_, m) => [(n % 2) * 2 + 4 * m, 6 * n, 2, 4])).flat()
+    .filter(([x, y, w, h]) => x + w <= clearing[0] || y + h <= clearing[1] || y >= clearing[1] + clearing[3]);
+  const value = [680, 240, 60, 8];
+  const capture = await syntheticCapture({ size: [800, 500], bars: rows, boxes: { g: [300, 200, 120, 24], v: value } });
+  const { report, dir } = await render(spec([{ ghost: 'g', title: 'Slot' }, { redact: 'v' }]), { ...capture, frame: [100, 100, 600, 300], source: 'import' });
+  await rm(dir, { recursive: true, force: true });
+  assertInvariants(report);
+  const panel = p0(report);
+  assert.equal(panel.frameEdges.right, 'cut');
+  const fade = panel.fades.find((f) => f.side === 'right');
+  assert.ok(fade, 'the cut right edge fades');
+  assert.equal(fade.parts.length, 2, 'the fade stops at the fill and starts again past it');
+  assert.ok(fade.ground.every((v) => v > 200), `the fade's ground ${fade.ground} is the page's, not the rows' ink or the fill`);
+});
+
+test('a fade lies under the wash and every mark: first after the capture in its panel, with no z-index of its own', { skip }, async () => {
+  const rows = Array.from({ length: 83 }, (_, n) => Array.from({ length: 200 }, (_, m) => [(n % 2) * 2 + 4 * m, 6 * n, 2, 4])).flat();
+  const capture = await syntheticCapture({ size: [800, 500], bars: rows, boxes: { g: [640, 200, 80, 24], a: [300, 300, 60, 20], v: [680, 240, 60, 8] } });
+  const html = buildBoardHtml({ spec: spec([{ ghost: 'g', title: 'Slot' }, { lift: 'a', title: 'Lift' }, { redact: 'v' }]), captures: [{ ...capture, frame: [100, 100, 600, 300], source: 'import' }], fontBytes: font, geometrySource, layoutSource });
+  const { chromium } = await import(renderer.playwrightCore);
+  const browser = await chromium.launch({ headless: true, executablePath: renderer.executablePath });
+  try {
+    const page = await browser.newPage();
+    await page.setContent(html, { waitUntil: 'load' });
+    const report = await page.evaluate(() => window.__composeLayout());
+    assert.ok(p0(report).fades.length > 0 && p0(report).lifts.length > 0 && p0(report).slots.length > 0, 'the board draws a fade, a lift and a slot');
+    const layers = await page.evaluate(() => [...document.querySelectorAll('.capture')].map((cap) => ({
+      children: [...cap.children].map((node) => node.className.split(' ')[0]),
+      zIndex: [...cap.querySelectorAll('.fade')].map((node) => getComputedStyle(node).zIndex),
+    })));
+    for (const { children, zIndex } of layers) {
+      const fades = children.flatMap((name, i) => (name === 'fade' ? [i] : []));
+      assert.ok(fades.length > 0, `a panel draws its fades: ${children}`);
+      assert.deepEqual(children.slice(0, 1 + fades.length), ['fill', ...fades.map(() => 'fade')], `the fades come straight after the capture, before the wash and every mark: ${children}`);
+      assert.ok(zIndex.every((z) => z === 'auto'), `a fade has a z-index of its own (${zIndex}), which would lift it over the wash, a slot or a lift`);
+    }
+  } finally { await browser.close(); }
+});
+
+test('a narrow single frame draws up to 1.25x, so its capture is at least 600 board px wide', { skip }, async () => {
+  const bars = [[20, 90, 100, 20], [360, 90, 100, 20]];
+  for (const scale of [1, 2]) {
+    const capture = await syntheticCapture({ size: [480, 200], bars, boxes: { a: bars[0], b: bars[1] }, scale });
+    const { report, dir } = await render(spec([{ lift: 'a', title: 'Left' }, { lift: 'b', title: 'Right' }]), capture);
+    try {
+      const panel = p0(report);
+      const drawn = panel.capture[2] / (panel.frame[2] / panel.scale);
+      assert.ok(panel.frame[2] / panel.scale >= 480 - 1e-6, `the frame keeps its ${panel.frame[2] / panel.scale} CSS px width`);
+      assert.ok(drawn > 1.0 && drawn <= 1.25 + 1e-6, `drawn at ${drawn}x at scale ${scale}`);
+      assert.ok(panel.capture[2] >= 600 - 1, `capture is ${panel.capture[2]} board px wide at scale ${scale}`);
+    } finally { await rm(dir, { recursive: true, force: true }); }
+  }
+});
+
+// Stems of a line of text from x to x + width: 1 px wide, 2 apart, a third starting a px lower and a third ending
+// one higher, so no run of its rows repeats.
+const textStems = (x, y, width) => Array.from({ length: Math.ceil(width / 3) }, (_, i) => [x + 3 * i, y + (i % 3 === 1 ? 1 : 0), 1, 10 - (i % 3 === 0 ? 0 : 1)]);
+
+test('an imported fill that grows says so, and one that covers a line beside the value to its end names the panel, the mark and the side', { skip }, async () => {
+  const capture = await syntheticCapture({ size: [700, 260], bars: [...textStems(100, 100, 60), ...textStems(100, 118, 480), [100, 160, 60, 20]], boxes: { v: [100, 100, 60, 10], h: [100, 160, 60, 20] } });
+  const { report, dir } = await render(spec([{ lift: 'h', title: 'Heading' }, { redact: 'v' }]), { ...capture, source: 'import' });
+  await rm(dir, { recursive: true, force: true });
+  assert.ok(report.warnings.includes('a redaction on panel 1 (v) grew to cover ink beside it'), `${report.warnings}`);
+  assert.ok(report.warnings.includes("a redaction on panel 1 (v) covered a line beside it to that line's end, past its right edge"), `${report.warnings}`);
+  assert.deepEqual(report.unhidden, [], 'a line beside the value is covered to its end, and the board is written');
+});
+
+test('an imported fill whose own line runs on past its limit is never written', { skip }, async () => {
+  const capture = await syntheticCapture({ size: [700, 260], bars: [...textStems(100, 100, 480), [40, 40, 40, 20]], boxes: { v: [100, 100, 60, 10], h: [40, 40, 40, 20] } });
+  await assert.rejects(render(spec([{ lift: 'h', title: 'Heading' }, { redact: 'v' }]), { ...capture, source: 'import' }),
+    (error) => error.name === 'LifecycleError' && error.message.startsWith('a redaction on panel 1 (v) reached its growth limit with ink still at its right edge'));
+});
+
+test('a refused fill the crop leaves off the board refuses it only when the value\'s ink runs on into the board', { skip }, async () => {
+  // The crop is chosen by the lift alone, far from the value, so no rect of the refused fill is drawn. Past the
+  // fill's capped right edge its line runs away from the crop: a stray mark, written with its warning.
+  const away = await syntheticCapture({ size: [1400, 700], bars: [...textStems(900, 550, 480), [100, 100, 140, 20]], boxes: { v: [900, 550, 60, 10], h: [100, 100, 140, 20] } });
+  const { report, dir } = await render(spec([{ lift: 'h', title: 'Heading' }, { redact: 'v' }]), { ...away, source: 'import' });
+  await rm(dir, { recursive: true, force: true });
+  assert.deepEqual(p0(report).redactions, [], 'no rect of the fill is drawn');
+  assert.ok(report.warnings.includes('a redact mark on panel 1 lies outside the board, so it hides nothing'), `${report.warnings}`);
+  assert.deepEqual([report.gated, report.crops], [true, []], 'the board is gated with nothing to confirm');
+  // Past its capped left edge the value's own line runs on, along the lift's rows, into the crop.
+  const into = await syntheticCapture({ size: [1400, 700], bars: [...textStems(420, 100, 540), [100, 100, 140, 20]], boxes: { v: [900, 100, 60, 10], h: [100, 100, 140, 20] } });
+  await assert.rejects(render(spec([{ lift: 'h', title: 'Heading' }, { redact: 'v' }]), { ...into, source: 'import' }),
+    (error) => error.name === 'LifecycleError' && error.message.startsWith('a redact mark on panel 1 (v) lies outside the board, but the value\'s ink runs into the board past its left edge. Frame the panel so that value is out of the board, or redact it where it shows'),
+    'the value runs into the board');
+});
+
+test('a live redaction never grows: its fill is its box and reach less the ground, at 1x and 2x', { skip }, async () => {
+  for (const scale of [1, 2]) {
+    const capture = await syntheticCapture({ size: [700, 260], scale, bars: [...textStems(100, 100, 60), [100, 124, 60, 2]], boxes: { v: [100, 100, 60, 10] } });
+    const { report, dir } = await render(spec([{ redact: 'v' }]), capture);
+    await rm(dir, { recursive: true, force: true });
+    assert.ok(!report.warnings.some((w) => w.includes('grew') || w.includes('growth limit')), `${report.warnings}`);
+  }
+});
+
+test('a redaction\'s gate crop takes in the ink just past where its fill stopped', { skip }, async () => {
+  // A value line, a gap wider than the fill covers through, and a line past it: the board warns and the crop shows it.
+  const far = [100, 185, 60, 10];
+  const capture = await syntheticCapture({ size: [700, 300], bars: [...textStems(100, 100, 60), ...textStems(far[0], far[1], far[2]), [100, 60, 60, 20], [100, 250, 60, 20]], boxes: { v: [100, 100, 60, 10], h: [100, 60, 60, 20], f: [100, 250, 60, 20] } });
+  const { report, dir } = await render(spec([{ lift: 'h', title: 'Heading' }, { lift: 'f', title: 'Footer' }, { redact: 'v' }]), { ...capture, source: 'import' });
+  await rm(dir, { recursive: true, force: true });
+  assert.ok(report.warnings.includes('a redaction on panel 1 (v) stopped at a gap with more ink just past its bottom edge'), `${report.warnings}`);
+  const panel = p0(report);
+  const [cx, cy, cw, ch] = panel.capture; const [fx, fy, fw, fh] = panel.frame;
+  const drawn = [cx + (far[0] - fx) * (cw / fw), cy + (far[1] - fy) * (ch / fh), far[2] * (cw / fw), far[3] * (ch / fh)];
+  assert.ok(!intersects(panel.redactions[0].rect, drawn), 'the fill stops short of the far line');
+  assert.equal(report.crops.length, 1);
+  assert.ok(inside(drawn, report.crops[0].rect, 0), `the gate crop ${report.crops[0].rect} leaves out the far line at ${drawn}`);
+});
+
+// A copy of CROP_MARGIN in lib/compose/page-layout.js, kept apart so the check does not read the code it checks.
+const CROP_MARGIN = 24;
+
+test('a live redaction on a gated board gets a crop of its own fill and margin, not one read as capture px', { skip }, async () => {
+  const pair = { state: 'BEFORE → AFTER', title: 'Pair', layout: 'pair', out: 'o.png', panels: [
+    { label: 'BEFORE', capture: 'c1.json', marks: [{ lift: 'h', title: 'Heading' }, { redact: 'v' }] },
+    { label: 'AFTER', capture: 'c2.json', marks: [{ lift: 'h', title: 'Heading' }, { redact: 'v' }] }] };
+  // The value lies far from the frame's corner, where a board rect read as capture px lands on other ground.
+  const scene = { size: [700, 460], bars: [[1, 1, 20, 4], [100, 60, 160, 20], ...textStems(500, 380, 60), [679, 455, 20, 4]], boxes: { h: [100, 60, 160, 20], v: [500, 380, 60, 10] } };
+  const before = await syntheticCapture(scene);
+  const after = await syntheticCapture(scene);
+  const { report, dir } = await render(pair, [{ ...before, source: 'import' }, { ...after, frame: [40, 40, 660, 420] }]);
+  await rm(dir, { recursive: true, force: true });
+  assert.equal(report.gated, true, 'an imported redaction gates the board');
+  const live = report.crops.find((crop) => crop.panel === 1);
+  assert.ok(live, 'the live redaction has a crop');
+  const [rx, ry, rw, rh] = report.panels[1].redactions[live.redaction].rect;
+  const [x, y, w, h] = live.rect;
+  assert.ok(x >= Math.floor(rx - CROP_MARGIN) && y >= Math.floor(ry - CROP_MARGIN)
+    && x + w <= Math.ceil(rx + rw + CROP_MARGIN) && y + h <= Math.ceil(ry + rh + CROP_MARGIN),
+  `the live crop ${live.rect} reaches past its fill ${[rx, ry, rw, rh]} and margin`);
+});
+
+// A line with a short sub-line 3 px under it, on a frame drawn at 0.55: the card's ring, 3 board px, is 5.5 px of
+// the page, so it cuts the sub-line at any size. Ghosts in the corners keep the frame 1500 by 240.
+const SUB_SIZE = [1500, 240];
+const subLine = (sub, extra = {}) => ({ size: SUB_SIZE, bars: [[100, 100, 140, 16], sub], boxes: { a: [100, 100, 140, 16], sub, ...holdBoxes(SUB_SIZE) }, ...extra });
+const HIDES = 'a lift hides content beside it';
+
+test('a lift whose ring cuts a sub-line takes it in whole, at 1x, 1.25x, 1.5x and 2x', { skip }, async () => {
+  const sub = [100, 119, 60, 8];
+  const marks = [{ lift: 'a', title: 'Line' }, ...holdMarks];
+  const boards = await twinBoards(marks, subLine(sub));
+  assertSameLayout(...boards, [2]);
+  const fractional = [];
+  for (const scale of [1.25, 1.5]) {
+    const { report, dir } = await render(spec(marks), await syntheticCapture({ ...subLine(sub), scale }));
+    await rm(dir, { recursive: true, force: true });
+    assertInvariants(report);
+    fractional.push(report);
+  }
+  for (const report of [...boards, ...fractional]) {
+    const panel = p0(report); const { scale } = panel;
+    assert.ok(panel.capture[2] / (panel.frame[2] / scale) < 0.56, 'the frame is drawn at 0.55');
+    const lift = panel.lifts.find((l) => l.keys.includes('a'));
+    assert.ok(lift.source[1] + lift.source[3] >= (sub[1] + sub[3]) * scale, `the lift's box ${lift.source} holds the sub-line`);
+    assert.ok(inside(drawnOn(panel, sub), lift.rect, 0), 'the card shows the sub-line');
+    assert.ok(!report.warnings.includes(HIDES), `${report.warnings}`);
+  }
+});
+
+test('a lift whose ring cuts a sub-line a little wider than its box takes in the sub-line\'s whole width, at 1x and at 2x', { skip }, async () => {
+  // Stems from x 95 to 243 under a box from 100 to 240: within the card, past the box on both ends.
+  const stems = textStems(95, 119, 150); const ink = [95, 119, 148, 10];
+  const scene = { size: SUB_SIZE, bars: [[100, 100, 140, 16], ...stems], boxes: { a: [100, 100, 140, 16], ...holdBoxes(SUB_SIZE) } };
+  const boards = await twinBoards([{ lift: 'a', title: 'Line' }, ...holdMarks], scene);
+  assertSameLayout(...boards, [2]);
+  for (const report of boards) {
+    const panel = p0(report); const { scale } = panel;
+    const lift = panel.lifts.find((l) => l.keys.includes('a'));
+    assert.ok(inside(ink.map((n) => n * scale), lift.source, 0), `the lift's box ${lift.source} holds the sub-line's ends`);
+    assert.ok(inside(drawnOn(panel, ink), lift.rect, 0), 'the card shows the sub-line whole');
+    assert.ok(!report.warnings.includes(HIDES), `${report.warnings}`);
+  }
+});
+
+test('a lift whose ring cuts a line running past its card leaves the line and says it hides content', { skip }, async () => {
+  const sub = [40, 119, 400, 8];
+  const { report, dir } = await render(spec([{ lift: 'a', title: 'Line' }, ...holdMarks]), await syntheticCapture(subLine(sub)));
+  try {
+    assertInvariants(report);
+    const lift = p0(report).lifts.find((l) => l.keys.includes('a'));
+    assert.ok(lift.source[1] + lift.source[3] <= sub[1], `the lift's box ${lift.source} stops above the line`);
+    assert.ok(report.warnings.includes(HIDES), `${report.warnings}`);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test('a lift whose ring cuts a redacted sub-line never takes it in', { skip }, async () => {
+  const sub = [100, 119, 60, 8];
+  const { report, dir } = await render(spec([{ lift: 'a', title: 'Line' }, { redact: 'sub' }, ...holdMarks]), await syntheticCapture(subLine(sub)));
+  try {
+    assertInvariants(report);
+    const lift = p0(report).lifts.find((l) => l.keys.includes('a'));
+    assert.ok(lift.source[1] + lift.source[3] <= sub[1], `the lift's box ${lift.source} stops above the redaction`);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test('steps drawn at one zoom pass the size invariant only where one size would draw them more than 1.25 apart', () => {
+  // Panels at a zoom of 1, so each is drawn at its CSS size: a row lines up their tops, a stack their left edges.
+  const row = (heights) => ({ layout: 'steps', stacked: false, panels: heights.map((h, i) => ({ scale: 2, frame: [0, 0, 800, 2 * h], capture: [20 + 420 * i, 40, 400, h] })) });
+  const stack = (widths) => ({ layout: 'steps', stacked: true, panels: widths.map((w, i) => ({ scale: 1, frame: [0, 0, w, 60], capture: [20, 40 + 80 * i, w, 60] })) });
+  assertPanelSizes(row([200, 100]));
+  assertPanelSizes(stack([600, 300]));
+  assert.throws(() => assertPanelSizes(row([200, 180])), /panels differ in height/, 'one height drew them at zooms 1.11 apart');
+  assert.throws(() => assertPanelSizes(stack([600, 500])), /stacked panels differ in width/, 'one width drew them at zooms 1.2 apart');
+  assert.throws(() => assertPanelSizes({ ...row([200, 100]), layout: 'pair' }), /panels differ in height/, 'only steps share a zoom');
+});
+
+// Board px per CSS px at which each lift's card is drawn.
+const liftZooms = (panel) => panel.lifts.map((l) => l.k * (panel.capture[2] / panel.frame[2]) * panel.scale);
+
+test('a lone strip whose lifts are drawn larger on a wider board takes it', { skip }, async () => {
+  // 1300 by 60 CSS px with two lines: at the single width of 640 the frame is drawn at 0.55, 33 px tall, and its
+  // cards fit at 0.82; at 1040 it is drawn at 0.8 and they take the 1.15 they want.
+  const size = [1300, 60];
+  const lines = [[40, 20, 200, 20], [700, 20, 200, 20]];
+  const { report, dir } = await render(spec([{ lift: 'a', title: 'First' }, { lift: 'b', title: 'Second' }, ...holdMarks]),
+    await syntheticCapture({ size, bars: lines, boxes: { a: lines[0], b: lines[1], ...holdBoxes(size) } }));
+  try {
+    assertInvariants(report);
+    const panel = p0(report);
+    assert.deepEqual(panel.frame, [0, 0, ...size], 'the ghosts hold the whole frame');
+    assert.ok(Math.abs(panel.capture[2] - 1040) <= 1, `the strip is drawn ${panel.capture[2]} px wide`);
+    assert.ok(liftZooms(panel).every((z) => z > 1.1), `its cards are drawn at ${liftZooms(panel)}`);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test('a lone strip whose lifts a wider board would draw no larger keeps the single width', { skip }, async () => {
+  // At 1300 by 120 the card takes the 1.15 it wants at 0.55 and at 0.8 alike, so the frame stays at 0.55, 715 wide.
+  // At 1300 by 140 it is no strip.
+  const line = [40, 50, 160, 16];
+  for (const size of [[1300, 120], [1300, 140]]) {
+    const { report, dir } = await render(spec([{ lift: 'a', title: 'Line' }, ...holdMarks]), await syntheticCapture({ size, bars: [line], boxes: { a: line, ...holdBoxes(size) } }));
+    try {
+      assertInvariants(report);
+      const panel = p0(report);
+      assert.deepEqual(panel.frame, [0, 0, ...size], 'the ghosts hold the whole frame');
+      assert.ok(Math.abs(panel.capture[2] - 715) <= 1, `a ${size} frame is drawn ${panel.capture[2]} px wide`);
+      assert.ok(Math.abs(liftZooms(panel)[0] - 1.15) < 0.01, `its card is drawn at ${liftZooms(panel)}`);
+    } finally { await rm(dir, { recursive: true, force: true }); }
   }
 });

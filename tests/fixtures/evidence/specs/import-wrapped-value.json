@@ -1,0 +1,7 @@
+{ "state": "FOUND", "title": "The reviewer is set on the release task", "layout": "single", "out": "fx-import-wrapped-value.png",
+  "expect": { "noColour": [219, 39, 119], "noColourOver": "rest", "crops": 1, "frameInside": true, "grownFills": 1 },
+  "panels": [
+    { "fixture": { "import": { "page": "wrapped-reviewer", "dpr": 1, "format": "png" } },
+      "frame": [34, 34, 432, 162],
+      "boxes": { "value": [151, 72, 64, 12], "rest": [149, 95, 94, 26] },
+      "marks": [ { "redact": "value" } ] } ] }

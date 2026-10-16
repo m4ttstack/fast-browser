@@ -1,0 +1,7 @@
+{ "state": "FOUND", "title": "The assignee is set on the export task", "layout": "single", "out": "fx-import-underlined-name.png",
+  "expect": { "noColour": [219, 39, 119], "noColourOver": "underline", "crops": 1, "frameInside": true },
+  "panels": [
+    { "fixture": { "import": { "page": "underlined-name", "dpr": 1, "format": "png" } },
+      "frame": [34, 34, 432, 122],
+      "boxes": { "name": [141, 101, 73, 12], "underline": [141, 113, 74, 5] },
+      "marks": [ { "redact": "name" } ] } ] }

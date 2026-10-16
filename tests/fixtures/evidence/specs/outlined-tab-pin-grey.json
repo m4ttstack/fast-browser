@@ -1,0 +1,5 @@
+{ "state": "AFTER", "title": "Atlas Platform carries a grey pinned marker on its tab", "layout": "single", "out": "fx-outlined-tab-pin-grey.png",
+  "page": "outlined-tab-pin-grey", "frame": "[data-testid=wrap]",
+  "targets": { "tab": "[data-testid=tab]" },
+  "expect": { "liftKeeps": [["left", [203, 213, 225]], ["top", [203, 213, 225]]] },
+  "panels": [ { "marks": [ { "lift": "tab", "title": "Atlas Platform" } ] } ] }

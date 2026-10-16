@@ -1,0 +1,7 @@
+{ "state": "FOUND", "title": "The release train is on track", "layout": "single", "out": "fx-import-edge-bleed.png",
+  "expect": { "noColour": [255, 0, 0] },
+  "panels": [
+    { "fixture": { "import": { "page": "edge-bleed", "dpr": 1, "format": "png" } },
+      "frame": [100, 100, 601, 161],
+      "boxes": { "chip": [580, 212, 84, 28], "name": [125, 160, 112, 24] },
+      "marks": [ { "lift": "chip", "title": "On track" }, { "lift": "name" } ] } ] }

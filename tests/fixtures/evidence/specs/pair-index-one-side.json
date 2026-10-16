@@ -1,0 +1,7 @@
+{ "state": "BEFORE → AFTER", "title": "The platform team clears a review", "layout": "pair", "out": "fx-pair-index-one-side.png",
+  "expect": { "sameRect": true, "frameBelow": "index" },
+  "panels": [
+    { "label": "BEFORE", "fixture": { "page": "indexed-card", "targets": { "index": "[data-testid=card] [data-testid=index]", "s1": "[data-testid=card] [data-testid=s1]" }, "frame": "[data-testid=card]" },
+      "marks": [ { "lift": "s1", "title": "One waiting" } ] },
+    { "label": "AFTER", "fixture": { "page": "indexed-card", "targets": { "s1": "[data-testid=card-plain] [data-testid=s1]" }, "frame": "[data-testid=card-plain]" },
+      "marks": [ { "lift": "s1", "title": "None waiting" } ] } ] }

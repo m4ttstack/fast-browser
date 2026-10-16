@@ -349,17 +349,45 @@ test('a differently cased leftover from an earlier render is cleared too', async
   } finally { await rm(w.home, { recursive: true, force: true }); }
 });
 
-test('confirm refuses a record with no entries and leaves it as it was', async () => {
+test('a gated board with no crop still writes an empty record that names the board', async () => {
   const w = await world();
   try {
-    await render(w, 1);
+    const report = await render(w, 0);
+    assert.deepEqual(report.redactions.crops, []);
     const body = await record(w);
-    body.redactions = [];
-    const emptied = JSON.stringify(body);
-    await writeFile(path.join(w.dir, 'b.redactions.json'), emptied);
-    await assert.rejects(() => confirm(w), (error) => error.exitCode === 2 && /holds no redactions; render the board again/.test(error.message));
-    assert.equal(await readFile(path.join(w.dir, 'b.redactions.json'), 'utf8'), emptied);
+    assert.deepEqual(body.redactions, []);
+    assert.equal(body.boardSha256, crypto.createHash('sha256').update(await readFile(path.join(w.dir, 'b.png'))).digest('hex'));
   } finally { await rm(w.home, { recursive: true, force: true }); }
+});
+
+test('confirm on an empty record is a no-op that leaves it byte for byte as it was', async () => {
+  const w = await world();
+  try {
+    await render(w, 0);
+    const before = await readFile(path.join(w.dir, 'b.redactions.json'), 'utf8');
+    const report = await confirm(w);
+    assert.equal(report.confirmed, 0);
+    assert.equal(await readFile(path.join(w.dir, 'b.redactions.json'), 'utf8'), before);
+  } finally { await rm(w.home, { recursive: true, force: true }); }
+});
+
+test('confirm on an empty record still refuses a board that changed after it rendered', async () => {
+  const w = await world();
+  try {
+    await render(w, 0);
+    await writeFile(path.join(w.dir, 'b.png'), crop(7));
+    await assert.rejects(() => confirm(w), (error) => error.exitCode === 2 && /the board changed since it was rendered/.test(error.message) && !/holds no redactions/.test(error.message));
+  } finally { await rm(w.home, { recursive: true, force: true }); }
+});
+
+test('the CLI says there is nothing to confirm, and lists no crops, for an empty record', async () => {
+  const lines = [];
+  const report = { mode: 'render', ok: true, out: '/s/b.png', warnings: [], width: 2, height: 2, redactions: { record: '/s/b.redactions.json', crops: [] } };
+  await main(parseArgs(['compose', 'b.spec.json']), { write: (t) => lines.push(t), commands: { compose: async () => report } });
+  assert.equal(lines.join(''), 'Composed board at 2x2: /s/b.png\n');
+  lines.length = 0;
+  await main(parseArgs(['compose', '--confirm', 'b.spec.json']), { write: (t) => lines.push(t), commands: { compose: async () => ({ mode: 'confirm', ok: true, record: '/s/b.redactions.json', confirmed: 0 }) } });
+  assert.equal(lines.join(''), 'Nothing to confirm: /s/b.redactions.json holds no redactions\n');
 });
 
 test('a renderer that reports a gated spec as not gated is refused and leaves nothing', async () => {

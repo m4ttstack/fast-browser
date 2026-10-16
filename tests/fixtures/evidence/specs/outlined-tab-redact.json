@@ -1,0 +1,4 @@
+{ "state": "AFTER", "title": "Atlas Platform is the open project tab, its count hidden", "layout": "single", "out": "fx-outlined-tab-redact.png",
+  "page": "outlined-tab-redact", "frame": "[data-testid=wrap]",
+  "targets": { "tab": "[data-testid=tab]", "badge": "[data-testid=badge]" },
+  "panels": [ { "marks": [ { "redact": "badge" }, { "lift": "tab", "title": "Atlas Platform" } ] } ] }

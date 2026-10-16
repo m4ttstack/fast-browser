@@ -1,0 +1,7 @@
+{ "state": "FOUND", "title": "The platform team's release is on track", "layout": "single", "out": "fx-indexed-card-import.png",
+  "expect": { "hatched": [false], "frameInside": true, "frameBelow": "index" },
+  "panels": [
+    { "fixture": { "import": { "page": "indexed-card", "dpr": 1, "format": "png" } },
+      "frame": [34, 34, 432, 197],
+      "boxes": { "index": [51, 47, 7, 12], "statuses": [69, 130, 362, 42] },
+      "marks": [ { "ghost": "statuses", "title": "On track" } ] } ] }

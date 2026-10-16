@@ -1,0 +1,9 @@
+{ "state": "FLOW", "title": "Archiving a board starts from its tasks tab", "layout": "steps", "out": "fx-steps-zooms.png",
+  "expect": { "oneZoom": true },
+  "panels": [
+    { "label": "Open Tasks", "fixture": { "page": "steps-zooms", "targets": { "tasks": "[data-testid=tasks]" }, "frame": "[data-testid=header]" },
+      "marks": [ { "lift": "tasks", "title": "Tasks" } ] },
+    { "label": "Check the owner", "fixture": { "page": "steps-zooms", "targets": { "owner": "[data-testid=owner]" }, "frame": "[data-testid=detail]" },
+      "marks": [ { "lift": "owner", "title": "Owner" } ] },
+    { "label": "Choose Archive", "fixture": { "page": "steps-zooms", "targets": { "archive": "[data-testid=archive]" }, "frame": "[data-testid=rail]" },
+      "marks": [ { "lift": "archive", "title": "Archive" } ] } ] }

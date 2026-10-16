@@ -1,0 +1,7 @@
+{ "state": "FOUND", "title": "The shipments chart renders nothing", "layout": "single", "out": "fx-empty-by-fill.png",
+  "expect": { "slots": [["empty", "inside"]], "slotFillGap": 4, "crops": 1, "frameInside": true },
+  "panels": [
+    { "fixture": { "import": { "page": "chart-by-address", "dpr": 1, "format": "png" } },
+      "frame": [34, 34, 432, 242],
+      "boxes": { "chart": [57, 97, 386, 120], "address": [61, 213, 190, 20] },
+      "marks": [ { "empty": "chart", "text": "Nothing rendered here" }, { "redact": "address" } ] } ] }

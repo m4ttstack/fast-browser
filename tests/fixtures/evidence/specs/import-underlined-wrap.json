@@ -1,0 +1,7 @@
+{ "state": "FOUND", "title": "The contact is set on the record", "layout": "single", "out": "fx-import-underlined-wrap.png",
+  "expect": { "covered": ["first", "second"], "crops": 1, "frameInside": true },
+  "panels": [
+    { "fixture": { "import": { "page": "underlined-wrap", "dpr": 2, "format": "png" } },
+      "frame": [76, 76, 848, 328],
+      "boxes": { "value": [121, 213, 58, 34], "first": [124, 180, 234, 22], "second": [124, 218, 52, 22] },
+      "marks": [ { "redact": "value" } ] } ] }

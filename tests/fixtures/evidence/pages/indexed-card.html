@@ -1,0 +1,26 @@
+<!doctype html><meta charset="utf-8">
+<style>body{margin:0;font:14px Helvetica,Arial,sans-serif;background:#f6f7f9;color:#111827}
+.cards{display:flex;gap:40px;margin:40px;align-items:flex-start}
+.card{position:relative;box-sizing:border-box;width:420px;padding:44px 28px 16px;background:#fff;border:1px solid #e5e7eb;border-radius:3px}
+.index{position:absolute;left:10px;top:6px;font-size:11px;line-height:12px;color:#6b7280}
+.name{font-weight:600;font-size:15px}
+.role{color:#6b7280;margin-top:2px}
+.status{color:#475569;margin-top:10px}
+.foot{color:#6b7280;font-size:12px;margin-top:22px}</style>
+<div class="cards">
+  <div class="card" data-testid="card">
+    <span class="index" data-testid="index">1</span>
+    <div class="name">Platform team</div>
+    <div class="role">Owns the build pipeline and release tooling</div>
+    <div class="status" data-testid="s1">Three tasks in review, one waiting</div>
+    <div class="status" data-testid="s2">Next release is on track</div>
+    <div class="foot">Updated two days ago</div>
+  </div>
+  <div class="card" data-testid="card-plain">
+    <div class="name">Platform team</div>
+    <div class="role">Owns the build pipeline and release tooling</div>
+    <div class="status" data-testid="s1">Two tasks in review, none waiting</div>
+    <div class="status" data-testid="s2">Next release is on track</div>
+    <div class="foot">Updated two days ago</div>
+  </div>
+</div>

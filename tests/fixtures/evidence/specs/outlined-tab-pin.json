@@ -1,0 +1,5 @@
+{ "state": "AFTER", "title": "Atlas Platform carries a pinned marker on its tab", "layout": "single", "out": "fx-outlined-tab-pin.png",
+  "page": "outlined-tab-pin", "frame": "[data-testid=wrap]",
+  "targets": { "tab": "[data-testid=tab]" },
+  "expect": { "liftShows": [[124, 58, 237]], "liftKeeps": [["left", [203, 213, 225]], ["top", [203, 213, 225]]] },
+  "panels": [ { "marks": [ { "lift": "tab", "title": "Atlas Platform" } ] } ] }

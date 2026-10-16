@@ -1,0 +1,5 @@
+{ "state": "AFTER", "title": "Atlas Platform is the open project tab, over a shaded board", "layout": "single", "out": "fx-outlined-tab-grey.png",
+  "page": "outlined-tab-grey", "frame": "[data-testid=wrap]",
+  "targets": { "tab": "[data-testid=tab]" },
+  "expect": { "noPartialOutline": true, "evenBottom": true },
+  "panels": [ { "marks": [ { "lift": "tab", "title": "Atlas Platform" } ] } ] }

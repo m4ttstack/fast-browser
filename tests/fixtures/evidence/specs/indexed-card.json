@@ -1,0 +1,5 @@
+{ "state": "FOUND", "title": "The platform team's release is on track", "layout": "single", "out": "fx-indexed-card.png",
+  "page": "indexed-card", "frame": "[data-testid=card]",
+  "targets": { "index": "[data-testid=card] [data-testid=index]", "s1": "[data-testid=card] [data-testid=s1]", "s2": "[data-testid=card] [data-testid=s2]" },
+  "expect": { "frameBelow": "index", "cropped": false },
+  "panels": [ { "marks": [ { "lift": ["s1", "s2"], "title": "On track" } ] } ] }
