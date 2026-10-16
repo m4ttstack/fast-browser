@@ -1,0 +1,7 @@
+{ "state": "FOUND", "title": "The location tile in the summary row is blank", "layout": "single", "out": "fx-import-lone-empty.png",
+  "expect": { "origin": [true], "cropped": false, "slotCallout": "leader", "crops": 2 },
+  "panels": [
+    { "fixture": { "import": { "page": "summary-blank-tile", "dpr": 1, "format": "png", "width": 1460 } },
+      "frame": [40, 40, 1380, 190],
+      "boxes": { "tile": [1231, 53, 160, 116], "name": [62, 105, 160, 24], "where": [1232, 180, 104, 22] },
+      "marks": [ { "empty": "tile", "text": "Tile is blank" }, { "redact": "name" }, { "redact": "where" } ] } ] }

@@ -92,7 +92,7 @@ async function captureLive({ browser, pageName, targets, frame, out, home }) {
 }
 
 async function captureImport({ browser, input, out, home, paths }) {
-  const page = await browser.newPage({ viewport: { width: 1000, height: 700 }, deviceScaleFactor: input.dpr });
+  const page = await browser.newPage({ viewport: { width: input.width ?? 1000, height: 700 }, deviceScaleFactor: input.dpr });
   await page.goto(pathToFileURL(path.resolve(`tests/fixtures/evidence/pages/${input.page}.html`)).href);
   const shot = path.join(home, `${out}.${input.format}`);
   await page.screenshot({ path: shot, type: input.format, quality: input.format === 'jpeg' ? 92 : undefined });
@@ -507,6 +507,12 @@ for (const file of (await readdir(specDir)).filter((f) => f.endsWith('.json'))) 
       if (fixture.expect?.slots) {
         assert.deepEqual(board0.slots.map((s) => [s.kind, s.text]), fixture.expect.slots, 'each slot is drawn as expected');
         assert.equal(board0.wash, board0.lifts.length > 0, 'a slot alone raises no wash');
+      }
+      if (fixture.expect?.slotCallout) {
+        const onSlot = (item) => board0.targets[item.target]?.kind === 'slot';
+        assert.equal(board0.labels.filter(onSlot).length, 1, "the empty slot's text is a label of its own");
+        assert.equal(layoutReport.pinned, fixture.expect.slotCallout === 'pin', `the board is ${layoutReport.pinned ? '' : 'not '}pinned`);
+        assert.ok((layoutReport.pinned ? board0.pins : board0.leaders).some(onSlot), 'and its pin or leader stands on the slot');
       }
       if (fixture.expect?.brackets) {
         assert.deepEqual(board0.brackets.map((b) => b.inMargin), fixture.expect.brackets, 'each bracket sits inside the frame or in the margin as expected');
