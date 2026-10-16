@@ -3234,9 +3234,9 @@ test('a redaction whose fill meets a held crop edge, though its box does not, is
 
 test('an imported frame edge that cuts content fades into its ground, cut around a fill it meets', { skip }, async () => {
   // Rows 4 px tall and 2 apart of 2 px strokes 2 apart, staggered by a stroke: the frame's right edge at x 700 finds no
-  // band and no word space, and the page is more ground than ink. The value sits in a clearing of them: an imported
-  // fill grows over strokes that run on from its edge.
-  const clearing = [600, 200, 200, 90];
+  // band and no word space, and the page is more ground than ink. The redact box sits in a clearing of them, further
+  // from any row than the value's reach: a row within it that the fill left bare would refuse the board.
+  const clearing = [520, 140, 280, 210];
   const rows = Array.from({ length: 83 }, (_, n) => Array.from({ length: 200 }, (_, m) => [(n % 2) * 2 + 4 * m, 6 * n, 2, 4])).flat()
     .filter(([x, y, w, h]) => x + w <= clearing[0] || y + h <= clearing[1] || y >= clearing[1] + clearing[3]);
   const value = [680, 240, 60, 8];
@@ -3350,8 +3350,12 @@ test('a redaction\'s gate crop takes in the ink just past where its fill stopped
   const far = [100, 215, 60, 10];
   // The heading and footer are context off the value's columns and past its reach, with a line between: a mark's
   // box over a line the fill would cover, beside the value or as its wrap, would refuse the board.
-  const capture = await syntheticCapture({ size: [700, 300], bars: [...textStems(100, 100, 60), ...textStems(far[0], far[1], far[2]), ...textStems(300, 150, 60), ...textStems(300, 40, 60), [400, 4, 60, 20], [400, 250, 60, 20]], boxes: { v: [100, 100, 60, 10], h: [400, 4, 60, 20], f: [400, 250, 60, 20] } });
-  const { report, dir } = await render(spec([{ context: 'h' }, { context: 'f' }, { redact: 'v' }]), { ...capture, source: 'import' });
+  // The fill takes the line between for one the value may wrap to, so the far line is the next line under a covered
+  // one: the driver marks it context, and the board is written.
+  const capture = await syntheticCapture({ size: [700, 300], bars: [...textStems(100, 100, 60), ...textStems(far[0], far[1], far[2]), ...textStems(300, 150, 60), ...textStems(300, 40, 60), [400, 4, 60, 20], [400, 250, 60, 20]], boxes: { v: [100, 100, 60, 10], h: [400, 4, 60, 20], f: [400, 250, 60, 20], l: [98, 213, 64, 14] } });
+  await assert.rejects(render(spec([{ context: 'h' }, { context: 'f' }, { redact: 'v' }]), { ...capture, source: 'import' }),
+    (error) => error.name === 'LifecycleError' && error.message.startsWith('a redaction on panel 1 (v) left ink past its bottom edge uncovered, at [100, 215, 58, 10] in the image, where the value may go on'));
+  const { report, dir } = await render(spec([{ context: 'h' }, { context: 'f' }, { context: 'l' }, { redact: 'v' }]), { ...capture, source: 'import' });
   await rm(dir, { recursive: true, force: true });
   assert.ok(report.warnings.includes('a redaction on panel 1 (v) stopped at a gap with more ink just past its bottom edge'), `${report.warnings}`);
   const panel = p0(report);
