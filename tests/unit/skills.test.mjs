@@ -1184,7 +1184,7 @@ test('composing-evidence states the compose contract and the blind-run lessons',
   assert.match(text, phrase('and so does a board of two or more records\' statuses'));
   assert.doesNotMatch(text, phrase('there the title names the field'));
   assert.match(text, phrase('never describes the board\'s layout \\("separate point"\\)'));
-  assert.match(text, phrase("or that describes the board's layout, so it adds what the title does not; never leave a mark without its callout"));
+  assert.match(text, phrase("or that describes the board's layout, so it adds what the title does not; outside `steps`, never leave a mark without its callout"));
   assert.doesNotMatch(text, phrase('Delete any label line'));
   assert.doesNotMatch(text, phrase("already states may go without a label"));
   // A lift that left its sub-line out still showed the sub-line's top under the card.

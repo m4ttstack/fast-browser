@@ -138,8 +138,8 @@ you never place anything by pixel.
    Then check the words:
    - Reword a label that copies the board title, the tag or the lifted
      words (see Marks for the exceptions), or that describes the board's
-     layout, so it adds what the title does not; never leave a mark without
-     its callout.
+     layout, so it adds what the title does not; outside `steps`, never
+     leave a mark without its callout.
    - The board title states the fact the board proves, as a short sentence:
      "Sprint 4 is Ready for review", never the record and the section that
      holds it ("Sprint 4, Release panel") or how an element looks. When the
