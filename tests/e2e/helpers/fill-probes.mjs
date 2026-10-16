@@ -157,6 +157,35 @@ export function fillProbeHardCases() {
       const cell = (inner) => `<div style="position:absolute;left:30px;top:20px;display:grid;grid-template-columns:90px 120px;row-gap:${gap}px;column-gap:16px;line-height:20px;font-size:14px">${labels.map((l, i) => `<div style="color:#6b7280">${l}</div><div>${i === row ? `<span class=vv>${inner}</span>` : values[i]}</div>`).join('')}</div>`;
       add('grid', `two-line label, row ${row + 1}, gap ${gap}, box on line ${boxed} ${dpr}x`, dpr, cell, boxed === 1 ? `Samantha ${hidden('Rivera-Okafor')}` : `${hidden('Samantha')} Rivera-Okafor`, 'Samantha Rivera-Okafor');
     }
+    // Icon-led lists at line-heights 16 to 32: the value one row of them, with the other rows and the heading
+    // spared as rows of its list, and every way a value's own wrapped line could pass for one: wrapped under the
+    // text column, wrapped to the container's edge under an inline icon, wrapped onto a line led by a bullet or
+    // an emoji, boxed on a second line that an inline icon leads, a second value in the next row, a grid of
+    // icon-sized labels, text that runs right to left, faint text, and an underlined link.
+    for (const lh of [16, 20, 24, 28, 32]) {
+      const icon = (inline = false) => `<svg width="16" height="16" viewBox="0 0 16 16" style="${inline ? 'vertical-align:-3px;margin-right:8px' : `flex:none;margin-top:${Math.max(0, (lh - 16) / 2)}px`}"><path d="M8 1l2 5h5l-4 3 1.5 5L8 11l-4.5 3L5 9 1 6h5z" fill="currentColor"/></svg>`;
+      const item = (inner, width = 220) => `<div style="display:flex;gap:8px;line-height:${lh}px;margin-top:4px;width:${width + 24}px">${icon()}<span style="width:${width}px">${inner}</span></div>`;
+      // The heading stands `gap` CSS px over the first row, against the 4 between rows.
+      const list = (own, { dir = 'ltr', colour = '#111827', gap = 16, rows = ['Shared with the team', 'Plan is current'] } = {}) => (inner) => `<div dir=${dir} style="position:absolute;left:40px;top:12px;width:300px;font-size:14px;color:${colour}"><div style="line-height:${lh}px;margin-bottom:${gap}px">A summary of this report is not ready</div>${own(inner)}${rows.map((text) => item(text)).join('')}</div>`;
+      const own = (inner, width) => `<span class=vv style="display:contents">${item(inner, width)}</span>`;
+      const listCase = (name, scene, measure, shown) => cases.push({ set: 'list', name: `${name}, ${lh} px lines ${dpr}x`, dpr, cell: [500, 200], masked: true, measure: scene(measure), shown: scene(shown) });
+      listCase('one row of an icon-led list', list(own), 'Reported by Samantha', 'Reported by Samantha');
+      listCase('one row of an icon-led list under a heading with a small gap', list(own, { gap: 6 }), 'Reported by Samantha', 'Reported by Samantha');
+      listCase('the value wraps under its text column', list((inner) => own(inner, 90)), `Reported by ${hidden('Samantha Rivera-Okafor')}`, 'Reported by Samantha Rivera-Okafor');
+      listCase('the next row is a second value', list((inner) => `<span class=vv style="display:contents">${item('Reported by Samantha')}${inner}</span>`), hidden(item('Second reviewer Li')), item('Second reviewer Li'));
+      const inline = (inner, width = 120) => `<div style="line-height:${lh}px;margin-top:4px;width:${width}px"><span class=vv>${icon(true)}${inner}</span></div>`;
+      listCase('wrapped to the edge under an inline icon', list(inline), `Reported by ${hidden('Samantha Rivera')}`, 'Reported by Samantha Rivera');
+      listCase('the wrapped line starts with a bullet', list(inline), `Samantha Rivera ${hidden('&bull; Okafor')}`, 'Samantha Rivera &bull; Okafor');
+      listCase('the wrapped line starts with an emoji', list(inline), `Samantha Rivera ${hidden('&#x1F3E0; Okafor')}`, 'Samantha Rivera &#x1F3E0; Okafor');
+      listCase('boxed on a second line an inline icon leads', list((inner) => `<div style="line-height:${lh}px;margin-top:4px;width:200px"><span class=vv>${inner}</span></div>`), `${hidden('Reported by')}<br>${icon(true)}Samantha Rivera`, `Reported by<br>${icon(true)}Samantha Rivera`);
+      listCase('text that runs right to left', list(own, { dir: 'rtl' }), 'Reported by Samantha', 'Reported by Samantha');
+      listCase('right to left, the value wraps under its text column', list((inner) => own(inner, 90), { dir: 'rtl' }), `Reported by ${hidden('Samantha Rivera-Okafor')}`, 'Reported by Samantha Rivera-Okafor');
+      listCase('faint text and icons', list((inner) => own(inner, 90), { colour: '#e6e8eb' }), `Reported by ${hidden('Samantha Rivera-Okafor')}`, 'Reported by Samantha Rivera-Okafor');
+      listCase('an underlined link wraps', list((inner) => own(`<u style="text-decoration-thickness:2px;text-underline-offset:4px">${inner}</u>`, 90)), `Reported by ${hidden('Samantha Rivera-Okafor')}`, 'Reported by Samantha Rivera-Okafor');
+      const grid = (labels, values) => (inner) => `<div class=vv style="position:absolute;left:40px;top:20px;display:grid;grid-template-columns:40px 110px;column-gap:8px;row-gap:4px;line-height:${lh}px;font-size:14px">${labels.map((l, i) => `<div style="color:#6b7280">${i ? l : inner.label}</div><div>${i ? values[i] : inner.value}</div>`).join('')}</div>`;
+      listCase('a grid of icon-sized labels', grid(['ID', 'No.', 'At'], ['', '4471', 'Friday']), { label: 'ID', value: 'Samantha' }, { label: 'ID', value: 'Samantha' });
+      listCase('a two-line icon-sized label beside a two-line value', grid(['ID no', 'At'], ['', 'Friday']), { label: `ID ${hidden('no')}`, value: `Samantha ${hidden('Rivera-Okafor')}` }, { label: 'ID no', value: 'Samantha Rivera-Okafor' });
+    }
   }
   return cases;
 }
@@ -227,7 +256,7 @@ export async function runFillProbes({ browser, geometrySource, cases = fillProbe
               if (!inside(x, y, pad)) padBare += 1;
             }
             const holds = fill.rects.some(([fx, fy, fw, fh]) => fx <= pad[0] && fy <= pad[1] && fx + fw >= pad[0] + pad[2] && fy + fh >= pad[1] + pad[3]);
-            return { box, rect: [...fill.rect], rects: fill.rects.map((rect) => [...rect]), bare: left, unseen, padBare, holds, grew: fill.grew, capped: fill.capped.length, extended: fill.extended.length, refused: fill.capped.some((c) => c.refuse) };
+            return { box, rect: [...fill.rect], rects: fill.rects.map((rect) => [...rect]), bare: left, unseen, padBare, holds, grew: fill.grew, capped: fill.capped.length, extended: fill.extended.length, spared: fill.spared.length, refused: fill.capped.some((c) => c.refuse) };
           });
         }, { shots, adjusts: batch.map((c) => c.adjust ?? [0, 0, 0, 0]), places: batch.map((c) => c.place ?? null), dpr, cell, columns: COLUMNS });
         batch.forEach((c, i) => results.push({ set: c.set, name: c.name, ...found[i] }));

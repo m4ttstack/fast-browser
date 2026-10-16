@@ -770,10 +770,18 @@ test('an imported fill hides capitals, digits, values wrapped onto several lines
   try {
     results = await runFillProbes({ browser, cases: fillProbeHardCases(), geometrySource: await readFile(new URL('../../lib/compose/page-geometry.js', import.meta.url), 'utf8') });
   } finally { await browser.close(); }
-  assert.equal(results.length, 2097, 'every probe of the density, bar, wrap, lines, gap, reach, off, wrapleft, rtl and grid sets ran');
+  assert.equal(results.length, 2307, 'every probe of the density, bar, wrap, lines, gap, reach, off, wrapleft, rtl, grid and list sets ran');
   assert.ok(results.filter((r) => r.padBare > 0).length >= 1700, 'the probes still find ink a 12 px pad leaves bare');
-  // A refused board is never written, so what its fill left bare is never shown.
-  assert.deepEqual(results.filter((r) => r.bare > 0 && !r.refused).map((r) => `${r.set} ${r.name}: ${r.bare} px`), [], 'no written board shows a pixel of its value');
+  // A refused board is never written, so what its fill left bare is never shown. A line spared as another row of
+  // the value's list is named, and the gate's view takes it in: a value in such a row is bare only with that note.
+  assert.deepEqual(results.filter((r) => r.bare > 0 && !r.refused && !r.spared).map((r) => `${r.set} ${r.name}: ${r.bare} px`), [], 'no written board shows a pixel of its value without naming a spared row');
+  assert.deepEqual(results.filter((r) => r.bare > 0 && r.unseen > 0).map((r) => `${r.set} ${r.name}: ${r.unseen} px`), [], 'every bare pixel lies in the gate\'s view');
+  const list = results.filter((r) => r.set === 'list');
+  assert.equal(list.length, 210);
+  assert.deepEqual(list.filter((r) => /^(one row of an icon-led list|text that runs right to left),/.test(r.name) && r.spared !== 2).map((r) => r.name), [], 'a row of an icon-led list, either way round, spares the rows below and the heading a clear gap above it');
+  assert.deepEqual(list.filter((r) => r.name.includes('small gap') && r.spared !== 1).map((r) => r.name), [], 'a heading a small gap above the rows is not proven and stays covered');
+  assert.deepEqual(list.filter((r) => r.bare > 0 && !r.name.startsWith('the next row is a second value')).map((r) => `${r.name}: ${r.bare} px`), [], 'only a second value in the next row is left bare, and that is named');
+  assert.deepEqual(list.filter((r) => r.refused).map((r) => r.name), [], 'no list case is refused');
   assert.deepEqual(results.filter((r) => !r.holds).map((r) => `${r.set} ${r.name}`), [], 'no fill is smaller than the 12 px pad\'s');
   // A box drawn off its value holds no ink of its own, and the 12 px pad alone leaves most of the value bare. One
   // above the value or in its gap is written whole; one short of it on the left meets the value running on past

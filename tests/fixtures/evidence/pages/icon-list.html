@@ -1,0 +1,29 @@
+<!doctype html><meta charset="utf-8">
+<style>body{margin:0;font:14px Helvetica,Arial,sans-serif;background:#f6f7f9;color:#111827}
+.card{position:absolute;left:40px;top:40px;width:1100px;height:190px;box-sizing:border-box;background:#fff;border:1px solid #e5e7eb;border-radius:12px}
+.lead{position:absolute;left:24px;top:18px;display:flex;gap:10px;align-items:center;line-height:20px;color:#374151}
+.lead svg{color:#7c3aed}
+.col{position:absolute;top:62px;display:flex;flex-direction:column;gap:8px}
+.row{display:flex;gap:9px;align-items:center;line-height:19px}
+.row svg{flex:none;color:#4b5563}
+.tile{position:absolute;left:900px;top:12px;width:160px;height:116px;border-radius:8px;background:#eef2f7;border:1px solid #e2e6ec}
+.where{position:absolute;left:904px;top:136px;line-height:18px;color:#374151}</style>
+<div class="card" data-testid="summary">
+  <div class="lead"><svg width="14" height="14" viewBox="0 0 14 14"><path d="M7 0l1.6 5.4L14 7l-5.4 1.6L7 14 5.4 8.6 0 7l5.4-1.6Z" fill="currentColor"/></svg><span data-testid="lead">An overview of this report is not ready yet</span></div>
+  <div class="col" style="left:24px">
+    <div class="row" data-testid="name"><svg width="16" height="16" viewBox="0 0 16 16"><path d="M2 12c2-5 4-5 5 0s3 5 5-1" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round"/></svg><span>Filed by Dana Example</span></div>
+    <div class="row" data-testid="second"><svg width="16" height="16" viewBox="0 0 16 16"><path d="M3 13L8 3l5 10M5 9h6" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round"/></svg><span>Weekday commute</span></div>
+    <div class="row" data-testid="third"><svg width="16" height="16" viewBox="0 0 16 16"><path d="M2 8a6 6 0 0 1 12 0ZM8 8v5" stroke="currentColor" stroke-width="1.6" fill="none"/></svg><span>Plan is current</span></div>
+  </div>
+  <div class="col" style="left:330px">
+    <div class="row"><svg width="16" height="16" viewBox="0 0 16 16"><rect x="2" y="5" width="12" height="7" rx="1.5" stroke="currentColor" stroke-width="1.6" fill="none"/></svg><span>Two bikes involved</span></div>
+    <div class="row"><svg width="16" height="16" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.6" fill="none"/></svg><span>One bike scratched</span></div>
+    <div class="row"><svg width="16" height="16" viewBox="0 0 16 16"><path d="M2 14V4h12v10" stroke="currentColor" stroke-width="1.6" fill="none"/></svg><span>No fence damage</span></div>
+  </div>
+  <div class="col" style="left:640px">
+    <div class="row"><svg width="16" height="16" viewBox="0 0 16 16"><path d="M3 8h10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg><span>Nobody hurt</span></div>
+    <div class="row"><svg width="16" height="16" viewBox="0 0 16 16"><path d="M8 2v12M2 8h12" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg><span>Helmets worn</span></div>
+  </div>
+  <div class="tile" data-testid="tile"></div>
+  <div class="where" data-testid="where">8 Sample Lane<br>Springfield</div>
+</div>
