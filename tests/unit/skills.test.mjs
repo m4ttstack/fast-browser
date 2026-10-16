@@ -1005,6 +1005,11 @@ test('composing-evidence states the compose contract and the blind-run lessons',
   assert.match(ticketSteps, /\| `stopped at a rule past its <side> edge with a line of text just past it, at \[x, y, w, h\] in the image` \| refusal: /);
   assert.match(ticketSteps, /\| `left a line past its <side> edge uncovered, at \[x, y, w, h\] in the image, as another row of its list` \| refusal: /);
   assert.match(ticketSteps, /\| `met an empty slot at its <side> edge with text inside the slot's box, at \[x, y, w, h\] in the image` \| refusal: /);
+  // The gate after the fill: a line in the value's reach left bare without a reason, and a mark's box over one.
+  assert.match(ticketSteps, /\| `left ink past its <side> edge uncovered, at \[x, y, w, h\] in the image, where the value may go on` \| refusal: /);
+  assert.match(ticketSteps, /\| `met another mark's box over a line the value may go on to, past its <side> edge, at \[x, y, w, h\] in the image` \| refusal: /);
+  assert.match(ticketSteps, phrase('A lift, loupe or ghost box never clears a line'));
+  assert.match(ticketSteps, phrase('a `context` mark clears only the ink inside its box'));
   assert.match(ticketSteps, phrase("the value's ink runs into the board past its <side> edge` is a refusal"));
   assert.match(ticketSteps, phrase('A covered neighbouring line is expected, because hiding comes first'));
   assert.match(ticketSteps, phrase('On a refusal, no board was written. Do what the message says, then render again'));
