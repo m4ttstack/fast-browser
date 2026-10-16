@@ -20,7 +20,6 @@ const pluginRoot = fileURLToPath(new URL('../..', import.meta.url));
 const requiredEntries = [
   'package/.claude-plugin/plugin.json',
   'package/.codex-plugin/plugin.json',
-  'package/.mcp.json',
   'package/adapters/codex/mcp.json',
   'package/agents/browser-driver.md',
   'package/builtins/macros/page-recon.js',

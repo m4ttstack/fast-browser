@@ -644,8 +644,9 @@ test('missing runtime, spawn ENOENT, and nonzero exits are one-line doctor error
 });
 
 // bin/fast-browser-mcp.mjs -> launchRuntime is the literal entrypoint every
-// host config (.mcp.json, adapters/codex/mcp.json, .codex-plugin/plugin.json)
-// spawns on every session start, entirely independent of setup and doctor.
+// host config (.claude-plugin/plugin.json, adapters/codex/mcp.json,
+// .codex-plugin/plugin.json) spawns on every session start, entirely
+// independent of setup and doctor.
 // A CLI tampered in place after a clean install -- the marker left exactly
 // as the real install wrote it -- must never be executed.
 test('refuses to launch a tampered CLI even though its marker is otherwise honest', async () => {

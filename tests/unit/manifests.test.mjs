@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { access, readFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -12,10 +12,9 @@ async function readJson(path) {
 }
 
 test('publishes host-compatible bundled MCP contracts', async () => {
-  const [claude, codex, claudeMcp, codexMcp, codexMarketplace] = await Promise.all([
+  const [claude, codex, codexMcp, codexMarketplace] = await Promise.all([
     readJson(resolve(pluginRoot, '.claude-plugin/plugin.json')),
     readJson(resolve(pluginRoot, '.codex-plugin/plugin.json')),
-    readJson(resolve(pluginRoot, '.mcp.json')),
     readJson(resolve(pluginRoot, 'adapters/codex/mcp.json')),
     readJson(resolve(repositoryRoot, '.agents/plugins/marketplace.json')),
   ]);
@@ -31,12 +30,10 @@ test('publishes host-compatible bundled MCP contracts', async () => {
       args: ['${PLUGIN_ROOT}/bin/fast-browser-mcp.mjs'],
     },
   });
-  assert.deepEqual(claudeMcp, {
-    mcpServers: {
-      'fast-browser': {
-        command: 'node',
-        args: ['${CLAUDE_PLUGIN_ROOT}/bin/fast-browser-mcp.mjs'],
-      },
+  assert.deepEqual(claude.mcpServers, {
+    'fast-browser': {
+      command: 'node',
+      args: ['${CLAUDE_PLUGIN_ROOT}/bin/fast-browser-mcp.mjs'],
     },
   });
   assert.deepEqual(codexMcp, {
@@ -49,4 +46,11 @@ test('publishes host-compatible bundled MCP contracts', async () => {
     source: 'local',
     path: '.',
   });
+});
+
+// Claude Code also loads a repo-root .mcp.json as a project server, where
+// ${CLAUDE_PLUGIN_ROOT} is never expanded, so every checkout of this repo
+// would spawn a launcher that cannot resolve its own path.
+test('ships no repo-root .mcp.json', async () => {
+  await assert.rejects(access(resolve(pluginRoot, '.mcp.json')), { code: 'ENOENT' });
 });
