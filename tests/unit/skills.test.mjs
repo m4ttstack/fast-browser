@@ -1119,7 +1119,7 @@ test('composing-evidence states the compose contract and the blind-run lessons',
   // An empty's text is drawn inside the blank; compose drops it when it does not fit.
   assert.match(text, phrase('An `empty` keeps its `text`, drawn inside the blank to say what is missing; compose drops it when it does not fit, so then say it in the `note`'));
   assert.match(text, phrase('and a `note` giving what that title does not: the value, the state, or where on the page it is'));
-  assert.match(text, phrase('Outside `steps`, a `lift`, `loupe`, `ghost` or `empty` needs a `title` and a `note`; `bracket` and `link` always need a `title`'));
+  assert.match(text, phrase('Outside `steps`, `lift`, `loupe`, `ghost` and `empty` need a `title` and a `note`; `bracket` and `link` always need a `title`'));
   assert.match(text, /\{ "loupe": "badge", "zoom": 4, "title": "Tiny badge", "note": "One line" \}/);
   assert.doesNotMatch(text, phrase("Leave that lift bare"));
   assert.doesNotMatch(text, /goes\s+bare/);
@@ -1184,7 +1184,7 @@ test('composing-evidence states the compose contract and the blind-run lessons',
   assert.match(text, phrase('and so does a board of two or more records\' statuses'));
   assert.doesNotMatch(text, phrase('there the title names the field'));
   assert.match(text, phrase('never describes the board\'s layout \\("separate point"\\)'));
-  assert.match(text, phrase("or that describes the board's layout, so it adds what the title does not; never leave a lift without its callout"));
+  assert.match(text, phrase("or that describes the board's layout, so it adds what the title does not; never leave a mark without its callout"));
   assert.doesNotMatch(text, phrase('Delete any label line'));
   assert.doesNotMatch(text, phrase("already states may go without a label"));
   // A lift that left its sub-line out still showed the sub-line's top under the card.

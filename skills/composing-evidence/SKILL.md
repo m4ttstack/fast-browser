@@ -111,7 +111,7 @@ you never place anything by pixel.
    | `a panel is drawn small; frame the card that holds its marks` | The panel shows too much to read at its size. In a `pair`, capture that panel again with a tighter `frame` selector (in a `pair` of one region, capture both panels again on the same tighter region, with one selector where one names it on both pages; for a ticket image, shrink the panel's `frame` rectangle instead). A `steps` panel is already cropped to its marks, so there mark fewer things in the panel, or things closer together. |
    | `a lift hides content beside it` | The lifted card covers content beside its target. Read the board for what is hidden. If the fact needs it, target the element that holds both; if not, target an element that stands clear of it. |
    | `a crop edge cuts through content` | A `steps` panel was cut at its marks' margin on a busy page. Check that the cut hides nothing the step needs; if it does, mark the element it cuts as well. |
-   | `a label repeats the board's title` | A label copies the board title. Reword the label so it says what the title does not (see Marks). Never delete a lift's callout, and never weaken the board title: it keeps stating the fact. |
+   | `a label repeats the board's title` | A label copies the board title. Reword the label so it says what the title does not. Never delete a mark's callout, and never weaken the board title: it keeps stating the fact. |
    | `a panel label repeats where the image came from` | Rename that panel's `label` (see step 7). |
    | `a redact mark on panel <n> lies outside the board, so it hides nothing` | That value is already cropped out; drop the mark. |
 
@@ -138,7 +138,7 @@ you never place anything by pixel.
    Then check the words:
    - Reword a label that copies the board title, the tag or the lifted
      words (see Marks for the exceptions), or that describes the board's
-     layout, so it adds what the title does not; never leave a lift without
+     layout, so it adds what the title does not; never leave a mark without
      its callout.
    - The board title states the fact the board proves, as a short sentence:
      "Sprint 4 is Ready for review", never the record and the section that
@@ -205,7 +205,7 @@ selector from an id, a data attribute or an aria attribute.
         { "bracket": ["row2", "row3"], "title": "Two rows", "note": "One line" },
         { "loupe": "badge", "zoom": 4, "title": "Tiny badge", "note": "One line" },
         { "link": ["total", "rowTotal"], "title": "Same number, two places" },
-        { "ghost": "gap", "tag": "REMOVED", "title": "Export is gone", "note": "One line" },
+        { "ghost": "gap", "tag": "REMOVED", "title": "Export button", "note": "Gone from the toolbar" },
         { "redact": "email" }
       ] }
   ]
@@ -222,11 +222,11 @@ selector from an id, a data attribute or an aria attribute.
   | `FLOW` | only a `steps` board, or a single panel the brief calls the start of a flow |
 - `out` is a file name; the board is written to `~/.fast-browser/screenshots/`.
 - Every key a mark names must be in that panel's capture `boxes`.
-- Every mark but `redact` and `context` takes an optional `title`, `note`
-  (one line) and `tag`: `NEW`, `CHANGED`, `REMOVED`, `ISSUE`, `PENDING` or
-  `OK`. Outside `steps`, a `lift`, `loupe`, `ghost` or `empty` needs a
-  `title` and a `note`; `bracket` and `link` always need a `title`. `ISSUE`
-  goes only on a problem; a neutral fact gets no tag, or `OK`.
+- Any mark but `redact` and `context` may take a `title`, `note` (one
+  line) and `tag`: `NEW`, `CHANGED`, `REMOVED`, `ISSUE`, `PENDING` or
+  `OK`. Outside `steps`, `lift`, `loupe`, `ghost` and `empty` need a `title`
+  and a `note`; `bracket` and `link` always need a `title`. `ISSUE` goes
+  only on a problem; a neutral fact gets no tag, or `OK`.
 - Any panel may take a `tag` (one of the same tags) and a `note` (one line),
   drawn in its head after its `label`.
 
@@ -332,11 +332,11 @@ capture again with the same selectors and the same frame selector.
   value, the state, or where on the page it is ("On the fleet plan", "Open
   tab under Invoices"). An `empty` keeps its `text`, drawn inside the blank
   to say what is missing; compose drops it when it does not fit, so then say
-  it in the `note`. A label may name what the board's title names, but never
-  copies its sentence or the tag, never quotes the lifted words (except a
-  value the page wraps, see step 3, or a status a header or card shows, see
-  the next rule), never uses an abbreviation the page does not explain, and
-  never describes the board's layout ("separate point").
+  it in the `note`. A label may name the record or fact the board's title
+  names, but never copies its sentence or the tag, never quotes the lifted
+  words (except a value the page wraps, see step 3, or a status a header or
+  card shows, see the next rule), never uses an abbreviation the page does
+  not explain, and never describes the board's layout ("separate point").
 - **Lift the whole fact, not its header or card, unless the brief names
   that header, row or card itself, or a status it shows.** Then mark that
   thing with its status in it, not a chip inside it. For a status ("the
@@ -348,8 +348,8 @@ capture again with the same selectors and the same frame selector.
   approved"). With two or more such records, the board title states each
   fact ("Atlas has its budget approved; Borealis's budget is pending"), not
   just the field. Otherwise target the element that states the fact, with
-  the icon or tick that belongs to it: the words "Deploy approved" and their
-  tick, not the header or card they sit in, and not one word of the phrase.
+  its own icon or tick: the words "Due Mar 4" and their clock icon, not the
+  header or card they sit in, and not one word of it.
   A fact with a sub-line under it is one item: target the element that
   holds the icon, the line and the sub-line, not the first line alone (a
   sub-line cut short or meaningless alone is the exception; see step 7), and
