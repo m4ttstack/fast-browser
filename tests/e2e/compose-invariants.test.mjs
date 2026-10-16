@@ -512,6 +512,16 @@ test("an empty slot's own text is its callout even where it would fit inside", {
   assert.equal(panel.targets[panel.labels[0].target].kind, 'slot');
 });
 
+test('an empty slot with a title of its own writes text that fits inside, and labels the title', { skip }, async () => {
+  const report = await board([{ empty: 'big', title: 'Chart missing', text: 'Chart is blank' }], { bars: [], boxes: { big: [100, 60, 300, 150] } });
+  assertInvariants(report);
+  const panel = p0(report);
+  assert.equal(panel.slots[0].text, 'inside');
+  assert.equal(panel.labels.length, 1, 'the title is the one label');
+  assert.equal(panel.targets[panel.labels[0].target].kind, 'slot');
+  assert.ok(!report.warnings.includes('an empty slot is too small for its text'));
+});
+
 test('an empty slot with a title of its own drops text that does not fit, and says so', { skip }, async () => {
   const report = await board([{ empty: 'small', title: 'Chart missing' }], { bars: [], boxes: { small: [300, 150, 50, 18] } });
   assert.equal(p0(report).slots[0].text, 'dropped');
@@ -2643,8 +2653,7 @@ test('a pin is the accent in a white ring, drawn over its card, on a dark frame 
 
 // A board drawn at one board px per capture px, held whole: a narrow slot with a wide one 3px to its right, so the
 // labels leave by the bottom. A block under the wide slot leaves it a clean spot at its left end, 12px from the
-// narrow slot's dot. The slots are empty ones, whose text does not fit and becomes their label: a ghost this
-// narrow grows to GHOST_MIN.
+// narrow slot's dot. The slots are empty ones, whose own text is their label: a ghost this narrow grows to GHOST_MIN.
 const SLOTS_SIZE = [640, 240];
 const slotMarks = [{ empty: 'narrow', text: 'Narrow' }, { empty: 'wide', text: 'Wide' }, ...holdMarks];
 const slotBoxes = { narrow: [100, 100, 6, 20], wide: [109, 100, 80, 20], ...holdBoxes(SLOTS_SIZE) };
