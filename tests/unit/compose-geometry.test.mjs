@@ -2694,8 +2694,8 @@ const fillRect = (...args) => [...sandbox.__composeGeometry.fillRect(...args)];
 // An imported redaction: a pad of 12 px round a box drawn by eye, a fill 2 px off what it found (page-layout.js).
 const importFill = (px, box, options = {}) => {
   const { rect, rects, density, grew, capped } = sandbox.__composeGeometry.importFill(px, box, { pad: 12, back: 2, ...options });
-  const { extended, near, bridged, peek } = sandbox.__composeGeometry.importFill(px, box, { pad: 12, back: 2, ...options });
-  return { rect: [...rect], rects: Array.from(rects, (r) => [...r]), density, grew, capped: Array.from(capped, (c) => ({ ...c })), extended: [...extended], near: [...near], bridged: [...bridged], peek: [...peek] };
+  const { extended, near, bridged, spared, peek } = sandbox.__composeGeometry.importFill(px, box, { pad: 12, back: 2, ...options });
+  return { rect: [...rect], rects: Array.from(rects, (r) => [...r]), density, grew, capped: Array.from(capped, (c) => ({ ...c })), extended: [...extended], near: [...near], bridged: [...bridged], spared: [...spared], peek: [...peek] };
 };
 // What an imported fill paints: its rects.
 const importedFill = (px, box) => importFill(px, box).rects;
@@ -3271,6 +3271,145 @@ test('a fill that stops at a hairline with ink just past it names that side for 
   for (const d of [1, 2]) {
     const fill = importFill(headingOverCard(d), [24 * d, 20 * d, 150 * d, 10 * d]);
     assert.deepEqual(fill.near, ['bottom'], `${d}x`);
+  }
+});
+
+// An icon-led list at `d` device px per CSS px: a heading at y 20, then rows at a pitch of 27 from y 60, each an icon
+// 12 CSS px square at x 40 and a line of text at x 60. `rtl` mirrors it in a 300 CSS px wide image: icons at x
+// 248, text ending at x 240. `heading` sets where the heading starts and whether a sparkle leads it; `pitch` the
+// heading's distance above the first row.
+const iconList = (d, { rtl = false, heading = 'sparkle', pitch = 40, rows = 3, widths = [90, 80, 60] } = {}) => {
+  const px = canvas(300 * d, 160 * d);
+  const headY = (60 - pitch) * d;
+  if (heading !== 'none') {
+    if (rtl) {
+      textLine(px, 70 * d, headY, 170 * d, d);
+      if (heading === 'sparkle') px.fill(270 * d, headY, 8 * d, 8 * d, ICON);
+    } else {
+      textLine(px, (heading === 'sparkle' ? 30 : 40) * d, headY, 170 * d, d);
+      if (heading === 'sparkle') px.fill(14 * d, headY, 8 * d, 8 * d, ICON);
+    }
+  }
+  for (let i = 0; i < rows; i += 1) {
+    const y = (60 + 27 * i) * d;
+    if (rtl) { px.fill(248 * d, y, 12 * d, 12 * d, ICON); textLine(px, (240 - widths[i]) * d, y, widths[i] * d, d); }
+    else { px.fill(40 * d, y, 12 * d, 12 * d, ICON); textLine(px, 60 * d, y, widths[i] * d, d); }
+  }
+  return px;
+};
+const ROW_BOX = (d, rtl = false) => (rtl ? [148 * d, 58 * d, 114 * d, 16 * d] : [38 * d, 58 * d, 116 * d, 16 * d]);
+// Points of the list's other rows and heading, CSS px: the icon's centre and two points along each line.
+const otherRows = (rtl = false) => (rtl ? [[254, 93], [200, 92], [170, 92], [254, 120], [220, 119], [200, 119]] : [[46, 93], [70, 92], [120, 92], [46, 120], [70, 119], [100, 119]]);
+const headingPoints = (rtl = false, pitch = 40) => (rtl ? [[150, 65 - pitch], [100, 65 - pitch]] : [[60, 65 - pitch], [150, 65 - pitch]]);
+const assertBare = (fill, points, d, label) => { for (const [x, y] of points) assert.ok(!covers(fill.rects, x * d, y * d), `${label}: ${x},${y} is covered by ${JSON.stringify(fill.rects)}`); };
+const inPeek = (fill, points, d, label) => { for (const [x, y] of points) assert.ok(inRect(x * d, y * d, fill.peek), `${label}: ${x},${y} lies outside the gate's view ${fill.peek}`); };
+
+test('a redaction of one row of an icon-led list spares the other rows and the heading above, names them and shows them to the gate', () => {
+  for (const d of [1, 2, 3]) for (const rtl of [false, true]) {
+    const px = iconList(d, { rtl });
+    const fill = importFill(px, ROW_BOX(d, rtl));
+    const label = `${d}x${rtl ? ' rtl' : ''}`;
+    assertValueHidden(px, fill.rects, rtl ? [146 * d, 56 * d, 118 * d, 18 * d] : [36 * d, 56 * d, 120 * d, 18 * d]);
+    assertBare(fill, [...otherRows(rtl), ...headingPoints(rtl)], d, label);
+    assert.deepEqual(fill.spared, ['top', 'bottom'], label);
+    inPeek(fill, [...otherRows(rtl), ...headingPoints(rtl)], d, label);
+    assert.deepEqual([fill.capped, fill.extended, fill.bridged], [[], [], []], label);
+  }
+});
+
+test('a heading above an icon-led list is spared by the list\'s pitch, or by starting outside the icon column, and otherwise covered', () => {
+  for (const d of [1, 2]) {
+    // Flush with the icon column, a clear pitch above the rows.
+    const byPitch = importFill(iconList(d, { heading: 'flush', pitch: 40 }), ROW_BOX(d));
+    assertBare(byPitch, headingPoints(false, 40), d, `${d}x by pitch`);
+    assert.deepEqual(byPitch.spared, ['top', 'bottom'], `${d}x by pitch`);
+    // Led by a glyph left of the icon column, at the rows' own pitch.
+    const byStart = importFill(iconList(d, { heading: 'sparkle', pitch: 27 }), ROW_BOX(d));
+    assertBare(byStart, headingPoints(false, 27), d, `${d}x by start`);
+    // Flush with the icon column at the rows' own pitch: nothing proves it is not the value's first line.
+    const near = iconList(d, { heading: 'flush', pitch: 27 });
+    const kept = importFill(near, ROW_BOX(d));
+    assertValueHidden(near, kept.rects, [36 * d, 30 * d, 220 * d, 44 * d]);
+    assert.deepEqual(kept.spared, ['bottom'], `${d}x near heading`);
+  }
+});
+
+test('a value that wraps under its text column is covered whole; a list row proven after it is spared', () => {
+  for (const d of [1, 2, 3]) {
+    const px = canvas(300 * d, 160 * d);
+    px.fill(40 * d, 60 * d, 12 * d, 12 * d, ICON); textLine(px, 60 * d, 60 * d, 90 * d, d);
+    textLine(px, 60 * d, 80 * d, 70 * d, d);
+    px.fill(40 * d, 107 * d, 12 * d, 12 * d, ICON); textLine(px, 60 * d, 107 * d, 80 * d, d);
+    const fill = importFill(px, ROW_BOX(d));
+    assertValueHidden(px, fill.rects, [36 * d, 56 * d, 120 * d, 36 * d]);
+    assertBare(fill, [[46, 113], [70, 112], [120, 112]], d, `${d}x`);
+    assert.deepEqual(fill.spared, ['bottom'], `${d}x`);
+  }
+});
+
+test('a line wrapped to the container\'s edge is covered unless its first word takes the icon\'s place and its text the value\'s column, which is then named', () => {
+  for (const d of [1, 2, 3]) {
+    const row = (first, gap) => {
+      const px = canvas(300 * d, 160 * d);
+      px.fill(40 * d, 60 * d, 12 * d, 12 * d, ICON); textLine(px, 60 * d, 60 * d, 90 * d, d);
+      textLine(px, 40 * d, 87 * d, first * d, d); textLine(px, (40 + first + gap) * d, 87 * d, 70 * d, d);
+      return px;
+    };
+    const word = row(4, 6);
+    const fill = importFill(word, ROW_BOX(d));
+    assertValueHidden(word, fill.rects, [36 * d, 56 * d, 160 * d, 44 * d]);
+    assert.deepEqual(fill.spared, [], `${d}x a short word`);
+    const chance = row(12, 8);
+    const spared = importFill(chance, ROW_BOX(d));
+    assert.deepEqual(spared.spared, ['bottom'], `${d}x a word of the icon's size at its text column`);
+    inPeek(spared, [[46, 92], [70, 92], [120, 92]], d, `${d}x`);
+  }
+});
+
+test('a value boxed without its icon, or whose first run is a word, spares nothing', () => {
+  for (const d of [1, 2]) {
+    const px = iconList(d);
+    const textOnly = importFill(px, [58 * d, 58 * d, 96 * d, 16 * d]);
+    assert.deepEqual(textOnly.spared, [], `${d}x text only`);
+    assertValueHidden(px, textOnly.rects, [36 * d, 56 * d, 120 * d, 72 * d]);
+    const words = canvas(300 * d, 160 * d);
+    for (let i = 0; i < 3; i += 1) { textLine(words, 40 * d, (60 + 27 * i) * d, 30 * d, d); textLine(words, 78 * d, (60 + 27 * i) * d, 60 * d, d); }
+    const plain = importFill(words, [38 * d, 58 * d, 104 * d, 16 * d]);
+    assert.deepEqual(plain.spared, [], `${d}x words`);
+    assertValueHidden(words, plain.rects, [36 * d, 56 * d, 120 * d, 72 * d]);
+  }
+});
+
+test('a two-line label beside a two-line value is no list: both lines of the value stay covered', () => {
+  for (const d of [1, 2]) {
+    const px = canvas(300 * d, 160 * d);
+    textLine(px, 30 * d, 60 * d, 40 * d, d); textLine(px, 90 * d, 60 * d, 80 * d, d);
+    textLine(px, 30 * d, 80 * d, 44 * d, d); textLine(px, 90 * d, 80 * d, 60 * d, d);
+    textLine(px, 30 * d, 112 * d, 36 * d, d); textLine(px, 90 * d, 112 * d, 50 * d, d);
+    const fill = importFill(px, [28 * d, 58 * d, 144 * d, 16 * d]);
+    assertValueHidden(px, fill.rects, [26 * d, 56 * d, 150 * d, 36 * d]);
+    assert.deepEqual(fill.spared, [], `${d}x`);
+  }
+});
+
+// A blank tile with a hairline border and rounded bottom corners, narrower than the pad of the value's box 8 CSS
+// px under it: the pad reaches into the tile, and the corners' rows differ from the tile's, so the walk takes
+// them for ink at its edge and grows onto the tile.
+test('an imported fill never grows into a slot\'s blank, and paints nothing inside it', () => {
+  for (const d of [1, 2, 3]) {
+    const px = canvas(320 * d, 180 * d).fill(99 * d, 19 * d, 142 * d, 102 * d, REGION_BORDER).fill(100 * d, 20 * d, 140 * d, 100 * d, REGION);
+    px.fill(100 * d, 115 * d, d, 2 * d, REGION_BORDER).fill(239 * d, 115 * d, d, 2 * d, REGION_BORDER);
+    textLine(px, 100 * d, 128 * d, 140 * d, d);
+    const box = [96 * d, 128 * d, 148 * d, 10 * d];
+    const pad = fillRect(px, box, { reach: 12, back: 2 });
+    if (d === 1) {
+      assert.equal(pad[1], 116, 'the 12 px pad reaches 4 px into the tile');
+      assert.ok(importFill(px, box).rect[1] < 116, `without the blank the fill ${JSON.stringify(importFill(px, box).rects)} does not grow into the tile`);
+    }
+    const fill = importFill(px, box, { blanks: [[100 * d, 20 * d, 140 * d, 100 * d]] });
+    // The own line's piece is painted its own back past the pad; nothing reaches into the tile past the pad.
+    for (const rect of fill.rects) assert.ok(rect[1] >= Math.min(pad[1], 120 * d), `${d}x: ${rect} is painted into the tile past the pad ${pad}`);
+    assertValueHidden(px, fill.rects, [84 * d, 121 * d, 172 * d, 22 * d]);
   }
 });
 
