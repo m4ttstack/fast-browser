@@ -449,7 +449,9 @@ This is the one place you write coordinates.
    | `covered a line beside it to that line's end, past its <side> edge` | warning |
    | `covered ink past a gap at its <side> edge` | warning |
    | `stopped at a gap with more ink just past its <side> edge` | warning: that ink lies off the value's columns, or past another line |
-   | `met another mark's box with ink still at its <side> edge` | warning; a refusal on the value's own line |
+   | `stopped at a rule with more ink just past its <side> edge` | warning: that ink lies off the value's columns, or is the rule's own chrome |
+   | `met another mark's box with ink still at its <side> edge` | warning; a refusal on the value's own line, or when the ink in that box lies under or over the value's columns |
+   | `met a context mark's box over a line that continues the value, at [x, y, w, h] in the image` | refusal: the `context` mark sits on the value's own wrapped line |
    | `reached the frame with ink still at its <side> edge` | warning; a refusal on the value's own line |
    | `reached its growth limit with ink still at its <side> edge` | refusal |
    | `stopped at a rule past its <side> edge with a line of text just past it, at [x, y, w, h] in the image` | refusal: a row's border with text past it that may be the value's other line |
@@ -468,7 +470,9 @@ This is the one place you write coordinates.
      box over the whole value including that line; when it is the board's
      own (another row, a neighbour's line), add a `context` mark on it, and
      the fill stops at that box; otherwise move the frame edge so it is out
-     of the board, or move the `empty` box off the text.
+     of the board, or move the `empty` box off the text. A `context` mark on
+     a line that continues the value is refused in turn: compose reads the
+     line as the value's where it sits beside the fill or wraps from it.
 
    Either way, do not shrink the box to clear a neighbour.
 6. **Stop there.** The board is not done until the operator has looked at

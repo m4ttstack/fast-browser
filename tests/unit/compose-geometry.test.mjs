@@ -2984,12 +2984,25 @@ test('a line beside the value is followed to its end either way, as a right-alig
   assert.ok(fill.extended.includes('left'), `${fill.extended}`);
 });
 
-test('ink that runs into another mark\'s box is named, and refuses the board past the limit', () => {
+test('ink that runs into another mark\'s box is named, and refuses the board under the value\'s columns or past the limit', () => {
+  // A mark's box over the line under the value may hold the value's own wrapped line: refused. A context box there
+  // is the driver's word, and the walk stops at it.
   const px = textLine(textLine(canvas(300, 100), 40, 20, 60, 1), 40, 44, 60, 1);
-  assert.deepEqual(importFill(px, [40, 20, 60, 10], { keep: [[38, 42, 64, 14]] }).capped, [{ side: 'bottom', why: 'mark', refuse: false }]);
+  assert.deepEqual(importFill(px, [40, 20, 60, 10], { keep: [[38, 42, 64, 14]] }).capped, [{ side: 'bottom', why: 'mark', refuse: true }]);
+  const beside = textLine(textLine(canvas(300, 100), 40, 20, 60, 1), 160, 44, 60, 1);
+  assert.deepEqual(importFill(beside, [40, 20, 60, 10], { keep: [[158, 42, 64, 14]] }).capped.filter((c) => c.refuse), [], 'a mark over a line off the value\'s columns refuses nothing');
   const long = textLine(textLine(canvas(600, 80), 20, 20, 40, 1), 20, 38, 560, 1);
   const capped = importFill(long, [20, 20, 40, 10], { keep: [[400, 30, 40, 30]] }).capped;
   assert.ok(capped.some((c) => c.side === 'right' && c.why === 'mark' && c.refuse), JSON.stringify(capped));
+});
+
+test('a context box over the value\'s own wrapped line refuses the board naming the line; one over a line a rule fences off does not', () => {
+  const wrapped = textLine(textLine(canvas(300, 100), 40, 20, 60, 1), 40, 44, 60, 1);
+  const fill = importFill(wrapped, [40, 20, 60, 10], { held: [[38, 42, 64, 14]] });
+  assert.deepEqual(fill.capped.filter((c) => c.why === 'context').map((c) => [c.side, c.refuse, [...c.at]]), [['bottom', true, [40, 44, 58, 10]]]);
+  assert.ok(!fill.rects.some((r) => r[1] + r[3] > 44), `the fill ${JSON.stringify(fill.rects)} paints into the context box`);
+  const fenced = textLine(textLine(canvas(300, 100), 40, 20, 60, 1), 40, 50, 60, 1).fill(0, 40, 300, 1, [203, 213, 225]);
+  assert.deepEqual(importFill(fenced, [40, 20, 60, 10], { held: [[38, 48, 64, 14]] }).capped.filter((c) => c.refuse), [], 'the line past the rule is the driver\'s to keep');
 });
 
 test('a line of capitals whose inkiest row is one bar still reads its density', () => {

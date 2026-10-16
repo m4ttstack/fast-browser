@@ -994,7 +994,9 @@ test('composing-evidence states the compose contract and the blind-run lessons',
   assert.match(ticketSteps, /\| `covered ink past a gap at its <side> edge` \| warning \|/);
   assert.match(ticketSteps, /\| `stopped at a gap with more ink just past its <side> edge` \| warning: /);
   assert.match(ticketSteps, phrase('Each crop shows a margin of what lies just past its fill, so you can check that nothing of the value continues beyond it'));
-  assert.match(ticketSteps, /\| `met another mark's box with ink still at its <side> edge` \| warning; a refusal on the value's own line \|/);
+  assert.match(ticketSteps, /\| `stopped at a rule with more ink just past its <side> edge` \| warning: /);
+  assert.match(ticketSteps, /\| `met another mark's box with ink still at its <side> edge` \| warning; a refusal on the value's own line, or when the ink in that box lies under or over the value's columns \|/);
+  assert.match(ticketSteps, /\| `met a context mark's box over a line that continues the value, at \[x, y, w, h\] in the image` \| refusal: /);
   assert.match(ticketSteps, /\| `reached the frame with ink still at its <side> edge` \| warning; a refusal on the value's own line \|/);
   // A written board never shows ink that may be the value's: what the fill cannot cover refuses the board, and
   // every refusal names the line and how to recover.
