@@ -992,17 +992,23 @@ test('composing-evidence states the compose contract and the blind-run lessons',
   assert.match(ticketSteps, /\| `grew to cover ink beside it` \| warning \|/);
   assert.match(ticketSteps, /\| `covered a line beside it to that line's end, past its <side> edge` \| warning \|/);
   assert.match(ticketSteps, /\| `covered ink past a gap at its <side> edge` \| warning \|/);
-  assert.match(ticketSteps, /\| `stopped at a gap with more ink just past its <side> edge` \| warning \|/);
+  assert.match(ticketSteps, /\| `stopped at a gap with more ink just past its <side> edge` \| warning: /);
   assert.match(ticketSteps, phrase('Each crop shows a margin of what lies just past its fill, so you can check that nothing of the value continues beyond it'));
-  assert.match(ticketSteps, /\| `met another mark's box with ink still at its <side> edge` \| warning, or a refusal \|/);
-  assert.match(ticketSteps, /\| `reached the frame with ink still at its <side> edge` \| a refusal when the ink is on the value's own line, otherwise a warning \|/);
-  assert.match(ticketSteps, phrase('On `stopped at a gap`, if any of the value shows past the fill, draw the redact box over the whole value, every line of it, and render again'));
-  // The growth limit refuses every time; it is never a warning to read past.
-  assert.match(ticketSteps, /\| `reached its growth limit with ink still at its <side> edge` \| always a refusal \|/);
+  assert.match(ticketSteps, /\| `met another mark's box with ink still at its <side> edge` \| warning; a refusal on the value's own line \|/);
+  assert.match(ticketSteps, /\| `reached the frame with ink still at its <side> edge` \| warning; a refusal on the value's own line \|/);
+  // A written board never shows ink that may be the value's: what the fill cannot cover refuses the board, and
+  // every refusal names the line and how to recover.
+  assert.match(ticketSteps, phrase('A written board never shows ink that may be the value\'s'));
+  assert.match(ticketSteps, /\| `reached its growth limit with ink still at its <side> edge` \| refusal \|/);
+  assert.match(ticketSteps, /\| `stopped at a rule past its <side> edge with a line of text just past it, at \[x, y, w, h\] in the image` \| refusal: /);
+  assert.match(ticketSteps, /\| `left a line past its <side> edge uncovered, at \[x, y, w, h\] in the image, as another row of its list` \| refusal: /);
+  assert.match(ticketSteps, /\| `met an empty slot at its <side> edge with text inside the slot's box, at \[x, y, w, h\] in the image` \| refusal: /);
+  assert.match(ticketSteps, phrase("the value's ink runs into the board past its <side> edge` is a refusal"));
   assert.match(ticketSteps, phrase('A covered neighbouring line is expected, because hiding comes first'));
-  assert.match(ticketSteps, phrase('the message goes on `Draw that redact box over the whole value` and no board was written'));
-  assert.match(ticketSteps, phrase('or move the frame edge so the rest is cropped out, then render again'));
+  assert.match(ticketSteps, phrase('On a refusal, no board was written. Do what the message says, then render again'));
+  assert.match(ticketSteps, phrase('add a `context` mark on it, and the fill stops at that box'));
   assert.match(ticketSteps, phrase('do not shrink the box to clear a neighbour'));
+  assert.doesNotMatch(ticketSteps, phrase('Draw that redact box over the whole value'));
   assert.doesNotMatch(text, phrase('reached its growth limit with ink still at its <side> edge` means read the crop'));
   assert.doesNotMatch(text, phrase('some of the value may show beside the fill'));
   assert.doesNotMatch(text, phrase('grew to cover ink beside it` means read that redaction\'s crop'));
