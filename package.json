@@ -14,7 +14,6 @@
   "files": [
     ".claude-plugin/",
     ".codex-plugin/",
-    ".mcp.json",
     "adapters/",
     "assets/",
     "agents/",
