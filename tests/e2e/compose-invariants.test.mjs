@@ -503,6 +503,15 @@ test('an empty slot holds its text when it fits and hands it to a label when it 
   assert.equal(p0(report).wash, false);
 });
 
+test("an empty slot's own text is its callout even where it would fit inside", { skip }, async () => {
+  const report = await board([{ empty: 'big', text: 'Chart is blank' }], { bars: [], boxes: { big: [100, 60, 300, 150] } });
+  assertInvariants(report);
+  const panel = p0(report);
+  assert.equal(panel.slots[0].text, 'label', 'the slot is a blank outline, not the words twice');
+  assert.equal(panel.labels.length, 1);
+  assert.equal(panel.targets[panel.labels[0].target].kind, 'slot');
+});
+
 test('an empty slot with a title of its own drops text that does not fit, and says so', { skip }, async () => {
   const report = await board([{ empty: 'small', title: 'Chart missing' }], { bars: [], boxes: { small: [300, 150, 50, 18] } });
   assert.equal(p0(report).slots[0].text, 'dropped');

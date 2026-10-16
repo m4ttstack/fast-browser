@@ -1,5 +1,5 @@
 { "state": "FOUND", "title": "The shipments chart renders nothing", "layout": "single", "out": "fx-empty-by-fill.png",
-  "expect": { "slots": [["empty", "inside"]], "slotFillGap": 4, "crops": 1, "frameInside": true },
+  "expect": { "slots": [["empty", "label"]], "slotFillGap": 4, "crops": 1, "frameInside": true },
   "panels": [
     { "fixture": { "import": { "page": "chart-by-address", "dpr": 1, "format": "png" } },
       "frame": [34, 34, 432, 242],
