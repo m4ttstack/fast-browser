@@ -1180,6 +1180,29 @@ test('a stroke that reaches the edge but runs in less than a rule length is cont
   assert.equal(trimBlank(px, [0, 0, 400, 80], null).trimmed.right, 0);
 });
 
+test('thin chart bars standing on the bottom edge are content, so the bottom does not trim', () => {
+  const px = canvas(300, 200).fill(20, 20, 150, 14, INK);
+  [50, 90, 120, 70, 110, 60, 100, 80, 40, 115].forEach((h, k) => px.fill(40 + k * 22, 200 - h, 2, h, [37, 99, 235]));
+  assert.equal(trimBlank(px, [0, 0, 300, 200], null).trimmed.bottom, 0);
+});
+
+test('a progress track running out to the edge with its fill in the same rows does not trim, so the bar reads as full as it is', () => {
+  const px = canvas(300, 120).fill(20, 40, 60, 10, INK).fill(20, 60, 280, 2, DIVIDER).fill(20, 60, 80, 2, [37, 99, 235]);
+  assert.equal(trimBlank(px, [0, 0, 300, 120], null).trimmed.right, 0);
+});
+
+test('gridlines that stop short of the content beyond them are not hairlines across the frame', () => {
+  const px = canvas(300, 200).fill(20, 20, 60, 10, INK);
+  for (let x = 40; x < 300; x += 30) px.fill(x, 40, 1, 160, DIVIDER);
+  px.fill(40, 120, 100, 3, [37, 99, 235]);
+  assert.equal(trimBlank(px, [0, 0, 300, 200], null).trimmed.bottom, 0);
+});
+
+test('a hairline that starts at the far side content still crosses, as a row divider inset from the left does', () => {
+  const px = canvas(400, 80).fill(30, 10, 370, 1, DIVIDER).fill(30, 69, 370, 1, DIVIDER).fill(30, 30, 190, 20, INK);
+  assert.equal(trimBlank(px, [0, 0, 400, 80], null).trimmed.right, 168);
+});
+
 test('a trim never passes the marks, even over ground', () => {
   const px = canvas(300, 200).fill(100, 100, 40, 20, INK);
   const { box } = trimBlank(px, [0, 0, 300, 200], [20, 60, 30, 30]);
