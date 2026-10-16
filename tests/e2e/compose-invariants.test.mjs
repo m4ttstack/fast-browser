@@ -3339,8 +3339,10 @@ test('a redaction\'s gate crop takes in the ink just past where its fill stopped
   // A value line, a gap of over three leads, and a line past it under the value with another line between them off
   // to the side: the fill does not cover through, the board warns and the crop shows the far line.
   const far = [100, 215, 60, 10];
-  const capture = await syntheticCapture({ size: [700, 300], bars: [...textStems(100, 100, 60), ...textStems(far[0], far[1], far[2]), ...textStems(300, 150, 60), [100, 60, 60, 20], [100, 250, 60, 20]], boxes: { v: [100, 100, 60, 10], h: [100, 60, 60, 20], f: [100, 250, 60, 20] } });
-  const { report, dir } = await render(spec([{ lift: 'h', title: 'Heading' }, { lift: 'f', title: 'Footer' }, { redact: 'v' }]), { ...capture, source: 'import' });
+  // The heading and footer are context off the value's columns and past its reach, with a line between: a mark's
+  // box over a line the fill would cover, beside the value or as its wrap, would refuse the board.
+  const capture = await syntheticCapture({ size: [700, 300], bars: [...textStems(100, 100, 60), ...textStems(far[0], far[1], far[2]), ...textStems(300, 150, 60), ...textStems(300, 40, 60), [400, 4, 60, 20], [400, 250, 60, 20]], boxes: { v: [100, 100, 60, 10], h: [400, 4, 60, 20], f: [400, 250, 60, 20] } });
+  const { report, dir } = await render(spec([{ context: 'h' }, { context: 'f' }, { redact: 'v' }]), { ...capture, source: 'import' });
   await rm(dir, { recursive: true, force: true });
   assert.ok(report.warnings.includes('a redaction on panel 1 (v) stopped at a gap with more ink just past its bottom edge'), `${report.warnings}`);
   const panel = p0(report);

@@ -15,10 +15,7 @@
     ],
     "crops": 1,
     "frameInside": true,
-    "grownFills": 0,
-    "warnings": [
-      "a redaction on panel 1 (heading) met another mark's box with ink still at its bottom edge"
-    ]
+    "grownFills": 0
   },
   "panels": [
     {
