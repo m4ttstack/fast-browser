@@ -1071,7 +1071,7 @@ test('composing-evidence states the compose contract and the blind-run lessons',
   assert.match(text, phrase('give each capture its own frame selector for the element that holds that same visible region'));
   assert.match(text, phrase('never one outside the frame'));
   // A blind run left the absent side of a pair unmarked, so its whole panel sat under the wash.
-  assert.match(text, phrase("Mark that element with a `lift` whose `title` says the thing is not there"));
+  assert.match(text, phrase("Mark that element with a `lift` whose callout says the thing is not there and where it would sit"));
   assert.match(text, phrase('a heading, block or card lifted here is the one exception to lifting the whole fact'));
   // A later run lifted the absent side's tab in the strip, and the judge read it as pointing at the wrong place.
   assert.match(text, phrase('at the spot where the thing sits on the other page'));
@@ -1115,9 +1115,12 @@ test('composing-evidence states the compose contract and the blind-run lessons',
   // Blind runs paraphrased the field in the board title.
   assert.match(text, phrase("The board title uses the page's own words for the field it proves"));
   // Bare lifts lost the callouts reviewers read: a title naming the thing and a note with its state.
-  assert.match(text, phrase('Every `lift` outside `steps` gets a callout: a `title` naming the record, field or control in a few words'));
+  assert.match(text, phrase('Every `lift`, `loupe`, `ghost` and `empty` outside `steps` gets a callout: a `title` naming the record, field or control in a few words'));
+  // An empty's text is drawn inside the blank; compose drops it when it does not fit.
+  assert.match(text, phrase('An `empty` keeps its `text`, drawn inside the blank to say what is missing; compose drops it when it does not fit, so then say it in the `note`'));
   assert.match(text, phrase('and a `note` giving what that title does not: the value, the state, or where on the page it is'));
-  assert.match(text, phrase('A `lift` outside `steps` needs a `title` and a `note`'));
+  assert.match(text, phrase('Outside `steps`, a `lift`, `loupe`, `ghost` or `empty` needs a `title` and a `note`; `bracket` and `link` always need a `title`'));
+  assert.match(text, /\{ "loupe": "badge", "zoom": 4, "title": "Tiny badge", "note": "One line" \}/);
   assert.doesNotMatch(text, phrase("Leave that lift bare"));
   assert.doesNotMatch(text, /goes\s+bare/);
   // Boards titled with the record and section name left the claim to the labels.

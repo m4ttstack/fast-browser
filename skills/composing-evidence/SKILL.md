@@ -11,14 +11,13 @@ you never place anything by pixel.
 
 ## The pipeline
 
-1. **Choose selectors.** On a large page a full `browser_snapshot` can run to
-   tens of thousands of tokens; use `browser_find`, or a snapshot scoped to
-   the section you need, instead. Before the first capture of any frame,
-   take a snapshot scoped to the frame element; with `frame: "auto"`,
-   snapshot the card that holds the targets. Choose one selector for each
-   thing the brief names and one for each personal detail that snapshot
-   shows, named in the brief or not, all in the first capture (see
-   `redact`).
+1. **Choose selectors.** A full `browser_snapshot` of a large page is huge;
+   use `browser_find`, or a snapshot scoped to the section you need. Before
+   the first capture of any frame, take a snapshot scoped to the frame
+   element; with `frame: "auto"`, snapshot the card that holds the targets.
+   Choose one selector for each thing the brief names and one for each
+   personal detail that snapshot shows, named in the brief or not, all in
+   the first capture (see `redact`).
 2. **Capture.** Call `browser_capture_evidence` with
    `{ targets: { <key>: "<selector>" }, frame: "auto", out: "<board>.c1" }`.
    Pass `frame: "<css selector>"` instead when a rule below names the frame
@@ -110,7 +109,7 @@ you never place anything by pixel.
    | Warning | What to do |
    |---|---|
    | `a panel is drawn small; frame the card that holds its marks` | The panel shows too much to read at its size. In a `pair`, capture that panel again with a tighter `frame` selector (in a `pair` of one region, capture both panels again on the same tighter region, with one selector where one names it on both pages; for a ticket image, shrink the panel's `frame` rectangle instead). A `steps` panel is already cropped to its marks, so there mark fewer things in the panel, or things closer together. |
-   | `a lift hides content beside it` | The lifted card covers content on some side of its target that compose could not take in. Read the board for what is hidden. If the fact needs it, target the element that holds both; if not, target an element that stands clear of it. |
+   | `a lift hides content beside it` | The lifted card covers content beside its target. Read the board for what is hidden. If the fact needs it, target the element that holds both; if not, target an element that stands clear of it. |
    | `a crop edge cuts through content` | A `steps` panel was cut at its marks' margin on a busy page. Check that the cut hides nothing the step needs; if it does, mark the element it cuts as well. |
    | `a label repeats the board's title` | A label copies the board title. Reword the label so it says what the title does not (see Marks). Never delete a lift's callout, and never weaken the board title: it keeps stating the fact. |
    | `a panel label repeats where the image came from` | Rename that panel's `label` (see step 7). |
@@ -123,16 +122,13 @@ you never place anything by pixel.
 7. **Read the PNG** with your image-reading tool, and say in your report that
    you did. Check: the crop shows what the brief names, every lift holds its
    whole fact, its icon and any sub-line (unless cut short or meaningless
-   alone; see below),
-   labels sit outside the screenshot,
-   a numbered pin sits on the thing its label describes, in a `pair` of one
-   region, both panels show the same region, and nothing personal is
-   readable anywhere on the board (addresses, phone numbers, emails, names
-   that are not the point), including near its edges (compose can widen a
-   frame edge up to 96px to avoid cutting text). Fix and re-render at most
-   twice. If a personal detail is still readable when the budget is spent,
-   report the case as not done and do not give that board's path as a
-   result.
+   alone; see below), labels sit outside the screenshot, a numbered pin sits
+   on the thing its label describes, in a `pair` of one region, both panels
+   show the same region, and nothing personal is readable anywhere on the
+   board (addresses, phone numbers, emails, names that are not the point),
+   including near its edges. Fix and re-render at most twice. If a personal
+   detail is still readable when the budget is spent, report the case as not
+   done and do not give that board's path as a result.
 
    Check too that each mark sits on the element the brief describes, by look
    and position, not on a neighbour. If it is on a neighbour, fix the
@@ -158,7 +154,7 @@ you never place anything by pixel.
      without it: target the line's own element, with its icon, so the lift
      leaves the sub-line out. No label quotes that sub-line. The lift's
      `note` mentions it only when it can say in plain words what it means
-     ("week to date"); otherwise the note gives the value, state or place.
+     ("week to date").
      Then check the PNG for a part of that sub-line peeking out under the
      lift's card. If any of it shows, target the whole item instead.
 
@@ -177,7 +173,7 @@ Each selector must match exactly one element.
 An icon's accessible name is often not what the brief calls it: a badge the
 brief describes by colour and letter may be an `img` whose accessible name
 is `Pinned`, selected as `role=img[name="Pinned"]`, while a different icon
-beside it carries a name that sounds like the brief's words. The same icon also repeats down a page.
+beside it carries a name that sounds like the brief's words.
 Match by what the element is and where it sits, and scope it to its unique
 container. An element in a card's header or toolbar is often not inside the
 container the card's body has: before capturing, take a `browser_snapshot`
@@ -201,15 +197,15 @@ selector from an id, a data attribute or an aria attribute.
   "out": "<board>.png",
   "panels": [
     { "label": "BEFORE", "capture": "<board>.c1.capture.json",
-      "marks": [ { "empty": "chart", "text": "Nothing rendered here" } ] },
+      "marks": [ { "empty": "chart", "text": "Nothing rendered here", "title": "Sales chart", "note": "One line" } ] },
     { "label": "AFTER", "capture": "<board>.c2.capture.json",
       "marks": [
         { "lift": "status", "title": "Short label", "note": "One line", "tag": "CHANGED" },
         { "lift": ["owner", "role"], "title": "One point, two elements", "note": "One line" },
         { "bracket": ["row2", "row3"], "title": "Two rows", "note": "One line" },
-        { "loupe": "badge", "zoom": 4, "title": "Tiny badge" },
+        { "loupe": "badge", "zoom": 4, "title": "Tiny badge", "note": "One line" },
         { "link": ["total", "rowTotal"], "title": "Same number, two places" },
-        { "ghost": "gap", "tag": "REMOVED", "title": "Export is gone" },
+        { "ghost": "gap", "tag": "REMOVED", "title": "Export is gone", "note": "One line" },
         { "redact": "email" }
       ] }
   ]
@@ -228,9 +224,9 @@ selector from an id, a data attribute or an aria attribute.
 - Every key a mark names must be in that panel's capture `boxes`.
 - Every mark but `redact` and `context` takes an optional `title`, `note`
   (one line) and `tag`: `NEW`, `CHANGED`, `REMOVED`, `ISSUE`, `PENDING` or
-  `OK`. A `lift` outside `steps` needs a `title` and a `note`, `bracket`
-  and `link` a `title`. `ISSUE` goes only on a problem;
-  a neutral fact gets no tag, or `OK`.
+  `OK`. Outside `steps`, a `lift`, `loupe`, `ghost` or `empty` needs a
+  `title` and a `note`; `bracket` and `link` always need a `title`. `ISSUE`
+  goes only on a problem; a neutral fact gets no tag, or `OK`.
 - Any panel may take a `tag` (one of the same tags) and a `note` (one line),
   drawn in its head after its `label`.
 
@@ -300,8 +296,9 @@ where the thing is absent, target the element inside that region at the spot
 where the thing sits on the other page (the heading or block there, or the
 card the thing would sit in), not a tab or label in the strip both pages
 share, and never one outside the frame. Mark that element with a `lift`
-whose `title` says the thing is not there, or the wash covers the whole
-panel and nothing says what it shows; a heading, block or card lifted here
+whose callout says the thing is not there and where it would sit, or the
+wash covers the whole panel and nothing says what it shows; a heading,
+block or card lifted here
 is the one exception to lifting the whole fact. In a pair that shows a thing
 absent on one side and present on the other, both sides carry a mark: the
 absence (`empty`, `ghost`, or that `lift`) and the presence (a `lift`).
@@ -329,15 +326,17 @@ capture again with the same selectors and the same frame selector.
 
 - **One mark per point in the brief, and no others, redactions and
   `context` aside.** The board's `title` says what the board proves. Every
-  `lift` outside `steps` gets a callout: a `title` naming the record, field
-  or control in a few words ("Delivery van", "Ada's invoice"), and a `note`
-  giving what that title does not: the value, the state, or where on the
-  page it is ("On the fleet plan", "Open tab under Invoices"). `bracket` and
-  `link` always take a `title`. A label may name what the board's title
-  names, but never copies its sentence or the tag, never quotes the lifted
-  words (except a value the page wraps, see step 3, or a status a header or
-  card shows, see the next rule), never uses an abbreviation the page does
-  not explain, and never describes the board's layout ("separate point").
+  `lift`, `loupe`, `ghost` and `empty` outside `steps` gets a callout: a
+  `title` naming the record, field or control in a few words ("Delivery
+  van", "Ada's invoice"), and a `note` giving what that title does not: the
+  value, the state, or where on the page it is ("On the fleet plan", "Open
+  tab under Invoices"). An `empty` keeps its `text`, drawn inside the blank
+  to say what is missing; compose drops it when it does not fit, so then say
+  it in the `note`. A label may name what the board's title names, but never
+  copies its sentence or the tag, never quotes the lifted words (except a
+  value the page wraps, see step 3, or a status a header or card shows, see
+  the next rule), never uses an abbreviation the page does not explain, and
+  never describes the board's layout ("separate point").
 - **Lift the whole fact, not its header or card, unless the brief names
   that header, row or card itself, or a status it shows.** Then mark that
   thing with its status in it, not a chip inside it. For a status ("the
@@ -365,7 +364,7 @@ capture again with the same selectors and the same frame selector.
   for the smallest row, column or card that holds it. The frame is the region
   round the target, so the marks and their context fill most of it. A tiny
   target at the edge of a wide card gets a frame on its row or column, not
-  the card; the board's title already says which screen it is.
+  the card.
 - Elements that make one point can share a `lift` as a key list. Compose
   lifts adjacent ones together and separated ones as separate lifts under
   one label. Use `link` when the point is that two places agree. Two places
@@ -417,7 +416,7 @@ This is the one place you write coordinates.
 { "capture": "<board>.c1.capture.json",
   "frame": [x, y, w, h],
   "boxes": { "chart": [x, y, w, h], "email": [x, y, w, h] },
-  "marks": [ { "empty": "chart", "text": "Nothing rendered here" }, { "redact": "email" } ] }
+  "marks": [ { "empty": "chart", "text": "Nothing rendered here", "title": "Sales chart", "note": "One line" }, { "redact": "email" } ] }
 ```
 
    The whole image is `[0, 0, width, height]`, and is almost never the right
