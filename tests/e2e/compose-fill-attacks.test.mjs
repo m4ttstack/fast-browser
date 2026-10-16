@@ -1,6 +1,6 @@
 // Every reviewer attack set on an imported redaction fill (helpers/fill-attacks.mjs), run whole. A case passes when
-// its value is hidden, its board is refused, or its board warns that ink is left past the fill; a silent case, a
-// written board showing the value with no such warning, fails. Each set's size is pinned so none can shrink.
+// its value is hidden or its board is refused; a written board showing any pixel of the value fails, whatever it
+// warns. Each set's size is pinned so none can shrink.
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
@@ -15,7 +15,7 @@ const skip = renderer ? false : 'skipped by FAST_BROWSER_SKIP_COMPOSE_E2E=1';
 const geometrySource = await readFile(new URL('../../lib/compose/page-geometry.js', import.meta.url), 'utf8');
 
 const sizes = (results) => results.reduce((n, r) => ({ ...n, [r.set]: (n[r.set] ?? 0) + 1 }), {});
-const silent = (results) => results.filter((r) => verdictOf(r) === 'silent').map((r) => `${r.set} ${r.name}: ${r.bare} px`).sort();
+const bare = (results) => results.filter((r) => verdictOf(r) === 'bare').map((r) => `${r.set} ${r.name}: ${r.bare} px`).sort();
 
 // The cases run on SHARDS browsers side by side: the pixel reading is the cost, and each browser reads on its own.
 const SHARDS = 6;
@@ -27,7 +27,7 @@ async function probe(sets) {
     const browser = await chromium.launch({ headless: true, executablePath: renderer.executablePath });
     try { return await runFillProbes({ browser, cases: shard, geometrySource }); } finally { await browser.close(); }
   }));
-  return results.flat().map((r) => ({ ...r, warned: r.capped > 0 || r.near > 0 }));
+  return results.flat();
 }
 
 const GROUND = {
@@ -37,10 +37,10 @@ const GROUND = {
   G3mixed: 24, Hpitch: 168, Hthree: 36, Hlabellh: 36, Hvaluelh: 48, Hcaps: 108,
 };
 
-test('an imported fill hides, refuses or truthfully warns on every case of the white-ground attack sets', { skip }, async () => {
+test('an imported fill hides the value or refuses the board on every case of the white-ground attack sets', { skip }, async () => {
   const results = await probe(Object.keys(GROUND));
   assert.deepEqual(sizes(results), GROUND, 'every case of every set ran');
-  assert.deepEqual(silent(results), [], 'no written board shows its value without a warning that ink is left');
+  assert.deepEqual(bare(results), [], 'no written board shows a pixel of its value');
   assert.deepEqual(results.filter((r) => !r.holds).map((r) => `${r.set} ${r.name}`), [], 'no fill is smaller than the 12 px pad\'s');
 });
 
@@ -50,16 +50,16 @@ const DECORATED = {
   F2startlink: 384, F3phrase: 192, F4border: 120,
 };
 
-test('an imported fill hides, refuses or truthfully warns on every case of the underline, rule and border attack sets', { skip }, async () => {
+test('an imported fill hides the value or refuses the board on every case of the underline, rule and border attack sets', { skip }, async () => {
   const results = await probe(Object.keys(DECORATED));
   assert.deepEqual(sizes(results), DECORATED, 'every case of every set ran');
-  assert.deepEqual(silent(results), [], 'no written board shows its value without a warning that ink is left');
+  assert.deepEqual(bare(results), [], 'no written board shows a pixel of its value');
   assert.deepEqual(results.filter((r) => !r.holds).map((r) => `${r.set} ${r.name}`), [], 'no fill is smaller than the 12 px pad\'s');
 });
 
 const BOARDS = { run: 4, run3: 7, run6: 30, run7: 39, run8: 30, run9: 24, run10: 18, run11: 4, run12: 8, run13: 5, run14: 3, run15: 3, e1: 3 };
 
-test('a composed board hides, refuses or truthfully warns on every imported attack page', { skip }, async () => {
+test('a composed board hides the value or is refused on every imported attack page', { skip }, async () => {
   const { chromium } = await import(renderer.playwrightCore);
   const browser = await chromium.launch({ headless: true, executablePath: renderer.executablePath });
   const scenes = boardAttackScenes();
@@ -71,7 +71,7 @@ test('a composed board hides, refuses or truthfully warns on every imported atta
     }));
   } finally { await browser.close(); }
   assert.deepEqual(sizes(results), BOARDS, 'every page of every set was composed');
-  assert.deepEqual(silent(results), [], 'no written board shows its value without a warning that ink is left');
+  assert.deepEqual(bare(results), [], 'no written board shows a pixel of its value');
 });
 
 const fuzz = (kind, seed, parts) => Promise.all(Array.from({ length: parts }, (_, part) => new Promise((resolve, reject) => {

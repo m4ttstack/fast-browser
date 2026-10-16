@@ -420,8 +420,8 @@ export function fillAttackCases() {
   return cases;
 }
 
-// Written, refused, or warned in words that say ink is left: never silent.
-export const verdictOf = (r) => (r.bare === 0 ? 'hidden' : r.refused ? 'refused' : r.warned ? 'warned' : 'silent');
+// Hidden, or refused: a written board shows no pixel of the value, warned or not.
+export const verdictOf = (r) => (r.bare === 0 ? 'hidden' : r.refused ? 'refused' : 'bare');
 
 // Whole pages, imported at 1x, 2x or 3x and composed. `box` names the element the redact box is drawn round (the
 // first line of its text with `firstText`, its first `firstLines` 20 px lines, or set `off` it as below), grown by a
@@ -537,8 +537,6 @@ function boxFor(rect, { off, gap }, d) {
   }
 }
 
-const TRUTHFUL = /with ink still at its|stopped at a gap with more ink/;
-
 // Imports the scene's page, composes a board that redacts its value, and counts the value's pixels the board shows:
 // each pixel inside the drawn frame whose centre, carried onto the board, lies under no rect the board paints.
 export async function runBoardScene({ browser, renderer, scene }) {
@@ -582,15 +580,15 @@ export async function runBoardScene({ browser, renderer, scene }) {
     try {
       ({ warnings } = await compose({ command: 'compose', spec: specPath }, { ...options, renderBoard: async (args) => { const r = await renderBoard(args); layout = r.report; return r; } }));
     } catch (error) {
-      // A box the spec places outside its frame is refused before any fill is drawn.
-      if (error.name === 'LifecycleError' && /Draw that redact box over the whole value|the value's ink runs into the board|has a box outside the frame/.test(error.message)) {
-        return { set: scene.set, name: scene.name, refused: true, bare: await valueInk(browser, shown, hidden, null), warned: false, warnings: [error.message] };
+      // A board refused for a redaction, or for a box the spec places outside its frame, is never written.
+      if (error.name === 'LifecycleError' && /^a redaction on panel|^a redact mark on panel|has a box outside the frame/.test(error.message)) {
+        return { set: scene.set, name: scene.name, refused: true, bare: await valueInk(browser, shown, hidden, null), warnings: [error.message] };
       }
       throw error;
     }
     const panel = layout.panels[0];
     const bare = await valueInk(browser, shown, hidden, { frame: panel.frame, capture: panel.capture, painted: panel.redactions.flatMap((r) => r.rects) });
-    return { set: scene.set, name: scene.name, refused: false, bare, warned: warnings.some((w) => TRUTHFUL.test(w)), warnings };
+    return { set: scene.set, name: scene.name, refused: false, bare, warnings };
   } finally { await rm(home, { recursive: true, force: true }); }
 }
 
