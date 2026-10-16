@@ -191,13 +191,15 @@ export function fillProbeHardCases() {
 }
 
 // Cells drawn many to a page and cut apart: 400 by 120 CSS px with the value at 60, 40 for the first sets, 500 by
-// 160 for the hard ones.
+// 160 for the hard ones. A case may take fewer `rows` to a page, so a tall cell keeps the page small enough to decode.
 const COLUMNS = 6;
 const ROWS = 8;
 const HIDE = '.hide .vv,.hide .vv *{color:transparent!important;text-decoration-color:transparent!important;border-color:transparent!important}';
+// A case marked `glyphs` counts only its value's glyphs as the value: its decorations stay in the hidden draw.
+const HIDE_GLYPHS = '.glyphs .vv,.glyphs .vv *{color:transparent!important}';
 const sheet = (cell, bodies, hide) => `<!doctype html><meta charset=utf-8><style>body{margin:0;background:#fff;${FONT}}
-.c{position:absolute;width:${cell[0]}px;height:${cell[1]}px;overflow:hidden}.v{position:absolute;left:60px;top:40px;line-height:20px}${HIDE}</style>
-${bodies.map((body, i) => `<div class="c${hide ? ' hide' : ''}" style="left:${(i % COLUMNS) * cell[0]}px;top:${Math.floor(i / COLUMNS) * cell[1]}px">${body}</div>`).join('')}`;
+.c{position:absolute;width:${cell[0]}px;height:${cell[1]}px;overflow:hidden}.v{position:absolute;left:60px;top:40px;line-height:20px}${HIDE}${HIDE_GLYPHS}</style>
+${bodies.map((body, i) => `<div class="c${hide ? ` ${hide[i]}` : ''}" style="left:${(i % COLUMNS) * cell[0]}px;top:${Math.floor(i / COLUMNS) * cell[1]}px">${body}</div>`).join('')}`;
 const asBody = ({ style, text }) => `<span class=v style="${style}">${text}</span>`;
 
 // For every case: the pixels of its value its fill leaves bare, under `fill` (importFill) and under the 1x pad alone
@@ -208,14 +210,15 @@ export async function runFillProbes({ browser, geometrySource, cases = fillProbe
   const results = [];
   const normal = cases.map((c) => (c.cell ? c : { ...c, cell: [400, 120], measure: asBody(c.measure), shown: asBody(c.shown) }));
   try {
-    for (const key of [...new Set(normal.map((c) => `${c.dpr} ${c.cell} ${Boolean(c.masked)}`))]) {
-      const group = normal.filter((c) => `${c.dpr} ${c.cell} ${Boolean(c.masked)}` === key);
-      const { dpr, cell, masked } = group[0];
-      const page = await browser.newPage({ viewport: { width: cell[0] * COLUMNS, height: cell[1] * ROWS }, deviceScaleFactor: dpr });
-      for (let from = 0; from < group.length; from += COLUMNS * ROWS) {
-        const batch = group.slice(from, from + COLUMNS * ROWS);
+    const groupOf = (c) => `${c.dpr} ${c.cell} ${Boolean(c.masked)} ${c.rows ?? ROWS}`;
+    for (const key of [...new Set(normal.map(groupOf))]) {
+      const group = normal.filter((c) => groupOf(c) === key);
+      const { dpr, cell, masked, rows = ROWS } = group[0];
+      const page = await browser.newPage({ viewport: { width: cell[0] * COLUMNS, height: cell[1] * rows }, deviceScaleFactor: dpr });
+      for (let from = 0; from < group.length; from += COLUMNS * rows) {
+        const batch = group.slice(from, from + COLUMNS * rows);
         const shots = [];
-        for (const [part, hide] of [['measure', false], ['shown', false], ...(masked ? [['shown', true]] : [])]) {
+        for (const [part, hide] of [['measure', null], ['shown', null], ...(masked ? [['shown', batch.map((c) => (c.glyphs ? 'glyphs' : 'hide'))]] : [])]) {
           await page.setContent(sheet(cell, batch.map((c) => c[part]), hide));
           shots.push((await page.screenshot({ type: 'png' })).toString('base64'));
         }
@@ -256,7 +259,7 @@ export async function runFillProbes({ browser, geometrySource, cases = fillProbe
               if (!inside(x, y, pad)) padBare += 1;
             }
             const holds = fill.rects.some(([fx, fy, fw, fh]) => fx <= pad[0] && fy <= pad[1] && fx + fw >= pad[0] + pad[2] && fy + fh >= pad[1] + pad[3]);
-            return { box, rect: [...fill.rect], rects: fill.rects.map((rect) => [...rect]), bare: left, unseen, padBare, holds, grew: fill.grew, capped: fill.capped.length, extended: fill.extended.length, spared: fill.spared.length, refused: fill.capped.some((c) => c.refuse) };
+            return { box, rect: [...fill.rect], rects: fill.rects.map((rect) => [...rect]), bare: left, unseen, padBare, holds, grew: fill.grew, capped: fill.capped.length, extended: fill.extended.length, spared: fill.spared.length, near: fill.near.length, refused: fill.capped.some((c) => c.refuse) };
           });
         }, { shots, adjusts: batch.map((c) => c.adjust ?? [0, 0, 0, 0]), places: batch.map((c) => c.place ?? null), dpr, cell, columns: COLUMNS });
         batch.forEach((c, i) => results.push({ set: c.set, name: c.name, ...found[i] }));
