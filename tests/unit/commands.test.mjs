@@ -881,6 +881,7 @@ test('doctor real composition accepts complete injected platform adapters with n
       hasToken: async () => true,
       checkDataPermissions: async () => {},
       rendererVersion: async () => 'rsvg-convert version 2.62.1',
+      gifRendererVersion: async () => 'ffmpeg version 7.1',
       openMcpTransport: async () => ({
         request: async (message) => (
           message.method === 'initialize'
