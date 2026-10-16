@@ -1,0 +1,50 @@
+name: test
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: package.json
+          cache: npm
+      - run: npm ci
+      # The plugin-install integration test drives the real host CLIs, and the
+      # annotate e2e renders with rsvg-convert.
+      - run: npm install --global @anthropic-ai/claude-code@2.1.301 @openai/codex@0.160.0
+      - run: sudo apt-get update && sudo apt-get install --yes librsvg2-bin
+      - run: npm test
+
+  compose:
+    # runtime-lock.json pins the compose renderer for macOS only, and the
+    # fixture goldens are macOS renders.
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: package.json
+          cache: npm
+      - run: npm ci
+      - run: node .github/scripts/install-compose-deps.mjs
+      - run: npm run test:compose
