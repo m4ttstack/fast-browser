@@ -1114,15 +1114,19 @@ test('composing-evidence states the compose contract and the blind-run lessons',
   assert.match(text, phrase('a small target is framed on its row or column instead \\(see Marks\\)'));
   // Blind runs paraphrased the field in the board title.
   assert.match(text, phrase("The board title uses the page's own words for the field it proves"));
-  // A status-line lift named after the record repeats a board title that names it.
-  assert.match(text, phrase("Leave that lift bare when the board title names the record"));
+  // Bare lifts lost the callouts reviewers read: a title naming the thing and a note with its state.
+  assert.match(text, phrase('Every `lift` outside `steps` gets a callout: a `title` naming the record, field or control in a few words'));
+  assert.match(text, phrase('and a `note` giving what that title does not: the value, the state, or where on the page it is'));
+  assert.match(text, phrase('A `lift` outside `steps` needs a `title` and a `note`'));
+  assert.doesNotMatch(text, phrase("Leave that lift bare"));
+  assert.doesNotMatch(text, /goes\s+bare/);
   // Boards titled with the record and section name left the claim to the labels.
   assert.match(text, phrase('The board title states the fact the board proves, as a short sentence'));
-  // Two whole headers lifted with tag-only labels left the reader hunting for the status.
-  assert.match(text, phrase("When two or more headers or cards each show a status the brief asks about, lift each one's status line with its icon"));
-  // A title that named the records made every record: status label trip the wording warning.
-  assert.match(text, phrase('The board title then names the field, not the records or their values'));
-  assert.match(text, phrase('lift each one\'s status line with its icon, never the whole header or card'));
+  // A status line lifted alone faded out whose status it was; the whole record row kept it.
+  assert.match(text, phrase("lift the smallest header or card row that holds the record's name, tag or picture and the status with its icon, never the status line alone"));
+  assert.match(text, phrase('With two or more such records, the board title states each fact'));
+  assert.doesNotMatch(text, phrase("lift each one's status line with its icon"));
+  assert.doesNotMatch(text, phrase('The board title then names the field'));
   assert.doesNotMatch(text, phrase('never the whole headers'));
   assert.doesNotMatch(text, phrase("When two or more headers each show that status"));
   // A note quoted a cut-short sub-line and drew the eye to noise.
@@ -1148,11 +1152,15 @@ test('composing-evidence states the compose contract and the blind-run lessons',
   assert.doesNotMatch(text, phrase('not optional: a report that names a thin strip names its retry too'));
   assert.match(text, phrase("report the case as not done and do not give that board's path as a result"));
   // The exceptions cover the lifted words only; a label that repeats the title still warns.
-  assert.match(text, phrase("A label never repeats the board's title or the tag. It never repeats the lifted words either, except a value the page wraps"));
+  assert.match(text, phrase("never copies its sentence or the tag, never quotes the lifted words \\(except a value the page wraps"));
   assert.doesNotMatch(text, phrase("never repeats the board's title, the tag or the lifted words, except"));
   assert.match(text, phrase('lifted words \\(see Marks for the exceptions\\)'));
   assert.doesNotMatch(text, phrase('unless it names a status two or more headers show'));
-  assert.match(text, phrase("Reword the label or the board title so the label says what the title does not"));
+  // Drivers cleared the warning by making the board title vaguer.
+  assert.match(text, phrase("Reword the label so it says what the title does not"));
+  assert.match(text, phrase("never weaken the board title: it keeps stating the fact"));
+  assert.doesNotMatch(text, phrase("Reword the label or the board title"));
+  assert.match(text, phrase('\\("Sprint 4, Release panel"\\) or how an element looks'));
   assert.doesNotMatch(text, phrase("rewrite or drop that label's line"));
   // Step 7 pointed at itself.
   assert.match(text, phrase('unless cut short or meaningless alone; see below'));
@@ -1170,11 +1178,11 @@ test('composing-evidence states the compose contract and the blind-run lessons',
   // A board titled after one of its two facts left the second lift a label
   // that described the layout ("Separate summary point").
   assert.match(text, phrase('When the board proves more than one fact, the title states each of them'));
-  assert.match(text, phrase('and a lift whose fact the title states goes bare'));
-  assert.match(text, phrase('Status lines on two or more headers are the one exception: there the title names the field'));
-  assert.match(text, phrase('it never describes the layout \\("separate point", "second item"\\)'));
-  assert.match(text, phrase("A `lift` whose fact the board's title states goes bare"));
-  assert.match(text, phrase('or that describes the layout'));
+  assert.match(text, phrase('and so does a board of two or more records\' statuses'));
+  assert.doesNotMatch(text, phrase('there the title names the field'));
+  assert.match(text, phrase('never describes the board\'s layout \\("separate point"\\)'));
+  assert.match(text, phrase("or that describes the board's layout, so it adds what the title does not; never leave a lift without its callout"));
+  assert.doesNotMatch(text, phrase('Delete any label line'));
   assert.doesNotMatch(text, phrase("already states may go without a label"));
   // A lift that left its sub-line out still showed the sub-line's top under the card.
   assert.match(text, phrase("check the PNG for a part of that sub-line peeking out under the lift's card. If any of it shows, target the whole item instead"));
@@ -1189,30 +1197,25 @@ test('composing-evidence states the compose contract and the blind-run lessons',
   assert.match(body.slice(0, 900), /composing-evidence/);
 });
 
-// A title that named the records ("Atlas and Birch show ...") made every
-// "Atlas: Budget approved" label trip compose's wording check, and the
-// warning then told the driver to drop the label. The skill's own example
-// title and label must pass that check.
-test('composing-evidence: its multi-header example passes the wording check', async () => {
+// A short callout may name the record or status the board title states; a
+// label that copies the board title must still warn.
+test('composing-evidence: its record-status example matches the wording check', async () => {
   const text = await readFile(path.join(pluginRoot, 'skills/composing-evidence/SKILL.md'), 'utf8');
   const flat = text.replace(/\s+/g, ' ');
-  const label = flat.match(/in the page's words \("([^"]+)"\)/)?.[1];
-  const title = flat.match(/names the field, not the records or their values \("([^"]+)"\)/)?.[1];
-  assert.equal(label, 'Atlas: Budget approved');
-  assert.equal(title, 'The two projects show different budget states');
+  const calloutTitle = flat.match(/Its `title` names the record \("([^"]+)"\)/)?.[1];
+  const calloutNote = flat.match(/gives the status in the page's words \("([^"]+)"\)/)?.[1];
+  const title = flat.match(/the board title states each fact \("([^"]+)"\)/)?.[1];
+  assert.equal(calloutTitle, 'Atlas project');
+  assert.equal(calloutNote, 'Budget approved');
+  assert.equal(title, "Atlas has its budget approved; Borealis's budget is pending");
 
   const sandbox = {};
   vm.runInNewContext(await readFile(path.join(pluginRoot, 'lib/compose/wording.js'), 'utf8'), sandbox);
   const { wordingWarnings } = sandbox.__composeWording;
-  const spec = {
-    title,
-    panels: [{ marks: [
-      { lift: 'atlasBudget', title: label },
-      { lift: 'birchBudget', title: 'Birch: Budget unknown' },
-    ] }],
-  };
-  assert.deepEqual([...wordingWarnings(spec, [{ source: 'live' }])], []);
-  // The title the skill steers away from does warn, so the check is live.
-  const namedRecords = { ...spec, title: 'Atlas and Birch show different budget states' };
-  assert.deepEqual([...wordingWarnings(namedRecords, [{ source: 'live' }])], ["a label repeats the board's title"]);
+  const check = (marks) => [...wordingWarnings({ title, panels: [{ marks }] }, [{ source: 'live' }])];
+  assert.deepEqual(check([
+    { lift: 'atlasCard', title: calloutTitle },
+    { lift: 'borealisCard', title: 'Borealis project' },
+  ]), []);
+  assert.deepEqual(check([{ lift: 'atlasCard', title: 'Atlas has its budget approved' }]), ["a label repeats the board's title"]);
 });

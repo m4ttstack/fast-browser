@@ -112,7 +112,7 @@ you never place anything by pixel.
    | `a panel is drawn small; frame the card that holds its marks` | The panel shows too much to read at its size. In a `pair`, capture that panel again with a tighter `frame` selector (in a `pair` of one region, capture both panels again on the same tighter region, with one selector where one names it on both pages; for a ticket image, shrink the panel's `frame` rectangle instead). A `steps` panel is already cropped to its marks, so there mark fewer things in the panel, or things closer together. |
    | `a lift hides content beside it` | The lifted card covers content on some side of its target that compose could not take in. Read the board for what is hidden. If the fact needs it, target the element that holds both; if not, target an element that stands clear of it. |
    | `a crop edge cuts through content` | A `steps` panel was cut at its marks' margin on a busy page. Check that the cut hides nothing the step needs; if it does, mark the element it cuts as well. |
-   | `a label repeats the board's title` | Reword the label or the board title so the label says what the title does not. For status lines on several headers, the title names the field, not the records or their values (see Marks). |
+   | `a label repeats the board's title` | A label copies the board title. Reword the label so it says what the title does not (see Marks). Never delete a lift's callout, and never weaken the board title: it keeps stating the fact. |
    | `a panel label repeats where the image came from` | Rename that panel's `label` (see step 7). |
    | `a redact mark on panel <n> lies outside the board, so it hides nothing` | That value is already cropped out; drop the mark. |
 
@@ -140,25 +140,25 @@ you never place anything by pixel.
    done rather than present a board that points at the wrong thing.
 
    Then check the words:
-   - Delete any label line that repeats the board title, the tag or the
-     lifted words (see Marks for the exceptions), or that describes the
-     layout.
+   - Reword a label that copies the board title, the tag or the lifted
+     words (see Marks for the exceptions), or that describes the board's
+     layout, so it adds what the title does not; never leave a lift without
+     its callout.
    - The board title states the fact the board proves, as a short sentence:
      "Sprint 4 is Ready for review", never the record and the section that
-     holds it ("Sprint 4, Release panel"). When the board proves more than
-     one fact, the title states each of them ("Sprint 4 is Ready for review
-     and due Mar 4"), and a lift whose fact the title states goes bare.
-     Status lines on two or more headers are the one exception: there the
-     title names the field (see Marks). The board title uses the page's
-     own words for the field it proves: "Ready for review", not a paraphrase
-     such as "awaiting review".
+     holds it ("Sprint 4, Release panel") or how an element looks. When the
+     board proves more than one fact, the title states each of them
+     ("Sprint 4 is Ready for review and due Mar 4"), and so does a board of
+     two or more records' statuses (see Marks). The board title uses the
+     page's own words for the field it proves: "Ready for review", not a
+     paraphrase such as "awaiting review".
    - A pair's panel `label` says what the panel shows, never where the image
      came from. Compose labels a ticket image itself.
    - A fact whose sub-line is cut short or means nothing alone is lifted
      without it: target the line's own element, with its icon, so the lift
-     leaves the sub-line out. No label quotes that sub-line. Give the lift a
-     `note` about it only when the note can say in plain words what it
-     means ("week to date"); a sub-line you cannot explain gets no note.
+     leaves the sub-line out. No label quotes that sub-line. The lift's
+     `note` mentions it only when it can say in plain words what it means
+     ("week to date"); otherwise the note gives the value, state or place.
      Then check the PNG for a part of that sub-line peeking out under the
      lift's card. If any of it shows, target the whole item instead.
 
@@ -205,7 +205,7 @@ selector from an id, a data attribute or an aria attribute.
     { "label": "AFTER", "capture": "<board>.c2.capture.json",
       "marks": [
         { "lift": "status", "title": "Short label", "note": "One line", "tag": "CHANGED" },
-        { "lift": ["owner", "role"], "title": "One point, two elements" },
+        { "lift": ["owner", "role"], "title": "One point, two elements", "note": "One line" },
         { "bracket": ["row2", "row3"], "title": "Two rows", "note": "One line" },
         { "loupe": "badge", "zoom": 4, "title": "Tiny badge" },
         { "link": ["total", "rowTotal"], "title": "Same number, two places" },
@@ -228,7 +228,8 @@ selector from an id, a data attribute or an aria attribute.
 - Every key a mark names must be in that panel's capture `boxes`.
 - Every mark but `redact` and `context` takes an optional `title`, `note`
   (one line) and `tag`: `NEW`, `CHANGED`, `REMOVED`, `ISSUE`, `PENDING` or
-  `OK`. `bracket` and `link` need a `title`. `ISSUE` goes only on a problem;
+  `OK`. A `lift` outside `steps` needs a `title` and a `note`, `bracket`
+  and `link` a `title`. `ISSUE` goes only on a problem;
   a neutral fact gets no tag, or `OK`.
 - Any panel may take a `tag` (one of the same tags) and a `note` (one line),
   drawn in its head after its `label`.
@@ -306,8 +307,9 @@ absent on one side and present on the other, both sides carry a mark: the
 absence (`empty`, `ghost`, or that `lift`) and the presence (a `lift`).
 
 Lifts in one row of panels target the same kind of element on each panel,
-so they frame the same parts: both the whole header row, or both its status
-line. A part only one panel has does not change which element you lift.
+so they frame the same parts: both the card row that holds the record's
+name and its status, or both the line that states the fact. A part only one
+panel has does not change which element you lift.
 
 For `LIGHT` and `DARK`, capture, switch the app's own theme control, and
 capture again with the same selectors and the same frame selector.
@@ -326,46 +328,44 @@ capture again with the same selectors and the same frame selector.
 | keep an element in a `steps` crop without drawing on it: what identifies the record, when it sits about one card from the step's mark | `context` (keys only, no words) |
 
 - **One mark per point in the brief, and no others, redactions and
-  `context` aside.** The board's `title` says what the board proves. A
-  mark's label (its `title` and `note`) says what the mark shows that the
-  board's title does not: where the page states it, the value, the state,
-  what changed. A label never repeats the board's title or the tag. It never
-  repeats the lifted words either, except a value the page wraps (see step
-  3) or a status two or more headers show (see the next rule). It never uses
-  an abbreviation the page does not explain, and it never describes the
-  layout ("separate point", "second item"). A `lift` whose fact the board's
-  title states goes bare; `bracket` and `link` always take one.
+  `context` aside.** The board's `title` says what the board proves. Every
+  `lift` outside `steps` gets a callout: a `title` naming the record, field
+  or control in a few words ("Delivery van", "Ada's invoice"), and a `note`
+  giving what that title does not: the value, the state, or where on the
+  page it is ("On the fleet plan", "Open tab under Invoices"). `bracket` and
+  `link` always take a `title`. A label may name what the board's title
+  names, but never copies its sentence or the tag, never quotes the lifted
+  words (except a value the page wraps, see step 3, or a status a header or
+  card shows, see the next rule), never uses an abbreviation the page does
+  not explain, and never describes the board's layout ("separate point").
 - **Lift the whole fact, not its header or card, unless the brief names
-  that header, row or card itself, not a status it shows.** Then mark that
-  thing with its status in it, not a chip inside it. A brief about a status
-  that a header or card shows ("the card shows it is overdue") is about the
-  status: lift the status line itself, with its icon. Leave that lift bare
-  when the board title names the record; give it the record's name as its
-  `title` only when the board title does not. When two or more headers or
-  cards each show a status the brief asks about, lift each one's status
-  line with its icon, never the whole header or card. Give each lift a
-  `title` that names its record and that status in the page's words
-  ("Atlas: Budget approved"), never the record's tag or code. The board
-  title then names the field, not the records or their values ("The two
-  projects show different budget states"), so no label repeats it. Otherwise
-  target the element that states the fact, with the icon or tick that
-  belongs to it: the words "Deploy approved" and their tick, not the header
-  or card they sit in, and not one word of the phrase. A fact with a
-  sub-line under it is one item: target the element that holds the icon, the
-  line and the sub-line, not the first line alone (a sub-line cut short or
-  meaningless alone is the exception; see step 7), and check in a scoped
-  snapshot that the selector names that container. A row that holds only
-  that fact is fine to select: compose tightens a lift to its words and
-  takes in a tick or icon that leads the line. A heading or field name right
-  beside the fact stays in the crop without a lift, so leave it out; only a
-  `link` takes it in (see Layouts). When the brief names a small element (a
-  badge, icon or chip), mark that element alone and leave its neighbours
-  out. A `lift` is not a magnifier; for something too small to read, use
-  `loupe`. Capture a small target with a `frame` selector for the smallest
-  row, column or card that holds it. The frame is the region round the
-  target, so the marks and their context fill most of it. A tiny target at
-  the edge of a wide card gets a frame on its row or column, not the card;
-  the board's title already says which screen it is.
+  that header, row or card itself, or a status it shows.** Then mark that
+  thing with its status in it, not a chip inside it. For a status ("the
+  card shows it is overdue"), lift the smallest header or card row that
+  holds the record's name, tag or picture and the status with its icon,
+  never the status line alone, so the board shows whose status it is. Its
+  `title` names the record ("Atlas project"), never by its tag or code
+  alone, and its `note` gives the status in the page's words ("Budget
+  approved"). With two or more such records, the board title states each
+  fact ("Atlas has its budget approved; Borealis's budget is pending"), not
+  just the field. Otherwise target the element that states the fact, with
+  the icon or tick that belongs to it: the words "Deploy approved" and their
+  tick, not the header or card they sit in, and not one word of the phrase.
+  A fact with a sub-line under it is one item: target the element that
+  holds the icon, the line and the sub-line, not the first line alone (a
+  sub-line cut short or meaningless alone is the exception; see step 7), and
+  check in a scoped snapshot that the selector names that container. A row
+  that holds only that fact is fine to select: compose tightens a lift to
+  its words and takes in a tick or icon that leads the line. A heading or
+  field name right beside the fact stays in the crop without a lift, so
+  leave it out; only a `link` takes it in (see Layouts). When the brief
+  names a small element (a badge, icon or chip), mark that element alone and
+  leave its neighbours out. A `lift` is not a magnifier; for something too
+  small to read, use `loupe`. Capture a small target with a `frame` selector
+  for the smallest row, column or card that holds it. The frame is the region
+  round the target, so the marks and their context fill most of it. A tiny
+  target at the edge of a wide card gets a frame on its row or column, not
+  the card; the board's title already says which screen it is.
 - Elements that make one point can share a `lift` as a key list. Compose
   lifts adjacent ones together and separated ones as separate lifts under
   one label. Use `link` when the point is that two places agree. Two places
