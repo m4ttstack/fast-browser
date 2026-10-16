@@ -3430,37 +3430,16 @@ test('steps drawn at one zoom pass the size invariant only where one size would 
   assert.throws(() => assertPanelSizes({ ...row([200, 100]), layout: 'pair' }), /panels differ in height/, 'only steps share a zoom');
 });
 
-// Board px per CSS px at which each lift's card is drawn.
-const liftZooms = (panel) => panel.lifts.map((l) => l.k * (panel.capture[2] / panel.frame[2]) * panel.scale);
-
-test('a lone strip whose lifts are drawn larger on a wider board takes it', { skip }, async () => {
-  // 1300 by 60 CSS px with two lines: at the single width of 640 the frame is drawn at 0.55, 33 px tall, and its
-  // cards fit at 0.82; at 1040 it is drawn at 0.8 and they take the 1.15 they want.
-  const size = [1300, 60];
-  const lines = [[40, 20, 200, 20], [700, 20, 200, 20]];
-  const { report, dir } = await render(spec([{ lift: 'a', title: 'First' }, { lift: 'b', title: 'Second' }, ...holdMarks]),
-    await syntheticCapture({ size, bars: lines, boxes: { a: lines[0], b: lines[1], ...holdBoxes(size) } }));
-  try {
-    assertInvariants(report);
-    const panel = p0(report);
-    assert.deepEqual(panel.frame, [0, 0, ...size], 'the ghosts hold the whole frame');
-    assert.ok(Math.abs(panel.capture[2] - 1040) <= 1, `the strip is drawn ${panel.capture[2]} px wide`);
-    assert.ok(liftZooms(panel).every((z) => z > 1.1), `its cards are drawn at ${liftZooms(panel)}`);
-  } finally { await rm(dir, { recursive: true, force: true }); }
-});
-
-test('a lone strip whose lifts a wider board would draw no larger keeps the single width', { skip }, async () => {
-  // At 1300 by 120 the card takes the 1.15 it wants at 0.55 and at 0.8 alike, so the frame stays at 0.55, 715 wide.
-  // At 1300 by 140 it is no strip.
-  const line = [40, 50, 160, 16];
-  for (const size of [[1300, 120], [1300, 140]]) {
+test('a lone strip is drawn at the width rule of any lone panel', { skip }, async () => {
+  // 1300 CSS px wide, at 60 px tall a strip and at 140 px tall none: each is drawn at MIN_S 0.55, 715 wide.
+  const line = [40, 20, 200, 20];
+  for (const size of [[1300, 60], [1300, 140]]) {
     const { report, dir } = await render(spec([{ lift: 'a', title: 'Line' }, ...holdMarks]), await syntheticCapture({ size, bars: [line], boxes: { a: line, ...holdBoxes(size) } }));
     try {
       assertInvariants(report);
       const panel = p0(report);
       assert.deepEqual(panel.frame, [0, 0, ...size], 'the ghosts hold the whole frame');
       assert.ok(Math.abs(panel.capture[2] - 715) <= 1, `a ${size} frame is drawn ${panel.capture[2]} px wide`);
-      assert.ok(Math.abs(liftZooms(panel)[0] - 1.15) < 0.01, `its card is drawn at ${liftZooms(panel)}`);
     } finally { await rm(dir, { recursive: true, force: true }); }
   }
 });
