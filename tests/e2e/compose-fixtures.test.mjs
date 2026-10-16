@@ -775,8 +775,15 @@ test('an imported fill hides capitals, digits, values wrapped onto several lines
   // A refused board is never written, so what its fill left bare is never shown. A written board shows no pixel
   // of the value, whatever it warns.
   assert.deepEqual(results.filter((r) => r.bare > 0 && !r.refused).map((r) => `${r.set} ${r.name}: ${r.bare} px`), [], 'no written board shows a pixel of its value');
+  // A row spared as the list's may hold a second value, so the board is refused naming it; a case with no row to
+  // spare is written, hidden.
   const list = results.filter((r) => r.set === 'list');
   assert.equal(list.length, 210);
+  const sparing = list.filter((r) => /^(one row of an icon-led list|text that runs right to left|the next row is a second value),/.test(r.name));
+  assert.equal(sparing.length, 60);
+  assert.deepEqual(sparing.filter((r) => !(r.refused && r.whys.includes('row'))).map((r) => r.name), [], 'a row of an icon-led list, either way round, refuses the board for the rows it spares');
+  assert.deepEqual(list.filter((r) => r.refused && !r.whys.includes('row')).map((r) => `${r.name}: ${r.whys}`), [], 'a list case is refused only for a spared row');
+  assert.deepEqual(list.filter((r) => r.name.startsWith('a two-line icon-sized label') && r.refused).map((r) => r.name), [], 'a two-line label beside a two-line value is no list: its board is written');
   assert.deepEqual(results.filter((r) => !r.holds).map((r) => `${r.set} ${r.name}`), [], 'no fill is smaller than the 12 px pad\'s');
   // A box drawn off its value holds no ink of its own, and the 12 px pad alone leaves most of the value bare. One
   // above the value or in its gap is written whole; one short of it on the left meets the value running on past
