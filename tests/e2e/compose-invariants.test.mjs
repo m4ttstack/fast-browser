@@ -3296,12 +3296,21 @@ test('a narrow single frame draws up to 1.25x, so its capture is at least 600 bo
 const textStems = (x, y, width) => Array.from({ length: Math.ceil(width / 3) }, (_, i) => [x + 3 * i, y + (i % 3 === 1 ? 1 : 0), 1, 10 - (i % 3 === 0 ? 0 : 1)]);
 
 test('an imported fill that grows says so, and one that covers a line beside the value to its end names the panel, the mark and the side', { skip }, async () => {
-  const capture = await syntheticCapture({ size: [700, 260], bars: [...textStems(100, 100, 60), ...textStems(100, 118, 480), [100, 160, 60, 20]], boxes: { v: [100, 100, 60, 10], h: [100, 160, 60, 20] } });
+  // The lifted bar stands above the line beside the value, further off than a wrapped line or its first line's tail
+  // reaches.
+  const capture = await syntheticCapture({ size: [700, 260], bars: [...textStems(100, 100, 60), ...textStems(100, 118, 480), [500, 30, 60, 20]], boxes: { v: [100, 100, 60, 10], h: [500, 30, 60, 20] } });
   const { report, dir } = await render(spec([{ lift: 'h', title: 'Heading' }, { redact: 'v' }]), { ...capture, source: 'import' });
   await rm(dir, { recursive: true, force: true });
   assert.ok(report.warnings.includes('a redaction on panel 1 (v) grew to cover ink beside it'), `${report.warnings}`);
   assert.ok(report.warnings.includes("a redaction on panel 1 (v) covered a line beside it to that line's end, past its right edge"), `${report.warnings}`);
   assert.deepEqual(report.unhidden, [], 'a line beside the value is covered to its end, and the board is written');
+});
+
+test('a lifted bar under the value\'s columns, within the reach of its covered line, is never written', { skip }, async () => {
+  // A mark asserts nothing about what its box holds: a bar a lead or two under the value may be its own.
+  const capture = await syntheticCapture({ size: [700, 260], bars: [...textStems(100, 100, 60), ...textStems(100, 118, 480), [100, 160, 60, 20]], boxes: { v: [100, 100, 60, 10], h: [100, 160, 60, 20] } });
+  await assert.rejects(render(spec([{ lift: 'h', title: 'Heading' }, { redact: 'v' }]), { ...capture, source: 'import' }),
+    (error) => error.name === 'LifecycleError' && error.message.startsWith("a redaction on panel 1 (v) met another mark's box"));
 });
 
 test('an imported fill whose own line runs on past its limit is never written', { skip }, async () => {
