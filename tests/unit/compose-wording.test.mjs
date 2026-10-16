@@ -13,19 +13,38 @@ const live = { source: 'live' };
 const imported = { source: 'import' };
 const board = (title, marks, panel = {}) => ({ title, panels: [{ ...panel, marks }] });
 
-test('a note whose words sit inside the title warns', () => {
-  const spec = board('Ana leads the release', [{ lift: 'a', title: 'Owner', note: 'Ana leads it' }]);
-  assert.deepEqual(wordingWarnings(spec, [live]), [TITLE_WARNING]);
+const warns = (title, mark) => wordingWarnings(board(title, [{ lift: 'a', ...mark }]), [live]).includes(TITLE_WARNING);
+
+test('a short callout that names the same record or fact as the title does not warn', () => {
+  const plan = "The leased van is on the fleet plan; the rental van's cover is unknown";
+  assert.equal(warns(plan, { title: 'Leased van (LV)', note: 'Van on plan' }), false);
+  assert.equal(warns('A plan lookup enriched the leased van\'s record', { title: 'Enriched by plan lookup' }), false);
+  assert.equal(warns('Three plan checks sit together on the driver card', { title: 'Plan checks' }), false);
+  assert.equal(warns('The project carries the pinned badge', { title: 'Pinned' }), false);
+  assert.equal(warns('Ana leads the release', { title: 'Owner', note: 'Ana leads it' }), false);
+});
+
+test('a label that copies the title warns', () => {
+  const title = 'Ana leads the release';
+  assert.equal(warns(title, { title }), true, 'the title itself');
+  assert.equal(warns(title, { note: 'ana leads the release.' }), true, 'in another case and with a stop');
+  assert.equal(warns(title, { title: 'Ana leads release' }), true, 'with its article dropped');
+  assert.equal(warns('Ana leads release', { title: 'Ana leads the release' }), true, 'with an article added');
+  assert.equal(warns('Plan checks', { title: 'Plan checks' }), true, 'a short title copied whole');
+});
+
+test('a label of four counted words that runs in the title\'s order warns', () => {
+  const title = "The leased van is on the fleet plan; the rental van's cover is unknown";
+  assert.equal(warns(title, { note: 'Leased van on fleet plan' }), true);
+  assert.equal(warns(title, { note: 'Rental van cover unknown' }), true);
+  assert.equal(warns(title, { note: 'Fleet plan, leased van' }), false, 'out of order');
+  assert.equal(warns(title, { note: 'Leased van on fleet' }), false, 'three counted words');
+  assert.equal(warns(title, { note: 'Leased van on the new fleet plan' }), false, 'a word the title lacks');
 });
 
 test('a repeat in many marks warns once', () => {
-  const spec = board('Ana leads the release', [{ lift: 'a', title: 'Ana leads release' }, { lift: 'b', note: 'The release, Ana leads' }]);
+  const spec = board('Ana leads the release', [{ lift: 'a', title: 'Ana leads release' }, { lift: 'b', note: 'Ana leads the release' }]);
   assert.deepEqual(wordingWarnings(spec, [live]), [TITLE_WARNING]);
-});
-
-test('a note that adds new words does not warn', () => {
-  const spec = board('Ana leads the release', [{ lift: 'a', title: 'Owner', note: 'Since the 3rd' }]);
-  assert.deepEqual(wordingWarnings(spec, [live]), []);
 });
 
 test('a mark with no words or only short words does not warn', () => {

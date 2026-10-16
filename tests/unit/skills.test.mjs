@@ -1217,8 +1217,8 @@ test('composing-evidence: its record-status example matches the wording check', 
   const { wordingWarnings } = sandbox.__composeWording;
   const check = (marks) => [...wordingWarnings({ title, panels: [{ marks }] }, [{ source: 'live' }])];
   assert.deepEqual(check([
-    { lift: 'atlasCard', title: calloutTitle },
-    { lift: 'borealisCard', title: 'Borealis project' },
+    { lift: 'atlasCard', title: calloutTitle, note: calloutNote },
+    { lift: 'borealisCard', title: 'Borealis project', note: 'Budget pending' },
   ]), []);
   assert.deepEqual(check([{ lift: 'atlasCard', title: 'Atlas has its budget approved' }]), ["a label repeats the board's title"]);
 });

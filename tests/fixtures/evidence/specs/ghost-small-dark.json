@@ -1,4 +1,4 @@
 { "state": "FOUND", "title": "The watch toggle is missing from the dark toolbar", "layout": "single", "out": "fx-ghost-small-dark.png",
   "targets": { "gap": "[data-testid=gap]" },
-  "expect": { "hatched": [true], "dark": [true], "slots": [["ghost", null]], "minSlot": 24, "warnings": ["a label repeats the board's title"] },
+  "expect": { "hatched": [true], "dark": [true], "slots": [["ghost", null]], "minSlot": 24, "noWarnings": true },
   "panels": [{ "marks": [ { "ghost": "gap", "title": "Watch toggle is gone" } ] }] }

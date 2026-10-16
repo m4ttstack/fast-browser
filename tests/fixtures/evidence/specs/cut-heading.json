@@ -1,4 +1,4 @@
 { "state": "AFTER", "title": "The record shows a pending chip", "layout": "single", "out": "fx-cut-heading.png",
   "targets": { "chip": "[data-testid=chip]" }, "frame": "[data-testid=panel]",
-  "expect": { "cropped": true, "warnings": ["a label repeats the board's title"], "cropEdges": { "left": "frame", "top": "snapped", "right": "frame", "bottom": "snapped" } },
+  "expect": { "cropped": true, "noWarnings": true, "cropEdges": { "left": "frame", "top": "snapped", "right": "frame", "bottom": "snapped" } },
   "panels": [{ "marks": [ { "lift": "chip", "title": "Pending", "note": "A heading line runs across the whole card" } ] }] }
