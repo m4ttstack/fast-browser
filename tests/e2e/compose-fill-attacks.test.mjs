@@ -57,6 +57,15 @@ test('an imported fill hides the value or refuses the board on every case of the
   assert.deepEqual(results.filter((r) => !r.holds).map((r) => `${r.set} ${r.name}`), [], 'no fill is smaller than the 12 px pad\'s');
 });
 
+const LISTS = { EMoji: 3360, H1hang: 90, E1blank: 180, W2real: 1800, W3flex: 945, L1far: 270 };
+
+test('an imported fill hides the value or refuses the board on every case of the list and slot attack sets', { skip }, async () => {
+  const results = await probe(Object.keys(LISTS));
+  assert.deepEqual(sizes(results), LISTS, 'every case of every set ran');
+  assert.deepEqual(bare(results), [], 'no written board shows a pixel of its value');
+  assert.deepEqual(results.filter((r) => !r.holds).map((r) => `${r.set} ${r.name}`), [], 'no fill is smaller than the 12 px pad\'s');
+});
+
 const BOARDS = { run: 4, run3: 7, run6: 30, run7: 39, run8: 30, run9: 24, run10: 18, run11: 4, run12: 8, run13: 5, run14: 3, run15: 3, e1: 3 };
 
 test('a composed board hides the value or is refused on every imported attack page', { skip }, async () => {

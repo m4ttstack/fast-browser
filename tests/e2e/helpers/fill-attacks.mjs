@@ -413,10 +413,61 @@ function decorationSets(cases) {
   }
 }
 
+// Sets EMoji to L1far, from the review of the list sparing and the slot blank, in a 640 by 300 cell on white. Only the
+// value's glyphs are the value. A case's `blanks` are the empty slots drawn, in CSS px.
+function listSets(cases) {
+  const add = (set, name, dpr, page, vis, full, blanks) => cases.push({ set, name: `${name} ${dpr}x`, dpr, cell: [640, 300], rows: 4, masked: true, glyphs: true, measure: page(vis), shown: page(full), ...(blanks ? { blanks } : {}) });
+  const svg = (sz, style) => `<svg width="${sz}" height="${sz}" viewBox="0 0 16 16" style="${style}"><path d="M8 1l2 5h5l-4 3 1.5 5L8 11l-4.5 3L5 9 1 6h5z" fill="currentColor"/></svg>`;
+  const LHS = [16, 20, 24, 28, 32];
+  const rowsAfter = (lh, sz = 16, gap = 8, texts = ['Shared with the team', 'Plan is current']) => texts.map((t) => `<div style="display:flex;gap:${gap}px;line-height:${lh}px;margin-top:4px;align-items:center">${svg(sz, 'flex:none')}<span>${t}</span></div>`).join('');
+  const heading = (lh) => `<div style="line-height:${lh}px;margin-bottom:16px">A summary of this report is not ready</div>`;
+  const icon = (mode, sz, gap, lh) => (mode === 'inline' ? svg(sz, `vertical-align:-3px;margin-right:${gap}px`) : svg(sz, `float:left;margin-right:${gap}px;margin-top:${Math.max(0, (lh - sz) / 2)}px`));
+
+  // EMoji: emoji-led wrapped lines under an inline or float icon, every density, icon size and gap.
+  for (const dpr of [1, 2, 3]) for (const lh of LHS) for (const sz of [12, 14, 16, 18]) for (const gap of [6, 8, 10, 12]) for (const tok of ['&#x1F3E0;', '&#x1F4DE;', '&#x1F4CD;', '&#x1F4C5;', '&#x1F464;', '&#x2B50;', '&#x1F697;']) for (const mode of ['inline', 'float']) {
+    const page = (inner) => `<div style="position:absolute;left:40px;top:12px;width:300px">${heading(lh)}<div style="line-height:${lh}px;margin-top:4px;width:200px"><span class=vv>${icon(mode, sz, gap, lh)}${inner}</span></div><div style="clear:both"></div>${rowsAfter(lh, sz, gap)}</div>`;
+    add('EMoji', `${mode} lh${lh} sz${sz} gap${gap} "${tok}"`, dpr, page, `Reported by Samantha ${TG(`<br>${tok} Okafor Delacroix`)}`, `Reported by Samantha<br>${tok} Okafor Delacroix`);
+  }
+  // H1hang: a hanging-indent note whose wrapped line starts with a digit at the column where an icon-led list's icons sit below.
+  for (const dpr of [1, 2, 3]) for (const lh of LHS) for (const sz of [12, 16]) for (const tok of ['42', 'Dr', 'II']) {
+    const page = (inner) => `<div style="position:absolute;left:40px;top:12px;width:300px"><div style="line-height:${lh}px;width:190px;padding-left:24px;text-indent:-24px"><span class=vv>${inner}</span></div>${rowsAfter(lh, sz, 8).replace(/margin-top:4px/g, 'margin-top:4px;margin-left:24px')}</div>`;
+    add('H1hang', `lh${lh} sz${sz} "${tok}" box l2`, dpr, page, `${TG('Samantha Rivera at')}<br>${tok} Okafor Delacroix`, `Samantha Rivera at<br>${tok} Okafor Delacroix`);
+  }
+  // E1blank: an empty mark drawn by eye over a blank tile, too tall by `over` px so it covers the value's first line.
+  for (const dpr of [1, 2, 3]) for (const lh of [16, 20, 24]) for (const over of [0, 4, 8, 12, 16]) for (const gapPx of [8, 12]) {
+    const tileTop = 20; const tileH = 100; const textTop = tileTop + tileH + gapPx;
+    const page = (inner) => `<div style="position:absolute;left:100px;top:${tileTop}px;width:160px;height:${tileH}px;background:#eef2f7;border:1px solid #e2e6ec;border-radius:8px;box-sizing:border-box"></div><div style="position:absolute;left:100px;top:${textTop}px;width:150px;line-height:${lh}px"><span class=vv>${inner}</span></div>`;
+    const blanks = [[100, tileTop, 160, tileH + over]];
+    add('E1blank', `lh${lh} over${over} gap${gapPx} box l2`, dpr, page, `${TG('Samantha Rivera')}<br>Okafor Delacroix`, `Samantha Rivera<br>Okafor Delacroix`, blanks);
+    add('E1blank', `lh${lh} over${over} gap${gapPx} box l1`, dpr, page, `Samantha Rivera${TG('<br>Okafor Delacroix')}`, `Samantha Rivera<br>Okafor Delacroix`, blanks);
+  }
+  // W2real: an address or phone wraps naturally onto a digit-led line under an inline or float icon.
+  for (const dpr of [1, 2, 3]) for (const lh of LHS) for (const sz of [12, 14, 16, 18, 20]) for (const gap of [6, 8, 10]) for (const [kind, text, first] of [['addr', 'Lives at 42 Elm Street', '42'], ['phone', 'Call on 0412 555 123 today', '0412'], ['unit', 'Unit 7 Rivera Court', '7'], ['title', 'Contact Dr Rivera Okafor', 'Dr']]) {
+    const [head, ...rest] = text.split(` ${first} `);
+    const tail = `${first} ${rest.join('')}`;
+    for (const mode of ['inline', 'float']) {
+      const page = (inner) => `<div style="position:absolute;left:40px;top:12px;width:300px">${heading(lh)}<div style="line-height:${lh}px;margin-top:4px;width:${mode === 'inline' ? 140 : 150}px"><span class=vv>${icon(mode, sz, gap, lh)}${inner}</span></div><div style="clear:both"></div>${rowsAfter(lh, sz, gap)}</div>`;
+      add('W2real', `${mode} ${kind} lh${lh} sz${sz} gap${gap}`, dpr, page, `${head} ${TG(tail)}`, `${head} ${tail}`);
+    }
+  }
+  // W3flex: a flex row whose text wraps, the next list rows below; the box on line 1 with the icon.
+  for (const dpr of [1, 2, 3]) for (const lh of LHS) for (const sz of [12, 16, 20]) for (const gap of [6, 8, 10]) for (const tok of ['Mr', 'Dr', '42', 'on', 'II', '&#x1F3E0;', '&#x2611;']) {
+    const page = (inner) => `<div style="position:absolute;left:40px;top:12px;width:300px">${heading(lh)}<div style="display:flex;gap:${gap}px;line-height:${lh}px;margin-top:4px;align-items:flex-start"><span class=vv style="display:contents">${svg(sz, `flex:none;margin-top:${Math.max(0, (lh - sz) / 2)}px`)}<span style="width:150px">${inner}</span></span></div>${rowsAfter(lh, sz, gap)}</div>`;
+    add('W3flex', `lh${lh} sz${sz} gap${gap} "${tok}"`, dpr, page, `Reported by Samantha ${TG(`<br>${tok} Okafor Delacroix`)}`, `Reported by Samantha<br>${tok} Okafor Delacroix`);
+  }
+  // L1far: a value at the end of a long first line of a wide paragraph, wrapping to the far left edge.
+  for (const dpr of [1, 2, 3]) for (const lh of [18, 20, 24]) for (const w of [260, 320, 400, 480, 560]) for (const tail of ['Okafor', 'Rivera-Okafor', 'Okafor Delacroix']) {
+    const page = (inner) => `<div style="position:absolute;left:30px;top:30px;width:${w}px;line-height:${lh}px"><span>This incident was reported to the operator on Friday by the account owner named here, who lives nearby and is called</span> <span class=vv>${inner}</span> and more</div>`;
+    add('L1far', `w${w} lh${lh} "${tail}" box l1`, dpr, page, `Samantha ${TG(tail)}`, `Samantha ${tail}`);
+    add('L1far', `w${w} lh${lh} "${tail}" box l2`, dpr, page, `${TG('Samantha')} ${tail}`, `Samantha ${tail}`);
+  }
+}
+
 export function fillAttackCases() {
   const cases = [];
   groundSets(cases);
   decorationSets(cases);
+  listSets(cases);
   return cases;
 }
 

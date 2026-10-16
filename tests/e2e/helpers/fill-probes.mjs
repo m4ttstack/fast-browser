@@ -203,7 +203,8 @@ ${bodies.map((body, i) => `<div class="c${hide ? ` ${hide[i]}` : ''}" style="lef
 const asBody = ({ style, text }) => `<span class=v style="${style}">${text}</span>`;
 
 // For every case: the pixels of its value its fill leaves bare, under `fill` (importFill) and under the 1x pad alone
-// (fillRect); whether the fill holds all of the pad's; and what the board would say: grown, capped, refused.
+// (fillRect); whether the fill holds all of the pad's; and what the board would say: grown, capped, refused, and
+// `whys` the reasons it is refused for.
 export async function runFillProbes({ browser, geometrySource, cases = fillProbeCases() }) {
   const decoder = await browser.newPage();
   await decoder.addScriptTag({ content: geometrySource });
@@ -222,7 +223,7 @@ export async function runFillProbes({ browser, geometrySource, cases = fillProbe
           await page.setContent(sheet(cell, batch.map((c) => c[part]), hide));
           shots.push((await page.screenshot({ type: 'png' })).toString('base64'));
         }
-        const found = await decoder.evaluate(async ({ shots, adjusts, places, dpr, cell, columns }) => {
+        const found = await decoder.evaluate(async ({ shots, adjusts, places, blanksOf, dpr, cell, columns }) => {
           const decode = async (b64) => {
             const bitmap = await createImageBitmap(await (await fetch(`data:image/png;base64,${b64}`)).blob());
             const c = document.createElement('canvas'); c.width = bitmap.width; c.height = bitmap.height;
@@ -249,7 +250,9 @@ export async function runFillProbes({ browser, geometrySource, cases = fillProbe
                 : place.kind === 'above' ? [bx, by - 26 * d, bw, 20 * d]
                   : place.kind === 'inGap' ? [bx, by + bh + 3 * d, bw, (place.gap - 4) * d]
                     : [bx - 42 * d, by, 40 * d, bh];
-            const fill = g.importFill(px, box, { pad: 12, back: 2 });
+            // A case's `blanks` are empty slots drawn by eye, in CSS px of the cell, snapped as page-layout snaps them.
+            const blanks = (blanksOf[i] ?? []).map((b) => g.snapSlot(px, b.map((v) => v * dpr), { keep: [] }));
+            const fill = g.importFill(px, box, { pad: 12, back: 2, blanks });
             const pad = [...g.fillRect(px, box, { reach: 12, back: 2 })];
             // The fill is the union of its rects; the gate's crop reaches `peek`.
             let left = 0; let padBare = 0; let unseen = 0;
@@ -259,9 +262,9 @@ export async function runFillProbes({ browser, geometrySource, cases = fillProbe
               if (!inside(x, y, pad)) padBare += 1;
             }
             const holds = fill.rects.some(([fx, fy, fw, fh]) => fx <= pad[0] && fy <= pad[1] && fx + fw >= pad[0] + pad[2] && fy + fh >= pad[1] + pad[3]);
-            return { box, rect: [...fill.rect], rects: fill.rects.map((rect) => [...rect]), bare: left, unseen, padBare, holds, grew: fill.grew, capped: fill.capped.length, extended: fill.extended.length, spared: fill.spared.length, near: fill.near.length, refused: fill.capped.some((c) => c.refuse) };
+            return { box, rect: [...fill.rect], rects: fill.rects.map((rect) => [...rect]), bare: left, unseen, padBare, holds, grew: fill.grew, capped: fill.capped.length, extended: fill.extended.length, spared: fill.spared.length, near: fill.near.length, refused: fill.capped.some((c) => c.refuse), whys: fill.capped.filter((c) => c.refuse).map((c) => c.why) };
           });
-        }, { shots, adjusts: batch.map((c) => c.adjust ?? [0, 0, 0, 0]), places: batch.map((c) => c.place ?? null), dpr, cell, columns: COLUMNS });
+        }, { shots, adjusts: batch.map((c) => c.adjust ?? [0, 0, 0, 0]), places: batch.map((c) => c.place ?? null), blanksOf: batch.map((c) => c.blanks ?? null), dpr, cell, columns: COLUMNS });
         batch.forEach((c, i) => results.push({ set: c.set, name: c.name, ...found[i] }));
       }
       await page.close();
