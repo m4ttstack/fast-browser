@@ -1,0 +1,39 @@
+{
+  "state": "FOUND",
+  "title": "The usage marker shows on the plan card, with the lines near the redaction unmarked",
+  "layout": "single",
+  "out": "fx-import-thin-meter-refused.png",
+  "expect": {
+    "refused": "a redaction on panel 1 (meter) left ink past its top edge uncovered, at [61, 61, 97, 17] in the image, where the value may go on"
+  },
+  "panels": [
+    {
+      "fixture": {
+        "import": {
+          "page": "usage-meter",
+          "dpr": 1,
+          "format": "png"
+        }
+      },
+      "frame": [
+        34,
+        34,
+        432,
+        162
+      ],
+      "boxes": {
+        "meter": [
+          340,
+          104,
+          2,
+          12
+        ]
+      },
+      "marks": [
+        {
+          "redact": "meter"
+        }
+      ]
+    }
+  ]
+}
