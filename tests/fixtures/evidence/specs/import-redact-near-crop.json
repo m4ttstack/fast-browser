@@ -1,0 +1,49 @@
+{
+  "state": "FOUND",
+  "title": "The sprint burndown has the wrong name",
+  "layout": "single",
+  "out": "fx-import-redact-near-crop.png",
+  "expect": {
+    "refused": "a redaction on panel 1 (span) met another mark's box with ink still at its top edge. Draw the redact box over the whole value, including the ink past its top edge, or move that mark's box off it"
+  },
+  "panels": [
+    {
+      "fixture": {
+        "import": {
+          "page": "ticket-before",
+          "dpr": 1,
+          "format": "png"
+        }
+      },
+      "frame": [
+        40,
+        40,
+        420,
+        260
+      ],
+      "boxes": {
+        "heading": [
+          60,
+          60,
+          140,
+          20
+        ],
+        "span": [
+          60,
+          100,
+          300,
+          182
+        ]
+      },
+      "marks": [
+        {
+          "lift": "heading",
+          "title": "Wrong sprint name"
+        },
+        {
+          "redact": "span"
+        }
+      ]
+    }
+  ]
+}

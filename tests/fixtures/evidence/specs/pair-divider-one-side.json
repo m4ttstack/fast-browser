@@ -1,0 +1,7 @@
+{ "state": "BEFORE → AFTER", "title": "The export task needs one review fewer", "layout": "pair", "out": "fx-pair-divider-one-side.png",
+  "expect": { "sameRect": true, "noRuleAtEdge": true },
+  "panels": [
+    { "label": "BEFORE", "fixture": { "page": "edge-divider", "targets": { "status": "[data-testid=card] [data-testid=status]" }, "frame": "[data-testid=card]" },
+      "marks": [ { "lift": "status", "title": "Two to go" } ] },
+    { "label": "AFTER", "fixture": { "page": "edge-divider", "targets": { "status": "[data-testid=card-plain] [data-testid=status]" }, "frame": "[data-testid=card-plain]" },
+      "marks": [ { "lift": "status", "title": "One to go" } ] } ] }

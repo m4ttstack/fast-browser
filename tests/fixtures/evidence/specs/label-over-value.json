@@ -1,0 +1,5 @@
+{ "state": "AFTER", "title": "The task and its build carry one id", "layout": "single", "out": "fx-label-over-value.png",
+  "page": "label-over-value", "frame": "[data-testid=fields]",
+  "targets": { "pinned": "[data-testid=pinned]", "build": "[data-testid=build]", "label": "[data-testid=build-label]" },
+  "expect": { "liftCoversNothing": true, "neighbours": ["label"] },
+  "panels": [ { "marks": [ { "lift": ["pinned", "build"], "title": "Same id" } ] } ] }

@@ -1,0 +1,45 @@
+{
+  "state": "FOUND",
+  "title": "The assignee is set on the export task, with the heading unmarked",
+  "layout": "single",
+  "out": "fx-import-underlined-name-refused.png",
+  "expect": {
+    "refused": "a redaction on panel 1 (name) left ink past its top edge uncovered, at [62, 61, 107, 17] in the image, where the value may go on. If that line is the value's, draw the redact box over the whole value including it; otherwise mark it context, or frame the panel so it is out of the board"
+  },
+  "panels": [
+    {
+      "fixture": {
+        "import": {
+          "page": "underlined-name",
+          "dpr": 1,
+          "format": "png"
+        }
+      },
+      "frame": [
+        34,
+        34,
+        432,
+        122
+      ],
+      "boxes": {
+        "name": [
+          141,
+          101,
+          73,
+          12
+        ],
+        "underline": [
+          141,
+          113,
+          74,
+          5
+        ]
+      },
+      "marks": [
+        {
+          "redact": "name"
+        }
+      ]
+    }
+  ]
+}

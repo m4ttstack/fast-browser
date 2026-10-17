@@ -1,0 +1,5 @@
+{ "state": "AFTER", "title": "The pinned badge sits beside the owner's address", "layout": "single", "out": "fx-loupe-by-fill.png",
+  "targets": { "badge": "[data-testid=badge]", "email": "[data-testid=email]" },
+  "page": "loupe-by-fill", "frame": "[data-testid=card]",
+  "expect": { "loupes": [3], "lensNoColour": [219, 39, 119] },
+  "panels": [{ "marks": [ { "redact": "email" }, { "loupe": "badge", "zoom": 3, "title": "Pinned badge", "note": "Marks a pinned project" } ] }] }

@@ -1,0 +1,22 @@
+<!doctype html><meta charset="utf-8">
+<style>body{margin:0;font:14px Helvetica,Arial,sans-serif;background:#f6f7f9;color:#111827}
+.cards{display:flex;gap:40px;margin:40px}
+.card{box-sizing:border-box;width:420px;padding:0 0 6px;background:#fff;border:1px solid #e5e7eb;border-radius:3px}
+.row{position:relative;display:flex;gap:12px;align-items:center;padding:16px}
+.row::after{content:'';position:absolute;left:48px;right:0;bottom:0;height:1px;background:#e2e8f0}
+.plain .row:last-child::after{display:none}
+.dot{flex:none;width:14px;height:14px;border-radius:50%}
+.name{flex:none;width:88px;font-weight:600}
+.status{color:#475569}</style>
+<div class="cards">
+  <div class="card" data-testid="card">
+    <div class="row"><span class="dot" style="background:#3b82f6"></span><span class="name">Login fix</span><span class="status">Open, needs a reviewer</span></div>
+    <div class="row"><span class="dot" style="background:#f59e0b"></span><span class="name">CSV export</span><span class="status" data-testid="status">In review, waiting on two more approvals</span></div>
+    <div class="row"><span class="dot" style="background:#22c55e"></span><span class="name">Dark theme</span><span class="status">Done and closed</span></div>
+  </div>
+  <div class="card plain" data-testid="card-plain">
+    <div class="row"><span class="dot" style="background:#3b82f6"></span><span class="name">Login fix</span><span class="status">Open, needs a reviewer</span></div>
+    <div class="row"><span class="dot" style="background:#f59e0b"></span><span class="name">CSV export</span><span class="status" data-testid="status">In review, waiting on one more approval</span></div>
+    <div class="row"><span class="dot" style="background:#22c55e"></span><span class="name">Dark theme</span><span class="status">Done and closed</span></div>
+  </div>
+</div>

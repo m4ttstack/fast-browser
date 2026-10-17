@@ -1,0 +1,7 @@
+{ "state": "FOUND", "title": "The export task is waiting on reviews", "layout": "single", "out": "fx-edge-divider-import.png",
+  "expect": { "hatched": [false], "noRuleAtEdge": true, "frameInside": true },
+  "panels": [
+    { "fixture": { "import": { "page": "edge-divider", "dpr": 1, "format": "png" } },
+      "frame": [34, 34, 432, 164],
+      "boxes": { "status": [183, 105, 253, 16] },
+      "marks": [ { "ghost": "status", "title": "Reviews pending" } ] } ] }

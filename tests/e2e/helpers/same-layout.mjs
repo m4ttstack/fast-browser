@@ -7,7 +7,10 @@ export const near = (a, b, tolerance, what) => {
   a.forEach((value, i) => assert.ok(Math.abs(value - b[i]) <= tolerance, `${what}: ${a} against ${b}`));
 };
 
-const FIXED = 2;
+// CSS px a 2x board may lay out apart from its 1x twin: the two read antialiased edges a little differently, which can move
+// a card's spot or an edge a px or two. In board px it is never less than at 1x and grows where a panel is drawn larger.
+const SLOP_CSS = 2;
+const slopOf = (panel) => SLOP_CSS * Math.max(1, panel.capture[2] / panel.frame[2]);
 const COUNTED = ['targets', 'lifts', 'labels', 'dots', 'leaders', 'connectors', 'pins', 'legend', 'redactions', 'slots', 'brackets', 'loupes', 'flats', 'links'];
 
 // A panel's source and frame numbers are in its own capture pixels; they meet the twin's in CSS pixels.
@@ -34,45 +37,47 @@ export function assertSameLayout(one, other, scales) {
   // drawn for it, gets the slack.
   const liftSlacks = one.panels.map((a, p) => a.lifts.map((lift, i) => (lift.rect[2] / Math.max(lift.source[2], 1))
     * Math.max(...css(other.panels[p], other.panels[p].lifts[i].source).map((n, k) => Math.abs(n - lift.source[k])))));
-  near(other.stage, one.stage, FIXED + Math.max(0, ...liftSlacks.flat()), 'stage');
+  near(other.stage, one.stage, Math.max(...one.panels.map(slopOf)) + Math.max(0, ...liftSlacks.flat()), 'stage');
   one.panels.forEach((a, p) => {
     const b = other.panels[p];
+    const slop = slopOf(a);
     const slackOf = (target) => (a.targets[target]?.kind === 'lift' ? liftSlacks[p][a.targets[target].lift] : 0);
     const leaderSlack = (leader) => Math.max(0, ...(a.leaders[leader]?.targets ?? []).map(slackOf));
     assert.deepEqual(b.frameEdges, a.frameEdges);
     assert.equal(b.cropped, a.cropped);
     assert.deepEqual(b.cropEdges, a.cropEdges);
-    near(b.capture, a.capture, FIXED, 'capture');
+    assert.deepEqual(b.fades.map((fade) => fade.side), a.fades.map((fade) => fade.side), 'the same edges fade');
+    near(b.capture, a.capture, slop, 'capture');
     near(css(b, b.frame), a.frame, 1, 'frame');
     near(css(b, b.cleanFrame), a.cleanFrame, 1, 'cleanFrame');
     a.lifts.forEach((lift, i) => {
-      near(b.lifts[i].rect, lift.rect, FIXED + liftSlacks[p][i], 'lift rect');
+      near(b.lifts[i].rect, lift.rect, slop + liftSlacks[p][i], 'lift rect');
       near(css(b, b.lifts[i].source), lift.source, 1, 'lift source');
       near(css(b, b.lifts[i].grown), lift.grown, 1, 'lift growth');
       assert.ok(Math.abs(b.lifts[i].k - lift.k) < 0.05, 'lift zoom');
     });
-    a.labels.forEach((label, i) => near(b.labels[i].rect, label.rect, FIXED + slackOf(label.target), 'label rect'));
+    a.labels.forEach((label, i) => near(b.labels[i].rect, label.rect, slop + slackOf(label.target), 'label rect'));
     assert.deepEqual(b.labels.map((label) => label.number), a.labels.map((label) => label.number), 'label numbers');
     a.pins.forEach((pin, i) => {
       assert.deepEqual([b.pins[i].number, b.pins[i].target], [pin.number, pin.target], 'pin number and target');
-      near(b.pins[i].center, pin.center, FIXED + slackOf(pin.target), 'pin');
+      near(b.pins[i].center, pin.center, slop + slackOf(pin.target), 'pin');
     });
     a.legend.forEach((entry, i) => {
       assert.equal(b.legend[i].number, entry.number, 'legend number');
-      near(b.legend[i].rect, entry.rect, FIXED + Math.max(0, ...liftSlacks[p]), 'legend number rect');
+      near(b.legend[i].rect, entry.rect, slop + Math.max(0, ...liftSlacks[p]), 'legend number rect');
     });
-    a.dots.forEach((dot, i) => near(b.dots[i].center, dot.center, FIXED + slackOf(dot.target), 'dot'));
-    a.redactions.forEach((redaction, i) => near(b.redactions[i].rect, redaction.rect, FIXED, 'redaction'));
-    a.slots.forEach((slot, i) => near(b.slots[i].rect, slot.rect, FIXED, 'slot'));
-    a.brackets.forEach((bracket, i) => near(b.brackets[i].rect, bracket.rect, FIXED, 'bracket'));
+    a.dots.forEach((dot, i) => near(b.dots[i].center, dot.center, slop + slackOf(dot.target), 'dot'));
+    a.redactions.forEach((redaction, i) => near(b.redactions[i].rect, redaction.rect, slop, 'redaction'));
+    a.slots.forEach((slot, i) => near(b.slots[i].rect, slot.rect, slop, 'slot'));
+    a.brackets.forEach((bracket, i) => near(b.brackets[i].rect, bracket.rect, slop, 'bracket'));
     a.loupes.forEach((loupe, i) => {
-      near(b.loupes[i].ring, loupe.ring, FIXED, 'loupe ring');
-      near(b.loupes[i].lens, loupe.lens, FIXED, 'loupe lens');
+      near(b.loupes[i].ring, loupe.ring, slop, 'loupe ring');
+      near(b.loupes[i].lens, loupe.lens, slop, 'loupe lens');
     });
     for (const [list, slack] of [['leaders', (item) => leaderSlack(a.leaders.indexOf(item))], ['connectors', (item) => Math.max(slackOf(item.target), leaderSlack(item.leader))]]) {
       a[list].forEach((item, i) => {
         assert.equal(b[list][i].points.length, item.points.length, `${list} point count`);
-        item.points.forEach((point, k) => near(b[list][i].points[k], point, FIXED + slack(item), `${list} point`));
+        item.points.forEach((point, k) => near(b[list][i].points[k], point, slop + slack(item), `${list} point`));
       });
     }
   });

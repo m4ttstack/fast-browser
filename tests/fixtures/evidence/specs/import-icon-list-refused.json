@@ -1,0 +1,83 @@
+{
+  "state": "FOUND",
+  "title": "The location tile beside the icon list is blank, with the list rows unmarked",
+  "layout": "single",
+  "out": "fx-import-icon-list-refused.png",
+  "expect": {
+    "refused": "a redaction on panel 1 (name) left a line past its top edge uncovered, at [65, 62, 281, 15] in the image, as another row of its list. If that line is the value's, draw the redact box over the whole value including it; otherwise mark it context, or frame the panel so it is out of the board"
+  },
+  "panels": [
+    {
+      "fixture": {
+        "import": {
+          "page": "icon-list",
+          "dpr": 1,
+          "format": "png",
+          "width": 1180
+        }
+      },
+      "frame": [
+        40,
+        40,
+        1100,
+        190
+      ],
+      "boxes": {
+        "tile": [
+          941,
+          53,
+          160,
+          116
+        ],
+        "tileTop": [
+          941,
+          53,
+          160,
+          100
+        ],
+        "lead": [
+          64,
+          58,
+          300,
+          20
+        ],
+        "name": [
+          65,
+          105,
+          162,
+          16
+        ],
+        "second": [
+          62,
+          128,
+          130,
+          20
+        ],
+        "third": [
+          62,
+          155,
+          110,
+          20
+        ],
+        "where": [
+          943,
+          176,
+          100,
+          36
+        ]
+      },
+      "marks": [
+        {
+          "empty": "tile",
+          "text": "Tile is blank"
+        },
+        {
+          "redact": "name"
+        },
+        {
+          "redact": "where"
+        }
+      ]
+    }
+  ]
+}

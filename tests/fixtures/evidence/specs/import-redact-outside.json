@@ -1,0 +1,7 @@
+{ "state": "FOUND", "title": "The sprint burndown has the wrong name", "layout": "single", "out": "fx-import-redact-outside.png",
+  "expect": { "origin": [true], "emptyRedactionRecord": true, "strayMarks": 2 },
+  "panels": [
+    { "fixture": { "import": { "page": "ticket-before", "dpr": 1, "format": "png" } },
+      "frame": [40, 40, 420, 260],
+      "boxes": { "heading": [60, 60, 140, 20], "contact": [60, 262, 300, 20], "footer": [60, 284, 200, 12] },
+      "marks": [ { "lift": "heading", "title": "Wrong sprint name" }, { "redact": "contact" }, { "redact": "footer" } ] } ] }

@@ -1,0 +1,5 @@
+{ "state": "AFTER", "title": "The export task is waiting on reviews", "layout": "single", "out": "fx-edge-divider.png",
+  "page": "edge-divider", "frame": "[data-testid=card]",
+  "targets": { "status": "[data-testid=card] [data-testid=status]" },
+  "expect": { "cleanRows": ["bottom"], "noRuleAtEdge": true },
+  "panels": [ { "marks": [ { "lift": "status", "title": "In review" } ] } ] }

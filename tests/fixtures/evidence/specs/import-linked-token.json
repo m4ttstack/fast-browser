@@ -1,0 +1,7 @@
+{ "state": "FOUND", "title": "The invite link is set on the review task", "layout": "single", "out": "fx-import-linked-token.png",
+  "expect": { "refused": "a redaction on panel 1 (token) reached its growth limit with ink still at its right edge" },
+  "panels": [
+    { "fixture": { "import": { "page": "linked-token", "dpr": 1, "format": "png" } },
+      "frame": [34, 34, 532, 102],
+      "boxes": { "token": [141, 79, 90, 11] },
+      "marks": [ { "redact": "token" } ] } ] }

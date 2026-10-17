@@ -36,7 +36,7 @@ jobs:
     # runtime-lock.json pins the compose renderer for macOS only, and the
     # fixture goldens are macOS renders.
     runs-on: macos-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
         with:
@@ -47,4 +47,26 @@ jobs:
           cache: npm
       - run: npm ci
       - run: node .github/scripts/install-compose-deps.mjs
-      - run: npm run test:compose
+      - run: npm run test:compose-core
+
+  compose-attacks:
+    # Every reviewer attack set on an imported redaction, split in five so
+    # each shard finishes well inside its timeout on a three-core runner. A
+    # test the patterns do not name runs in the sets shard.
+    runs-on: macos-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [sets, lists, pages-1, pages-2, fuzz]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: package.json
+          cache: npm
+      - run: npm ci
+      - run: node .github/scripts/install-compose-deps.mjs
+      - run: npm run test:compose-attacks:${{ matrix.shard }}

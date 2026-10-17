@@ -1,0 +1,7 @@
+{ "state": "AFTER", "title": "The owner field is gone from the checklist header", "layout": "single", "out": "fx-import-wide-blank.png",
+  "expect": { "frameInside": true, "frameUnder": 0.6, "leaderRunUnder": 160 },
+  "panels": [
+    { "fixture": { "import": { "page": "wide-blank", "dpr": 1, "format": "png" } },
+      "frame": [40, 40, 900, 88],
+      "boxes": { "gap": [174, 59, 40, 24] },
+      "marks": [ { "ghost": "gap", "title": "Owner removed" } ] } ] }

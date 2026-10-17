@@ -160,6 +160,12 @@ test('padding keeps LIFT_CLEAR clean lines between its outer edge and content', 
   assert.deepEqual(cleanPad(canvas(120, 120).fill(45, 54, 1, 3, INK), [50, 50, 12, 12], 4), [1, 4, 4, 4]);
 });
 
+test('padding asked for more clear lines than LIFT_CLEAR keeps them, and never fewer', () => {
+  const px = canvas(120, 120).fill(43, 54, 1, 3, INK);
+  assert.deepEqual(cleanPad(px, [50, 50, 12, 12], 4, { clear: 5 }), [1, 4, 4, 4]);
+  assert.deepEqual(cleanPad(px, [50, 50, 12, 12], 4, { clear: 2 }), [3, 4, 4, 4]);
+});
+
 test('a neighbour 10px away leaves the padding at most 7px, so 3px of ground shows between', () => {
   const px = canvas(160, 120).fill(36, 54, 4, 4, INK);
   assert.deepEqual(cleanPad(px, [50, 50, 12, 12], 12), [7, 12, 12, 12]);
@@ -463,9 +469,10 @@ test('an edge moves again when another edge changes the lines it is tested on', 
 });
 
 test('a frame that no move can clean terminates with every cut edge unmoved', () => {
+  // Bars of 2 px: three lines inside a wider one are one colour, which is a word space.
   const px = canvas(301, 301);
-  for (let x = 3; x < 301; x += 6) px.fill(x, 0, 3, 301, INK);
-  for (let y = 3; y < 301; y += 6) px.fill(0, y, 301, 3, INK);
+  for (let x = 3; x < 301; x += 6) px.fill(x, 0, 2, 301, INK);
+  for (let y = 3; y < 301; y += 6) px.fill(0, y, 301, 2, INK);
   const frame = [50, 50, 200, 200];
   const out = cleanFrame(px, frame, [140, 140, 20, 20]);
   assert.equal(out.cut, true);
@@ -824,6 +831,31 @@ test('a snapped bottom crop edge backs away from content until 12 clean lines li
   assert.equal(edges.bottom, 'snapped');
 });
 
+const { textScale } = sandbox.__composeGeometry;
+
+test('annotation type grows with a panel drawn past CSS size, as much as the panel does', () => {
+  assert.equal(textScale([1.25]), 1.25);
+  assert.equal(textScale([1.12]), 1.12);
+  assert.ok(textScale([1.2]) > textScale([1]), 'a zoomed-in panel gets larger type than one at CSS size');
+});
+
+test('annotation type never shrinks below its CSS size, however small the panel is drawn', () => {
+  assert.equal(textScale([1]), 1);
+  assert.equal(textScale([0.55]), 1);
+  assert.equal(textScale([0.2]), 1);
+});
+
+test('annotation type stops at 1.25 times its CSS size, however far a panel is zoomed', () => {
+  assert.equal(textScale([1.6]), 1.25);
+  assert.equal(textScale([3]), 1.25);
+});
+
+test('annotation type follows the least zoomed panel, and a rounding hair past CSS size is no zoom', () => {
+  assert.equal(textScale([1.25, 0.8]), 1);
+  assert.equal(textScale([1.2, 1.1]), 1.1);
+  assert.equal(textScale([1.001, 1.001, 1]), 1);
+});
+
 const panelSizes = (...args) => ({ ...sandbox.__composeGeometry.panelSizes(...args) });
 
 test('two frames of one shape share the height their width budget allows', () => {
@@ -877,6 +909,53 @@ test('a row exactly 9 times as wide as it is high stays a row, above the floor, 
 
 test('three steps of 2.4 to 1 stay a row', () => {
   assert.deepEqual(panelSizes([[0, 0, 480, 200], [0, 0, 480, 200], [0, 0, 480, 200]]), { stacked: false, height: 156 });
+});
+
+const { sharedZoom, cutLine } = sandbox.__composeGeometry;
+
+test('steps whose one height draws them at zooms more than 1.25 apart share the zoom the board allows', () => {
+  // At one height of 110 the rail is drawn at 0.42 and the header at 1.
+  const frames = [[0, 0, 140, 260], [0, 0, 420, 110], [0, 0, 360, 150]];
+  assert.equal(sharedZoom(frames, panelSizes(frames)), 1);
+  const wide = [[0, 0, 700, 300], [0, 0, 600, 120]];
+  assert.equal(sharedZoom(wide, panelSizes(wide)), 1120 / 1300, 'the width budget over the widths');
+  const tall = [[0, 0, 300, 600], [0, 0, 300, 300]];
+  assert.equal(sharedZoom(tall, panelSizes(tall)), 0.6, 'the height cap over the tallest');
+});
+
+test('steps keep their one height when their zooms stay close, or one zoom would draw them below 0.55', () => {
+  const close = [[0, 0, 400, 300], [0, 0, 400, 260]];
+  assert.equal(sharedZoom(close, panelSizes(close)), null);
+  const small = [[0, 0, 900, 700], [0, 0, 900, 200]];
+  assert.equal(sharedZoom(small, panelSizes(small)), null, '360 over 700 is under 0.55');
+});
+
+test('stacked steps share a zoom of the stack width over the widest frame', () => {
+  const near = [[0, 0, 1000, 60], [0, 0, 700, 60]];
+  assert.equal(panelSizes(near).stacked, true);
+  assert.equal(sharedZoom(near, panelSizes(near)), 0.72);
+  const far = [[0, 0, 1500, 75], [0, 0, 900, 60]];
+  assert.equal(sharedZoom(far, panelSizes(far)), null, '720 over 1500 is under 0.55');
+});
+
+test('cutLine reaches to the last line of a sub-line within reach, held to the height allowed', () => {
+  // A 16 px line on rows 20..35 and a sub-line on rows 39..46, four lines past the box's bottom edge.
+  const px = canvas(200, 80).fill(40, 20, 100, 16, INK).fill(40, 39, 50, 8, INK);
+  const box = [40, 20, 100, 16];
+  assert.equal(cutLine(px, box, 'bottom', 9, 16), 11, 'to row 46');
+  assert.equal(cutLine(px, box, 'bottom', 3, 16), 0, 'the sub-line starts past the reach');
+  assert.equal(cutLine(px, box, 'bottom', 9, 7), 0, 'the sub-line is taller than allowed');
+  assert.equal(cutLine(px, box, 'top', 9, 16), 0, 'nothing above');
+  assert.equal(cutLine(px, box, 'bottom', 9, 16, { bounds: [0, 0, 200, 45] }), 0, 'the sub-line runs past the bounds');
+});
+
+test('cutLine finds the sub-line at a fractional device scale, where LIFT_BAND is no whole number of lines', () => {
+  // The scene above at 1.5x and 1.25x: the sub-line's last content line is the same number of lines past the box.
+  for (const [scale, line, sub] of [[1.5, [60, 30, 150, 24], [60, 58, 75, 12]], [1.25, [50, 25, 125, 20], [50, 49, 63, 10]]]) {
+    const px = canvas(300, 120).fill(...line, INK).fill(...sub, INK);
+    const geometry = sandbox.__composeGeometry.withScale(scale);
+    assert.equal(geometry.cutLine(px, line, 'bottom', 9 * scale, 16 * scale), sub[1] + sub[3] - line[1] - line[3], `at ${scale}x`);
+  }
 });
 
 test('a crop is held to the least size it is given, above the context floor', () => {
@@ -1094,6 +1173,61 @@ test('a trim stops at a full-width rule instead of passing it', () => {
   assert.equal(box[1], 28, 'the top edge stops 12px outside the rule');
 });
 
+// A header row 400px wide: hairlines across its whole width at rows 10 and 69, its content on the left 55%.
+const DIVIDER = [200, 200, 200];
+const headerRow = () => canvas(400, 80).fill(0, 10, 400, 1, DIVIDER).fill(0, 69, 400, 1, DIVIDER).fill(20, 30, 200, 20, INK);
+
+test('the side trims cross the dead space over hairlines that run out to the frame edge', () => {
+  const { box, trimmed } = trimBlank(headerRow(), [0, 0, 400, 80], null);
+  assert.deepEqual(trimmed, { left: 8, top: 0, right: 168, bottom: 0 }, 'each side stops 12px outside the content');
+  assert.deepEqual(box, [8, 0, 224, 80]);
+});
+
+test('a card border parallel to the trimmed side still stops it there', () => {
+  const px = headerRow().fill(380, 0, 1, 80, DIVIDER);
+  const { box, trimmed } = trimBlank(px, [0, 0, 400, 80], null);
+  assert.equal(trimmed.right, 7, 'the right edge stays 12px outside the border');
+  assert.equal(box[0] + box[2], 393);
+});
+
+test('a hairline that ends short of the frame edge still stops the trim', () => {
+  const px = canvas(400, 80).fill(250, 60, 120, 1, DIVIDER).fill(20, 30, 200, 20, INK);
+  assert.equal(trimBlank(px, [0, 0, 400, 80], null).trimmed.right, 18, 'a rule ending 30px short of the edge stops the trim 12px outside it');
+});
+
+test('a band thicker than a rule running out to the edge is content, not a hairline', () => {
+  const px = headerRow().fill(0, 60, 400, 4, DIVIDER);
+  assert.equal(trimBlank(px, [0, 0, 400, 80], null).trimmed.right, 0);
+});
+
+test('a stroke that reaches the edge but runs in less than a rule length is content, not a hairline', () => {
+  const px = headerRow().fill(390, 60, 10, 1, INK);
+  assert.equal(trimBlank(px, [0, 0, 400, 80], null).trimmed.right, 0);
+});
+
+test('thin chart bars standing on the bottom edge are content, so the bottom does not trim', () => {
+  const px = canvas(300, 200).fill(20, 20, 150, 14, INK);
+  [50, 90, 120, 70, 110, 60, 100, 80, 40, 115].forEach((h, k) => px.fill(40 + k * 22, 200 - h, 2, h, [37, 99, 235]));
+  assert.equal(trimBlank(px, [0, 0, 300, 200], null).trimmed.bottom, 0);
+});
+
+test('a progress track running out to the edge with its fill in the same rows does not trim, so the bar reads as full as it is', () => {
+  const px = canvas(300, 120).fill(20, 40, 60, 10, INK).fill(20, 60, 280, 2, DIVIDER).fill(20, 60, 80, 2, [37, 99, 235]);
+  assert.equal(trimBlank(px, [0, 0, 300, 120], null).trimmed.right, 0);
+});
+
+test('gridlines that stop short of the content beyond them are not hairlines across the frame', () => {
+  const px = canvas(300, 200).fill(20, 20, 60, 10, INK);
+  for (let x = 40; x < 300; x += 30) px.fill(x, 40, 1, 160, DIVIDER);
+  px.fill(40, 120, 100, 3, [37, 99, 235]);
+  assert.equal(trimBlank(px, [0, 0, 300, 200], null).trimmed.bottom, 0);
+});
+
+test('a hairline that starts at the far side content still crosses, as a row divider inset from the left does', () => {
+  const px = canvas(400, 80).fill(30, 10, 370, 1, DIVIDER).fill(30, 69, 370, 1, DIVIDER).fill(30, 30, 190, 20, INK);
+  assert.equal(trimBlank(px, [0, 0, 400, 80], null).trimmed.right, 168);
+});
+
 test('a trim never passes the marks, even over ground', () => {
   const px = canvas(300, 200).fill(100, 100, 40, 20, INK);
   const { box } = trimBlank(px, [0, 0, 300, 200], [20, 60, 30, 30]);
@@ -1101,10 +1235,10 @@ test('a trim never passes the marks, even over ground', () => {
   assert.equal(box[1], 48);
 });
 
-// Ink squares 11px wide every 16px: no line crosses them clean, and no gap is wide enough to be a band.
+// Ink squares 14px wide every 16px: no line crosses them clean, and no gap is wide enough to be a band or a word space.
 function dense(width, height) {
   const px = canvas(width, height);
-  for (let y = 0; y < height; y += 16) for (let x = 0; x < width; x += 16) px.fill(x, y, 11, 11, INK);
+  for (let y = 0; y < height; y += 16) for (let x = 0; x < width; x += 16) px.fill(x, y, Math.min(14, width - x), Math.min(14, height - y), INK);
   return px;
 }
 
@@ -1384,6 +1518,14 @@ test('at scale 2 a trim keeps 24 capture px of ground outside the first content,
   assert.deepEqual({ ...two.trimmed }, { left: 36, top: 36, right: 36, bottom: 36 });
 });
 
+test('at scale 2 a trim crosses hairlines that run out to the frame edge, as at scale 1', () => {
+  const frame = [0, 0, 400, 80];
+  const one = trimBlank(headerRow(), frame, null);
+  const two = atScale(2).trimBlank(doubled(headerRow()), times2(frame), null);
+  assert.deepEqual([...two.box], times2(one.box));
+  assert.equal(two.trimmed.right, 336);
+});
+
 test('at scale 2 a trim stops 24 capture px short of the marks, as 12 at scale 1 (TRIM_PAD)', () => {
   const frame = [0, 0, 300, 200]; const marks = [20, 60, 30, 30];
   const px = canvas(300, 200).fill(100, 100, 40, 20, INK);
@@ -1441,6 +1583,34 @@ test('at scale 2 a rule keeps 8 capture px on its shorter side, as 4 at scale 1 
   const bottom = (below) => edgeAtBothScales(canvas(200, 200).fill(100, 40, 1, 98 + below, [200, 200, 200]), [20, 20, 160, 118], 'bottom');
   assert.deepEqual(bottom(3), [false, false], '3px below the line');
   assert.deepEqual(bottom(4), [true, true], '4px below the line');
+});
+
+test('liftSpot parts spots its first rank ties by the next, before the nearest to centred', () => {
+  const nearer = ([L]) => Math.abs(L - 65);
+  assert.equal(liftSpot(() => 0, [200, 100], ELEMENT, [40, 30]).L, 70);
+  assert.equal(liftSpot([() => 0, nearer], [200, 100], ELEMENT, [40, 30]).L, 65);
+});
+
+// A card's face is the card less its ring: `clear` takes the ring back off the margin.
+test('an exact count takes the part of each pixel a card covers, at 1x and at 2x alike', () => {
+  const px = canvas(200, 100).fill(40, 20, 120, 8, INK);
+  const face = [contentUnder(px, [0, 0, 200, 100], 1, ELEMENT, -3, true), atScale(2).contentUnder(doubled(px), [0, 0, 400, 200], 0.5, ELEMENT, -6, true)];
+  const card = [70, 27.7, 40, 30];
+  assert.ok(Math.abs(face[0](card) - 0.3 * 40) < 1e-9, `a card 0.3 px into the line covers ${face[0](card)} of it`);
+  assert.ok(Math.abs(face[1](card) - 4 * face[0](card)) < 1e-9, 'and its 2x twin four times as many capture px');
+  assert.equal(contentUnder(px, [0, 0, 200, 100], 1, ELEMENT, -3)(card), 40, 'where a whole count takes the row');
+});
+
+test('liftSpot never takes a row whole under its card to move another out of its margin', () => {
+  // A 22 px card for a 10 px element between rows 18 px apart covers some of both, or one whole at either end.
+  const px = canvas(200, 100).fill(40, 30, 120, 6, INK).fill(40, 54, 120, 6, INK);
+  const hidden = contentUnder(px, [0, 0, 200, 100], 1, ELEMENT);
+  const face = contentUnder(px, [0, 0, 200, 100], 1, ELEMENT, -3, true);
+  const size = [40, 22];
+  const loose = liftSpot(hidden, [200, 100], ELEMENT, size);
+  assert.ok([28, 40].includes(loose.T), `by its margin alone the card takes a row whole (top ${loose.T})`);
+  const held = liftSpot(hidden, [200, 100], ELEMENT, size, face);
+  assert.ok(face([held.L, held.T, ...size]) <= face([70, 34, ...size]), `the card at top ${held.T} hides no more under it than a centred one`);
 });
 
 test('liftSpot keeps a card its ring and 2 px inside the frame', () => {
@@ -1860,9 +2030,24 @@ test('a crop edge that looks inward keeps 24 px to the marks', () => {
   // the block's last line ends 26 px above the mark, so the band under it ends nearer than the edge may go
   const px = paragraph(38, 168).fill(200, 190, 100, 14, INK);
   const { box, edges, cut } = cropToMarks(px, [0, 0, 600, 400], [200, 190, 100, 14], { parts: [{ box: [200, 190, 100, 14], bracket: false }], hold: true });
-  assert.equal(box[1], 142, 'the top edge stays at its margin');
-  assert.equal(edges.top, 'margin');
+  assert.equal(box[1], 146, 'the top edge takes the space between two lines just inside its margin, not the band');
+  assert.equal(edges.top, 'word');
   assert.equal(cut, true);
+});
+
+// Lines of text 7 px apart, so one px of leading, from `from` until `space`, then again 4 px on: a word space between two lines.
+const leading = (from, space) => {
+  const px = canvas(600, 400).fill(200, 190, 100, 14, INK);
+  for (const [start, end] of [[from, space], [space + 4, 190]]) for (let y = start; y + 6 <= end; y += 7) for (let x = 41; x < 540; x += 7) px.fill(x, y, 6, 6, INK);
+  return px;
+};
+
+test('a held crop edge looks for a word space no nearer than 24 px to the marks', () => {
+  const crop = (px) => cropToMarks(px, [0, 0, 600, 400], [200, 190, 100, 14], { parts: [{ box: [200, 190, 100, 14], bracket: false }], hold: true });
+  const near = crop(leading(59, 170));
+  assert.deepEqual([near.box[1], near.edges.top], [142, 'margin'], 'the space at 170..173 lies within 24 px of the mark at 190');
+  const far = crop(leading(56, 160));
+  assert.deepEqual([far.box[1], far.edges.top], [162, 'word'], 'the space at 160..163 does not');
 });
 
 test('a crop edge with a band both ways takes the nearer one', () => {
@@ -1906,4 +2091,1660 @@ test('a trim is measured from ink, not from the faint fringe a glyph leaves besi
 test('trimBlank keeps 12 px of ground', () => {
   const px = canvas(400, 300).fill(100, 100, 120, 40, INK);
   assert.deepEqual(trimBlank(px, [0, 0, 400, 300], null).box, [88, 88, 144, 64]);
+});
+
+const shedEdgeRules = (...args) => { const { box, shed } = sandbox.__composeGeometry.shedEdgeRules(...args); return { box: [...box], shed: { ...shed } }; };
+const edgeRuleAt = (...args) => { const rule = sandbox.__composeGeometry.edgeRuleAt(...args); return rule && { thickness: rule.thickness, colour: [...rule.colour] }; };
+const GREY_E2 = [226, 232, 240];
+const NO_SHED = { left: 0, top: 0, right: 0, bottom: 0 };
+// A 200 by 100 page: a line of text, and a 1px divider indented 10px that runs to the edge at row 80.
+const divided = () => canvas(200, 100).fill(20, 20, 120, 14, INK).fill(10, 80, 190, 1, GREY_E2);
+
+test('edgeRuleAt finds a thin line of one colour along half the line or more, and nothing thicker or shorter', () => {
+  const row = (y, from = 0, to = 200) => ({ horizontal: true, fixed: y, from, to });
+  assert.deepEqual(edgeRuleAt(divided(), row(80), { step: -1 }), { thickness: 1, colour: GREY_E2 });
+  assert.equal(edgeRuleAt(divided(), row(79), { step: -1 }), null, 'a line of ground is no rule: it runs on past RULE_THICKNESS');
+  assert.equal(edgeRuleAt(canvas(200, 100).fill(0, 78, 200, 3, GREY_E2), row(80), { step: -1 }), null, 'a 3px bar is content');
+  assert.equal(edgeRuleAt(canvas(200, 100).fill(0, 80, 90, 1, GREY_E2), row(80), { step: -1 }), null, 'a line under half the length is not a rule');
+  assert.equal(edgeRuleAt(divided(), row(80), { step: -1, ground: [228, 232, 238] }), null, 'a rule within SLIGHT of the ground is ground');
+});
+
+test('shedEdgeRules drops a divider lying inside the bottom edge', () => {
+  const { box, shed } = shedEdgeRules(divided(), [0, 0, 200, 92], [20, 20, 120, 14], {});
+  assert.ok(box[1] + box[3] <= 80, 'the edge stands above the divider');
+  assert.ok(box[1] + box[3] >= 34 + 6, 'and keeps a clean band under the content');
+  assert.equal(shed.bottom > 0, true);
+  assert.deepEqual({ ...shed, bottom: 0 }, NO_SHED, 'no other side has a rule to shed');
+});
+
+test('shedEdgeRules drops a rule lying on the edge itself, and leaves FRAME_CUSHION lines between it and the edge', () => {
+  const { box, shed } = shedEdgeRules(divided(), [0, 0, 200, 81], [20, 20, 120, 14], {});
+  assert.deepEqual(box, [0, 0, 200, 78]);
+  assert.equal(shed.bottom, 3);
+});
+
+test('shedEdgeRules keeps a divider with content right under it', () => {
+  const px = divided().fill(20, 63, 120, 14, INK);
+  assert.deepEqual(shedEdgeRules(px, [0, 0, 200, 92], [20, 20, 120, 14], {}), { box: [0, 0, 200, 92], shed: NO_SHED });
+});
+
+test('shedEdgeRules keeps a divider more than AIR lines in, or too near the marks', () => {
+  assert.deepEqual(shedEdgeRules(divided(), [0, 0, 200, 94], [20, 20, 120, 14], {}).shed, NO_SHED, '13 lines of ground before the rule');
+  assert.deepEqual(shedEdgeRules(divided(), [0, 0, 200, 92], [20, 20, 120, 40], {}).shed, NO_SHED, 'the edge would come within CROP_MARGIN_MIN of the marks');
+});
+
+test('shedEdgeRules never moves past a fill', () => {
+  assert.deepEqual(shedEdgeRules(divided(), [0, 0, 200, 92], [20, 20, 120, 14], { keep: [[150, 76, 30, 8]] }), { box: [0, 0, 200, 92], shed: NO_SHED });
+});
+
+test('shedEdgeRules at scale 2 matches scale 1', () => {
+  const one = shedEdgeRules(divided(), [0, 0, 200, 92], [20, 20, 120, 14], {});
+  const { box, shed } = atScale(2).shedEdgeRules(doubled(divided()), times2([0, 0, 200, 92]), times2([20, 20, 120, 14]), {});
+  assert.deepEqual([...box], times2(one.box));
+  assert.equal(shed.bottom, 2 * one.shed.bottom);
+});
+
+test('a snapped crop edge comes off a divider it hugs', () => {
+  const px = canvas(600, 400).fill(250, 180, 60, 12, INK).fill(100, 236, 400, 1, GREY_E2);
+  const { box, edges } = cropToMarks(px, [0, 0, 600, 400], [250, 180, 60, 12]);
+  assert.equal(edges.bottom, 'snapped');
+  assert.ok(box[1] + box[3] <= 236, `the crop ends at ${box[1] + box[3]}, below the divider at 236`);
+});
+
+test('a snapped crop edge keeps a divider whose lines a fill reaches into', () => {
+  const px = canvas(600, 400).fill(250, 180, 60, 12, INK).fill(100, 236, 400, 1, GREY_E2);
+  const fill = [280, 232, 20, 6];
+  const { box, edges } = cropToMarks(px, [0, 0, 600, 400], [250, 180, 60, 12], { keep: [fill], ignore: [fill] });
+  assert.equal(edges.bottom, 'snapped');
+  assert.ok(box[1] + box[3] >= fill[1] + fill[3], `the crop ends at ${box[1] + box[3]}, inside the fill`);
+});
+
+test('shedEdgeRules says which depths a side can lose: its ground, and its rule only whole', () => {
+  const takes = (px, box) => [...sandbox.__composeGeometry.shedEdgeRules(px, box, [20, 20, 120, 14], {}).takes.bottom];
+  const ruled = takes(divided(), [0, 0, 200, 92]);
+  assert.deepEqual([0, 5, 11, 12, 13, 14].map((d) => ruled[d]), [true, false, false, true, true, true], 'none of the 11 lines of ground alone, since the rule would stay; past the rule, any');
+  const plain = takes(canvas(200, 100).fill(20, 20, 120, 14, INK), [0, 0, 200, 92]);
+  assert.ok([0, 5, 11, 12, 13, 14].every((d) => plain[d]), 'a side of ground alone can lose any of it');
+  assert.equal(sandbox.__composeGeometry.shedEdgeRules(divided(), [0, 0, 200, 92], [20, 20, 120, 40], {}).takes.bottom[14], false, 'never within CROP_MARGIN_MIN of the marks');
+  const two = [...atScale(2).shedEdgeRules(doubled(divided()), times2([0, 0, 200, 92]), times2([20, 20, 120, 14]), {}).takes.bottom];
+  assert.deepEqual([0, 22, 24, 26, 27, 28].map((d) => two[d]), [true, false, true, true, false, true], 'at scale 2, whole CSS px of the 1x answer');
+});
+
+test('at scale 1.5 a pair sheds a depth every panel can take, and never moves an edge outward', () => {
+  const geo = atScale(1.5);
+  const page = (ruled) => {
+    const px = canvas(300, 150).fill(30, 30, 180, 21, INK);
+    return ruled ? px.fill(15, 130, 285, 1, GREY_E2) : px;
+  };
+  const panel = (px) => ({ scale: 1.5, ...geo.shedEdgeRules(px, [0, 0, 300, 138], [30, 30, 180, 21], {}) });
+  const panels = [panel(page(true)), panel(page(false))];
+  assert.equal(panels[0].shed.bottom, 11, '7 lines of ground, the rule and FRAME_CUSHION');
+  const shared = sandbox.__composeGeometry.sharedShed(panels);
+  for (const side of ['left', 'top', 'right', 'bottom']) {
+    assert.ok(shared[side] >= 0, `the ${side} edge never moves outward (${shared[side]})`);
+    for (const p of panels) assert.equal(p.takes[side][Math.round(shared[side] * p.scale)], true, `each panel can take the ${side} depth`);
+  }
+  assert.equal(Math.round(shared.bottom * 1.5), 11, 'both panels lose the divider\'s 11 capture px');
+  const flat = { left: 0, top: 0, right: 0 };
+  const none = { left: [true], top: [true], right: [true] };
+  const blocked = sandbox.__composeGeometry.sharedShed([
+    { scale: 1.5, shed: { ...flat, bottom: 4 }, takes: { ...none, bottom: [true, false, false, false, true] } },
+    { scale: 1.5, shed: { ...flat, bottom: 0 }, takes: { ...none, bottom: [true, false, false, false, false] } },
+  ]);
+  assert.equal(blocked.bottom, 0, 'a depth one panel cannot take leaves both edges where they are');
+});
+
+const orphanBands = (...args) => { const { box, cut } = sandbox.__composeGeometry.orphanBands(...args); return { box: [...box], cut: { ...cut } }; };
+const NO_CUT = { left: 0, top: 0, right: 0, bottom: 0 };
+// A 300 by 200 card: a 10px "1" index in its top-left corner, `gap` clean lines under it, the card's name, then
+// two status lines, the marks.
+const STATUS_LINES = [6, 80, 200, 42];
+const indexed = ({ gap = 30, index = true } = {}) => {
+  const px = canvas(300, 200).fill(6, 16 + gap, 120, 14, INK).fill(6, 80, 200, 12, INK).fill(6, 110, 200, 12, INK);
+  return index ? px.fill(6, 6, 10, 10, INK) : px;
+};
+
+test('orphanBands cuts a lone small index off the top, keeping AIR clean lines over the name', () => {
+  const { box, cut } = orphanBands(indexed(), [0, 0, 300, 200], STATUS_LINES, {});
+  assert.deepEqual(cut, { ...NO_CUT, top: 34 }, 'the name starts at row 46: 46 less AIR');
+  assert.deepEqual(box, [0, 34, 300, 166]);
+});
+
+test('orphanBands keeps an index too close to the next content, or to a mark', () => {
+  assert.deepEqual(orphanBands(indexed({ gap: 8 }), [0, 0, 300, 200], STATUS_LINES, {}).cut, NO_CUT, '8 clean lines is under ORPHAN_GAP (12)');
+  assert.deepEqual(orphanBands(indexed(), [0, 0, 300, 200], [6, 46, 120, 14], {}).cut, NO_CUT, 'the index lies 30 lines from a mark, inside ORPHAN_CLEAR (32)');
+});
+
+test('orphanBands cuts an index 14 clean lines over the name, or 34 lines from a mark', () => {
+  assert.deepEqual(orphanBands(indexed({ gap: 14 }), [0, 0, 300, 200], STATUS_LINES, {}).cut, { ...NO_CUT, top: 18 }, 'the name starts at row 30: 30 less AIR');
+  assert.deepEqual(orphanBands(indexed(), [0, 0, 300, 200], [50, 50, 120, 14], {}).cut, { ...NO_CUT, top: 26 }, 'CROP_MARGIN_MIN short of the mark at row 50');
+});
+
+test('orphanBands keeps an icon that leads its row, and cuts one with nothing beside it', () => {
+  const rows = (first) => canvas(300, 200).fill(4, 20, 10, 10, INK).fill(28, first, 200, 12, INK).fill(28, 100, 200, 12, INK).fill(28, 140, 200, 12, INK);
+  assert.deepEqual(orphanBands(rows(20), [0, 0, 300, 200], [100, 100, 128, 52], {}).cut, NO_CUT, 'the line the icon leads runs on past the gap');
+  assert.deepEqual(orphanBands(rows(40), [0, 0, 300, 200], [100, 100, 128, 52], {}).cut, { ...NO_CUT, left: 16 }, 'the rows under it start 14 columns on: 28 less AIR');
+});
+
+test('orphanBands keeps a status dot or a close button that shares its row with a title, however far off', () => {
+  const header = (title) => {
+    const px = canvas(300, 200).fill(280, 20, 8, 8, INK).fill(10, 60, 200, 12, INK).fill(10, 100, 200, 12, INK);
+    return title ? px.fill(10, 18, 120, 12, INK) : px;
+  };
+  assert.deepEqual(orphanBands(header(true), [0, 0, 300, 200], [10, 100, 200, 12], {}).cut, NO_CUT, 'a right-aligned dot on the title\'s row');
+  assert.deepEqual(orphanBands(header(false), [0, 0, 300, 200], [10, 100, 200, 12], {}).cut, { ...NO_CUT, top: 48, right: 66 }, 'with nothing on its row the dot is lone');
+  const closer = canvas(300, 200).fill(10, 10, 150, 14, INK).fill(10, 50, 260, 12, INK).fill(10, 90, 260, 12, INK);
+  for (let k = 0; k < 10; k += 1) closer.fill(282 + k, 10 + k, 1, 1, INK).fill(291 - k, 10 + k, 1, 1, INK);
+  assert.deepEqual(orphanBands(closer, [0, 0, 300, 200], [10, 90, 260, 12], {}).cut, NO_CUT, 'a close button on the title\'s row');
+});
+
+test('orphanBands never takes a redaction fill for an orphan', () => {
+  const px = indexed({ index: false }).fill(6, 6, 10, 10, [17, 24, 39]);
+  assert.deepEqual(orphanBands(px, [0, 0, 300, 200], STATUS_LINES, { keep: [[6, 6, 10, 10]], ignore: [[6, 6, 10, 10]] }).cut, NO_CUT);
+  assert.deepEqual(orphanBands(px, [0, 0, 300, 200], STATUS_LINES, { keep: [[6, 6, 10, 10]] }).cut, NO_CUT, 'nor a fill whose pixels are read');
+});
+
+test('orphanBands takes neither a strip along the edge nor a divider for an item', () => {
+  const strip = indexed().fill(0, 0, 300, 3, [241, 245, 249]);
+  assert.deepEqual(orphanBands(strip, [0, 0, 300, 200], STATUS_LINES, {}).cut, NO_CUT, 'a strip runs the length of the edge');
+  const divided = indexed().fill(0, 2, 300, 1, GREY_E2);
+  assert.deepEqual(orphanBands(divided, [0, 0, 300, 200], STATUS_LINES, {}).cut, NO_CUT, 'a divider before the index');
+  const under = indexed().fill(0, 24, 300, 1, GREY_E2);
+  assert.deepEqual(orphanBands(under, [0, 0, 300, 200], STATUS_LINES, {}).cut, NO_CUT, 'a divider 8 lines under the index is the next content');
+});
+
+test('orphanBands at scale 2 matches scale 1', () => {
+  const one = orphanBands(indexed(), [0, 0, 300, 200], STATUS_LINES, {});
+  const { box, cut } = atScale(2).orphanBands(doubled(indexed()), times2([0, 0, 300, 200]), times2(STATUS_LINES), {});
+  assert.deepEqual([...box], times2(one.box));
+  assert.deepEqual({ ...cut }, { ...NO_CUT, top: 68 });
+  const near = atScale(2).orphanBands(doubled(indexed()), times2([0, 0, 300, 200]), times2([6, 46, 120, 14]), {});
+  assert.deepEqual({ ...near.cut }, NO_CUT, 'the 48 px from a mark is 96 capture px');
+});
+
+test('a pair cuts an orphan only at a depth every panel can lose over ground or its own orphan', () => {
+  const { sharedShed } = sandbox.__composeGeometry;
+  const panel = (px) => {
+    const { cut, takes } = sandbox.__composeGeometry.orphanBands(px, [0, 0, 300, 200], STATUS_LINES, {});
+    return { scale: 1, shed: cut, takes };
+  };
+  const index = panel(indexed());
+  assert.deepEqual([0, 5, 6, 10, 15, 16, 34, 35].map((d) => Boolean(index.takes.top[d])), [true, false, false, false, false, true, true, false], 'the index only whole, and AIR left over the name');
+  assert.equal(sharedShed([index, panel(indexed({ index: false }))]).top, 34, 'ground under the same name takes the whole cut');
+  const higher = panel(indexed({ gap: 14, index: false }));
+  assert.equal(sharedShed([index, higher]).top, 18, 'a name 16 lines higher leaves room for 18');
+  assert.equal(index.takes.top[18], true);
+  const crowded = panel(canvas(300, 200).fill(6, 10, 200, 12, INK).fill(6, 80, 200, 12, INK).fill(6, 110, 200, 12, INK));
+  assert.equal(sharedShed([index, crowded]).top, 0, 'content near the edge in one state keeps the edge in both');
+});
+
+test('at scale 1.5 orphanBands cuts whole capture px and never moves an edge outward', () => {
+  const geo = atScale(1.5);
+  const page = (index) => {
+    const px = canvas(450, 300).fill(9, 69, 180, 21, INK).fill(9, 120, 300, 18, INK).fill(9, 165, 300, 18, INK);
+    return index ? px.fill(9, 9, 15, 15, INK) : px;
+  };
+  const box = [0.5, 0.5, 449, 299];
+  const found = geo.orphanBands(page(true), box, [9, 120, 300, 63], {});
+  assert.equal(found.cut.top, 51, 'the name starts at row 69: 69 less AIR (18)');
+  for (const side of ['left', 'top', 'right', 'bottom']) assert.ok(Number.isInteger(found.cut[side]) && found.cut[side] >= 0, `the ${side} cut is whole and inward`);
+  assert.ok(found.box[1] >= box[1] && found.box[1] + found.box[3] <= box[1] + box[3]);
+  const panels = [page(true), page(false)].map((px) => ({ scale: 1.5, ...(({ cut, takes }) => ({ shed: cut, takes }))(geo.orphanBands(px, box, [9, 120, 300, 63], {})) }));
+  const shared = sandbox.__composeGeometry.sharedShed(panels);
+  for (const side of ['left', 'top', 'right', 'bottom']) {
+    assert.ok(shared[side] >= 0, `the ${side} edge never moves outward`);
+    for (const p of panels) assert.equal(p.takes[side][Math.round(shared[side] * 1.5)], true, `each panel can take the ${side} depth`);
+  }
+  assert.equal(Math.round(shared.top * 1.5), 51);
+});
+
+const SLATE_CB = [203, 213, 225];
+// A tab: a rounded 1px outline at [40, 30, 240, 60] round an avatar and a block of text.
+function outlinedTab() {
+  const px = canvas(320, 120);
+  const [x, y, w, h, radius] = [40, 30, 240, 60, 6];
+  px.fill(x + radius, y, w - 2 * radius, 1, SLATE_CB).fill(x + radius, y + h - 1, w - 2 * radius, 1, SLATE_CB);
+  px.fill(x, y + radius, 1, h - 2 * radius, SLATE_CB).fill(x + w - 1, y + radius, 1, h - 2 * radius, SLATE_CB);
+  const corners = [[x + radius, y + radius], [x + w - 1 - radius, y + radius], [x + radius, y + h - 1 - radius], [x + w - 1 - radius, y + h - 1 - radius]];
+  for (const [cx, cy] of corners) {
+    for (let py = cy - radius; py <= cy + radius; py += 1) {
+      for (let pxx = cx - radius; pxx <= cx + radius; pxx += 1) {
+        const outward = (pxx - cx) * (pxx < x + w / 2 ? -1 : 1) >= 0 && (py - cy) * (py < y + h / 2 ? -1 : 1) >= 0;
+        if (outward && Math.abs(Math.hypot(pxx - cx, py - cy) - radius) <= 0.5) px.fill(pxx, py, 1, 1, SLATE_CB);
+      }
+    }
+  }
+  return px.fill(52, 44, 28, 28, INK).fill(96, 44, 120, 12, INK).fill(96, 62, 40, 10, INK).fill(144, 62, 40, 10, INK);
+}
+// The sides whose outline a lift's box drops: none when it drops no outline.
+const droppedSides = (geo, px, box, options) => { const dropped = geo.droppedOutline(px, box, options); return dropped ? Object.keys(dropped.sides) : []; };
+const pastOutline = (...args) => [...sandbox.__composeGeometry.pastOutline(...args)];
+
+test('a side carries an outline whose line lies within OUTLINE_REACH inside it, or inside the element it grew from', () => {
+  const geo = sandbox.__composeGeometry;
+  assert.deepEqual(droppedSides(geo, outlinedTab(), [40, 30, 200, 50], {}), ['left', 'top'], 'the box holds the top and left lines only');
+  assert.deepEqual(droppedSides(geo, outlinedTab(), [48, 38, 180, 40], {}), [], 'a box inside the outline holds none of it');
+  assert.deepEqual(droppedSides(geo, outlinedTab(), [37, 30, 200, 50], {}), ['left', 'top'], 'a line 3 lines in is the side\'s');
+  assert.deepEqual(droppedSides(geo, outlinedTab(), [35, 30, 200, 50], {}), [], 'a line 5 lines in is not, and a top line alone has no corner');
+  assert.deepEqual(droppedSides(geo, outlinedTab(), [42, 30, 240, 50], {}), ['top', 'right'], 'the top line is found on a box whose left side holds no line');
+  assert.deepEqual(droppedSides(geo, outlinedTab(), [20, 30, 220, 50], { element: [40, 30, 200, 50] }), ['left', 'top'], 'a lift grown past its element still carries the element\'s outline');
+});
+
+test('at scale 2 a side carries the outline its 1x twin does', () => {
+  for (const box of [[40, 30, 200, 50], [37, 30, 200, 50], [35, 30, 200, 50]]) {
+    assert.deepEqual(droppedSides(atScale(2), doubled(outlinedTab()), times2(box), {}), droppedSides(sandbox.__composeGeometry, outlinedTab(), box, {}), `${box}`);
+  }
+});
+
+test('pastOutline moves each named side in past its outline to the first clean line, and leaves the others', () => {
+  const box = pastOutline(outlinedTab(), [40, 30, 200, 50], ['left', 'top'], {});
+  assert.deepEqual(box, [44, 31, 196, 49], 'the left edge also clears the corner\'s arc, to the line\'s ends');
+  assert.deepEqual(droppedSides(sandbox.__composeGeometry, outlinedTab(), box, {}), []);
+  const two = [...atScale(2).pastOutline(doubled(outlinedTab()), times2([40, 30, 200, 50]), ['left', 'top'], {})];
+  assert.deepEqual(two, times2(box), 'at scale 2, twice the 1x box');
+  const [x, y, w, h] = [...atScale(1.5).pastOutline(outlinedTab(), [39.6, 29.5, 200.3, 50.2], ['left', 'top'], {})];
+  assert.ok(Number.isInteger(x) && Number.isInteger(y) && x > 39.6 && y > 29.5, `at scale 1.5 a moved side lands on a whole line, inward (${x}, ${y})`);
+  assert.equal(x + w, 39.6 + 200.3, 'and a side not named keeps its coordinate');
+  assert.equal(y + h, 29.5 + 50.2);
+});
+
+test('droppedOutline takes an outline of one colour with a corner, and nothing else', () => {
+  const dropped = sandbox.__composeGeometry.droppedOutline(outlinedTab(), [40, 30, 200, 50], {});
+  assert.deepEqual([...dropped.box], [44, 31, 196, 49]);
+  assert.deepEqual(Object.keys(dropped.sides), ['left', 'top']);
+  assert.deepEqual([...dropped.sides.left.colour], SLATE_CB);
+  assert.deepEqual([...dropped.sides.left.ground], [255, 255, 255]);
+  assert.equal(sandbox.__composeGeometry.droppedOutline(outlinedTab(), [38, 28, 244, 64], {}), null, 'a whole outline is the element\'s own card');
+  const accent = canvas(320, 120).fill(40, 30, 2, 60, [79, 70, 229]).fill(40, 89, 240, 1, SLATE_CB).fill(60, 50, 120, 14, INK);
+  assert.equal(sandbox.__composeGeometry.droppedOutline(accent, [40, 30, 240, 60], {}), null, 'an accent bar beside a rule of another colour is a design');
+  const underline = canvas(320, 120).fill(40, 89, 240, 1, SLATE_CB).fill(60, 50, 120, 14, INK);
+  assert.equal(sandbox.__composeGeometry.droppedOutline(underline, [40, 30, 240, 60], {}), null, 'a rule on one side is an underline');
+});
+
+test('coverBands paints only the outline, never past an open side, and gives up on a mark in its way', () => {
+  const geo = sandbox.__composeGeometry;
+  const box = [40, 30, 200, 50]; const footprint = [36, 26, 208, 64]; const element = [40, 30, 200, 56];
+  const dropped = geo.droppedOutline(outlinedTab(), box, {});
+  const bands = geo.coverBands(outlinedTab(), dropped, footprint, element, []);
+  assert.deepEqual([...bands].map((band) => [...band.rect]), [[36, 26, 8, 60], [36, 26, 204, 5]], 'each band stops at the element\'s edge on a side the outline leaves open');
+  const pinned = outlinedTab().fill(38, 50, 4, 4, [124, 58, 237]);
+  assert.equal(geo.coverBands(pinned, geo.droppedOutline(pinned, box, {}), footprint, element, []), null, 'a pin on the outline is never painted out');
+  assert.notEqual(geo.coverBands(pinned, geo.droppedOutline(pinned, box, {}), footprint, element, [[38, 50, 4, 4]]), null, 'a fill there is left alone');
+  const grey = outlinedTab().fill(38, 50, 4, 4, [209, 213, 219]);
+  assert.equal(geo.coverBands(grey, geo.droppedOutline(grey, box, {}), footprint, element, []), null, 'nor is a pin in a blend of the rule and the ground, off the rule\'s lines');
+  const divided = outlinedTab().fill(36, 26, 1, 64, SLATE_CB);
+  assert.notEqual(geo.coverBands(divided, geo.droppedOutline(divided, box, {}), footprint, element, []), null, 'a divider the length of a band is a line too');
+});
+
+test('onRule takes the ground, the rule and blends of them, and not a glyph\'s grey', () => {
+  const at = (rgb) => new Uint8ClampedArray([...rgb, 255]);
+  const white = [255, 255, 255];
+  assert.ok(sandbox.__composeGeometry.onRule(at(white), 0, white, SLATE_CB));
+  assert.ok(sandbox.__composeGeometry.onRule(at(SLATE_CB), 0, white, SLATE_CB));
+  assert.ok(sandbox.__composeGeometry.onRule(at([229, 234, 240]), 0, white, SLATE_CB), 'half way is an antialiased edge');
+  assert.equal(sandbox.__composeGeometry.onRule(at([207, 209, 212]), 0, white, SLATE_CB), false, 'a text edge is another hue');
+  assert.equal(sandbox.__composeGeometry.onRule(at([124, 58, 237]), 0, white, SLATE_CB), false);
+});
+
+// Lines of text 8 px apart, 6 px glyphs with 1 px letter gaps, so no row between two lines is a gap; every line
+// sets its words at the same places, `space` px apart, so a column through every word space is clean.
+function running(width, height, space) {
+  const px = canvas(width, height);
+  const word = 5 * 4 + 4;
+  for (let y = 0; y < height; y += 8) {
+    for (let x = 0; x < width; x += word + space) for (let k = 0; k < 5; k += 1) px.fill(x + 5 * k, y, Math.min(4, Math.max(0, width - x - 5 * k)), Math.min(6, height - y), INK);
+  }
+  return px;
+}
+const WORD_MARKS = [400, 300, 60, 20];
+
+test('a held crop edge through running text settles in the middle of the nearest word space inward', () => {
+  const { box, edges, cut } = cropToMarks(running(1000, 800, 4), [0, 0, 1000, 800], WORD_MARKS, { hold: true });
+  assert.deepEqual(edges, { left: 'word', top: 'margin', right: 'word', bottom: 'margin' }, 'two px of leading is no gap, a four px word space is');
+  assert.equal(box[0], 362, 'the margin at 336 runs through a word; the space at 360..363 lies inward, nearer than the one outward at 332..335 is not looked at first');
+  assert.equal(box[0] + box[2], 502, 'the margin at 524 runs through a word; the space at 500..503 lies inward');
+  assert.deepEqual([box[1], box[3]], [252, 116], 'the top and bottom stay at their margins');
+  assert.equal(cut, true, 'a margin edge still runs through content');
+});
+
+test('a held crop edge with no word space within reach stays at its margin', () => {
+  const { box, edges } = cropToMarks(running(1000, 800, 2), [0, 0, 1000, 800], WORD_MARKS, { hold: true });
+  assert.deepEqual(box, [336, 252, 188, 116]);
+  assert.deepEqual(edges, { left: 'margin', top: 'margin', right: 'margin', bottom: 'margin' });
+});
+
+test('at scale 2 the same running text settles its edges in the same word spaces (LIFT_BAND, WORD_REACH)', () => {
+  const one = sameCropTwice(running(1000, 800, 4), [0, 0, 1000, 800], WORD_MARKS, { hold: true });
+  assert.equal(one.edges.left, 'word');
+});
+
+test('a cut frame edge settles in a word space outward when none lies inward, and an imported one never looks out', () => {
+  const px = running(600, 400, 4);
+  const frame = [30, 100, 540, 250];
+  const marks = [60, 200, 40, 20];
+  const live = cleanFrame(px, frame, marks);
+  assert.equal(live.edges.left, 'word');
+  assert.equal(live.frame[0], 26, 'the space at 24..27 lies outside the edge at 30');
+  const fixed = cleanFrame(px, frame, marks, { fixed: true });
+  assert.equal(fixed.edges.left, 'cut');
+  assert.equal(fixed.frame[0], 30);
+});
+
+test('a cut frame edge looks inward for a word space first', () => {
+  const px = running(600, 400, 4);
+  const { frame, edges } = cleanFrame(px, [30, 100, 540, 250], [300, 200, 40, 20], { fixed: true });
+  assert.equal(edges.left, 'word');
+  assert.equal(frame[0], 54, 'the space at 52..55 lies inward');
+});
+
+test('at scale 2 a frame edge settles in the same word space', () => {
+  const px = running(600, 400, 4);
+  const frame = [30, 100, 540, 250]; const marks = [60, 200, 40, 20];
+  const one = atScale(1).cleanFrame(px, frame, marks);
+  const two = atScale(2).cleanFrame(doubled(px), times2(frame), times2(marks));
+  assert.deepEqual([two.edges.left, two.frame[0]], [one.edges.left, 2 * one.frame[0]]);
+});
+
+test('at a fractional scale a word space settles an edge on a whole pixel, and an imported edge only inward', () => {
+  // Five px spaces: LIFT_BAND is 4.5 capture px at 1.5.
+  const px = running(600, 400, 5);
+  for (const scale of [1.25, 1.5]) {
+    const frame = [30, 100, 540, 250];
+    const { frame: out, edges } = atScale(scale).cleanFrame(px, frame, [300, 200, 40, 20], { fixed: true });
+    assert.equal(edges.left, 'word', `at ${scale}`);
+    assert.ok(Number.isInteger(out[0]) && out[0] > frame[0] && out[0] + out[2] <= frame[0] + frame[2], `at ${scale} the frame ${out} only shrinks`);
+    const { box } = atScale(scale).cropToMarks(px, [0, 0, 600, 400], [280, 180, 40, 20], { hold: true });
+    assert.ok([...box].every(Number.isInteger), `at ${scale} the crop ${[...box]} is whole`);
+  }
+});
+
+// A sidebar down the left of the page: a grey strip from the top to `to` and a rule beside it, each one colour all
+// the way. Text rows with one px of leading fill y `from`..342 and the ground above them is clean; the marks sit just
+// under the text.
+const SIDEBAR_MARKS = [70, 350, 60, 20];
+function sidebarPage(varied, from = 300, to = 500) {
+  const px = canvas(600, 500).fill(20, 0, 16, to, [200, 200, 210]).fill(38, 0, 1, 500, [120, 120, 120]);
+  for (let y = from; y + 6 <= 342; y += 7) for (let x = 60; x < 560; x += 7) px.fill(x, y, 6, 6, INK);
+  // Nav labels down the strip: it changes along the edge, which is content.
+  if (varied) for (let y = 0; y < 500; y += 10) px.fill(22, y, 12, 4, INK);
+  return px;
+}
+
+test('a strip of one colour running across a held crop edge does not stop it settling in the ground beyond', () => {
+  const { box, edges } = cropToMarks(sidebarPage(false), [0, 0, 600, 500], SIDEBAR_MARKS, { hold: true });
+  assert.equal(edges.top, 'word', 'the lines above the text cross only the sidebar');
+  assert.ok(box[1] < 300 && box[1] >= 302 - 48, `the top edge sits above the text, within WORD_REACH of its margin, at ${box[1]}`);
+});
+
+test('a strip that changes along the edge is content, and still holds the edge at its margin', () => {
+  const { box, edges } = cropToMarks(sidebarPage(true), [0, 0, 600, 500], SIDEBAR_MARKS, { hold: true });
+  assert.equal(edges.top, 'margin');
+  assert.equal(box[1], 302);
+});
+
+test('past a strip, an edge reaches no further out than a word space, though a band lies within the snap reach', () => {
+  // The text starts at 251, 51 lines out from the margin at 302: within CROP_SNAP, beyond WORD_REACH.
+  const { box, edges } = cropToMarks(sidebarPage(false, 251), [0, 0, 600, 500], SIDEBAR_MARKS, { hold: true });
+  assert.equal(edges.top, 'margin');
+  assert.equal(box[1], 302);
+});
+
+test('a strip of one colour running across a cut frame edge does not stop it settling in the ground beyond', () => {
+  const frame = [0, 302, 600, 190];
+  assert.equal(cleanFrame(sidebarPage(false), frame, SIDEBAR_MARKS).edges.top, 'word');
+  assert.equal(cleanFrame(sidebarPage(true), frame, SIDEBAR_MARKS).edges.top, 'cut');
+  assert.equal(cleanFrame(sidebarPage(false, 251), frame, SIDEBAR_MARKS).edges.top, 'cut', 'no further out than WORD_REACH');
+});
+
+test('at scale 2 a strip across an edge is read as at scale 1', () => {
+  sameCropTwice(sidebarPage(false), [0, 0, 600, 500], SIDEBAR_MARKS, { hold: true });
+  sameCropTwice(sidebarPage(true), [0, 0, 600, 500], SIDEBAR_MARKS, { hold: true });
+});
+
+test('a frame edge takes a word step outward past a strip only on a side it is let, and says when it did', () => {
+  const frame = [0, 302, 600, 190];
+  const free = sandbox.__composeGeometry.cleanFrame(sidebarPage(false), frame, SIDEBAR_MARKS);
+  assert.deepEqual({ ...free.stripOut }, { top: true });
+  const held = sandbox.__composeGeometry.cleanFrame(sidebarPage(false), frame, SIDEBAR_MARKS, { stripOut: ['left', 'right', 'bottom'] });
+  assert.deepEqual([held.edges.top, held.frame[1], { ...held.stripOut }], ['cut', 302, {}]);
+});
+
+// A white page with a wide button below the marks, out of line with them, running past both side margins.
+const BUTTON_MARKS = [400, 300, 60, 20];
+const buttonPage = (label) => {
+  const px = canvas(1000, 800).fill(400, 300, 60, 20, INK).fill(100, 330, 600, 30, [99, 102, 241]);
+  if (label) for (let x = 530; x < 600; x += 7) px.fill(x, 340, 5, 10, [255, 255, 255]);
+  return px;
+};
+
+test('a button the side edges cross ends at its corners, so it is content: the edges hold at their margins and cut it', () => {
+  for (const scale of [1, 2]) {
+    const px = scale === 1 ? buttonPage(false) : doubled(buttonPage(false));
+    const { box, edges, cut } = atScale(scale).cropToMarks(px, [0, 0, 1000, 800].map((n) => n * scale), BUTTON_MARKS.map((n) => n * scale), { hold: true });
+    assert.deepEqual([[...box].map((n) => n / scale), edges.left, edges.right, cut], [[336, 252, 188, 116], 'margin', 'margin', true], `at ${scale}`);
+  }
+  assert.deepEqual({ ...cleanFrame(buttonPage(false), [336, 252, 188, 116], BUTTON_MARKS).edges }, { left: 'cut', top: 'clean', right: 'cut', bottom: 'clean' });
+});
+
+test('a button with a white label never takes a glyph of it for a word space', () => {
+  const { box, edges } = cropToMarks(buttonPage(true), [0, 0, 1000, 800], BUTTON_MARKS, { hold: true });
+  assert.deepEqual([edges.right, box[0] + box[2]], ['margin', 524], 'the right edge stays at its margin, outside the glyphs at 530..534');
+});
+
+test('at scale 2 a word space past a strip that the search limits cut short settles where its 1x twin does', () => {
+  // Text rows end at 306 just inside the margin at 302; below them ground, crossed only by the sidebar, runs past
+  // the inward limit (CROP_MARGIN_MIN short of the mark at 350).
+  const px = canvas(600, 500).fill(20, 0, 16, 500, [200, 200, 210]).fill(38, 0, 1, 500, [120, 120, 120]).fill(...SIDEBAR_MARKS, INK);
+  for (let y = 251; y + 6 <= 306; y += 7) for (let x = 60; x < 560; x += 7) px.fill(x, y, 6, 6, INK);
+  const one = sameCropTwice(px, [0, 0, 600, 500], SIDEBAR_MARKS, { hold: true });
+  assert.equal(one.edges.top, 'word');
+});
+
+// The top edge's search lines run from 48 above its margin at 302 down to 370, the bottom of the marks.
+test('a strip that touches the image at one end and runs WORD_REACH past the search lines at the other is a strip', () => {
+  const { box, edges } = cropToMarks(sidebarPage(false, 300, 440), [0, 0, 600, 500], SIDEBAR_MARKS, { hold: true });
+  assert.equal(edges.top, 'word', 'the sidebar ends at 440, 70 lines past 370, short of the bottom at 500');
+  assert.ok(box[1] < 300 && box[1] >= 302 - 48, `the top edge sits above the text, within WORD_REACH of its margin, at ${box[1]}`);
+  assert.equal(cleanFrame(sidebarPage(false, 300, 440), [0, 302, 600, 190], SIDEBAR_MARKS).edges.top, 'word');
+});
+
+test('a strip that touches the image at one end but stops short of WORD_REACH past the search lines is content', () => {
+  const { box, edges } = cropToMarks(sidebarPage(false, 300, 400), [0, 0, 600, 500], SIDEBAR_MARKS, { hold: true });
+  assert.deepEqual([edges.top, box[1]], ['margin', 302], 'the sidebar ends at 400, 30 lines past 370');
+  assert.equal(cleanFrame(sidebarPage(false, 300, 400), [0, 302, 600, 190], SIDEBAR_MARKS).edges.top, 'cut');
+});
+
+test('at scale 2 a strip that touches the image at one end is read as at scale 1', () => {
+  assert.equal(sameCropTwice(sidebarPage(false, 300, 440), [0, 0, 600, 500], SIDEBAR_MARKS, { hold: true }).edges.top, 'word');
+  assert.equal(sameCropTwice(sidebarPage(false, 300, 400), [0, 0, 600, 500], SIDEBAR_MARKS, { hold: true }).edges.top, 'margin');
+});
+
+test('two strips of one colour with ground between them are two strips, and the ground between is still ground', () => {
+  const px = sidebarPage(false).fill(564, 0, 16, 500, [200, 200, 210]);
+  assert.equal(cropToMarks(px, [0, 0, 600, 500], SIDEBAR_MARKS, { hold: true }).edges.top, 'word');
+});
+
+// A banner below the marks, out of line with them, touching both sides of the image, with a white label at the right
+// margin.
+const bannerPage = () => {
+  const px = canvas(1000, 800).fill(...BUTTON_MARKS, INK).fill(0, 330, 1000, 30, [99, 102, 241]);
+  for (let x = 530; x < 600; x += 7) px.fill(x, 340, 5, 10, [255, 255, 255]);
+  return px;
+};
+
+test('a label inside a full-width banner is the banner\'s content, so no edge settles inside a glyph of it', () => {
+  for (const scale of [1, 2]) {
+    const px = scale === 1 ? bannerPage() : doubled(bannerPage());
+    const { box, edges } = atScale(scale).cropToMarks(px, [0, 0, 1000, 800].map((n) => n * scale), BUTTON_MARKS.map((n) => n * scale), { hold: true });
+    assert.deepEqual([edges.right, (box[0] + box[2]) / scale], ['margin', 524], `at ${scale} the right edge stays at its margin, outside the glyphs at 530..534`);
+  }
+  assert.equal(cleanFrame(bannerPage(), [336, 252, 188, 116], BUTTON_MARKS).edges.right, 'cut');
+});
+
+// A header from the top of the image to 350 whose blue fades by half a step a row, with a white label at rows
+// 320..335 that the right margin at 524 crosses: the strip above the label and the one below differ by more than
+// SLIGHT where they meet it.
+const gradientHeader = () => {
+  const px = canvas(1000, 800);
+  for (let y = 0; y < 350; y += 1) px.fill(0, y, 1000, 1, [37, Math.round(99 - y / 6), Math.round(235 - y / 2)]);
+  for (let x = 506; x < 600; x += 7) px.fill(x, 320, 5, 16, [255, 255, 255]);
+  return px.fill(400, 360, 60, 20, INK);
+};
+
+test('a label inside a header whose colour drifts down its rows is still the header\'s content', () => {
+  for (const scale of [1, 2]) {
+    const px = scale === 1 ? gradientHeader() : doubled(gradientHeader());
+    const { box, edges, cut } = atScale(scale).cropToMarks(px, [0, 0, 1000, 800].map((n) => n * scale), [400, 360, 60, 20].map((n) => n * scale), { hold: true });
+    assert.deepEqual([edges.right, (box[0] + box[2]) / scale, cut], ['margin', 524, true], `at ${scale} the right edge holds at its margin and fades, never in the glyph at 520..524`);
+  }
+  assert.equal(cleanFrame(gradientHeader(), [336, 312, 188, 116], [400, 360, 60, 20]).edges.right, 'cut');
+});
+
+const RED = [220, 38, 38];
+// Columns along `row` whose red channel lies strictly between `from` and `to` of the way across the step it holds.
+const risePixels = (out, row, [from, to] = [0.1, 0.9]) => {
+  const at = (x) => out.data[(row * out.width + x) * 4];
+  const [left, right] = [at(0), at(out.width - 1)];
+  let rise = 0;
+  for (let x = 0; x < out.width; x += 1) {
+    const t = (at(x) - left) / (right - left);
+    if (t > from && t < to) rise += 1;
+  }
+  return rise;
+};
+// Pixels whose every channel lies within `tolerance` of `colour`.
+const countNear = (out, colour, tolerance) => {
+  let n = 0;
+  for (let i = 0; i < out.width * out.height; i += 1) {
+    if (colour.every((v, c) => Math.abs(out.data[i * 4 + c] - v) <= tolerance)) n += 1;
+  }
+  return n;
+};
+// The reference the lens is measured against: separable linear interpolation over pixel centres, edges clamped.
+const bilinear = (px, [sx, sy, sw, sh], outW, outH) => {
+  const data = new Uint8ClampedArray(outW * outH * 4);
+  const read = (x, y, c) => px.data[(Math.min(px.height - 1, Math.max(0, y)) * px.width + Math.min(px.width - 1, Math.max(0, x))) * 4 + c];
+  for (let oy = 0; oy < outH; oy += 1) {
+    for (let ox = 0; ox < outW; ox += 1) {
+      const u = sx + ((ox + 0.5) * sw) / outW - 0.5; const v = sy + ((oy + 0.5) * sh) / outH - 0.5;
+      const x = Math.floor(u); const y = Math.floor(v); const fu = u - x; const fv = v - y;
+      for (let c = 0; c < 4; c += 1) {
+        data[(oy * outW + ox) * 4 + c] = (read(x, y, c) * (1 - fu) + read(x + 1, y, c) * fu) * (1 - fv) + (read(x, y + 1, c) * (1 - fu) + read(x + 1, y + 1, c) * fu) * fv;
+      }
+    }
+  }
+  return { data, width: outW, height: outH };
+};
+
+// Both rise 10-90% over 12 columns at 16x; Lanczos's steeper middle shows between 25% and 75%.
+test('resampleLanczos keeps a step edge sharper than bilinear', () => {
+  const px = canvas(16, 16).fill(8, 0, 8, 16, BLUE);
+  const out = sandbox.__composeGeometry.resampleLanczos(px, [0, 0, 16, 16], 256, 16, [0, 0, 16, 16]);
+  const reference = bilinear(px, [0, 0, 16, 16], 256, 16);
+  const [rise, linear] = [risePixels(out, 8, [0.25, 0.75]), risePixels(reference, 8, [0.25, 0.75])];
+  assert.ok(rise < linear, `the edge rises over ${rise} px against bilinear's ${linear}`);
+});
+
+test('resampleLanczos does not ring: every pixel across a step lies between its two colours', () => {
+  for (const ground of [[255, 255, 255], [17, 24, 39]]) {
+    const px = canvas(16, 16, ground).fill(6, 6, 4, 4, [34, 197, 94]);
+    const out = sandbox.__composeGeometry.resampleLanczos(px, [0, 0, 16, 16], 128, 128, [0, 0, 16, 16]);
+    for (let i = 0; i < 128 * 128; i += 1) {
+      for (let c = 0; c < 3; c += 1) {
+        const [lo, hi] = [Math.min(ground[c], [34, 197, 94][c]), Math.max(ground[c], [34, 197, 94][c])];
+        assert.ok(out.data[i * 4 + c] >= lo - 1 && out.data[i * 4 + c] <= hi + 1, `pixel ${i} channel ${c} is ${out.data[i * 4 + c]}, outside ${lo}..${hi}`);
+      }
+    }
+  }
+});
+
+test('resampleLanczos never reads past its clip', () => {
+  const px = canvas(16, 16).fill(12, 0, 4, 16, RED);
+  const out = sandbox.__composeGeometry.resampleLanczos(px, [0, 0, 12, 16], 96, 128, [0, 0, 12, 16]);
+  assert.equal(countNear(out, [255, 255, 255], 1), 96 * 128, 'every pixel is the white inside the clip');
+});
+
+test('resampleLanczos keeps a 1px line visible when it shrinks the source', () => {
+  for (const step of [3, 4]) {
+    const px = canvas(48, 8).fill(24, 0, 1, 8, INK);
+    const out = sandbox.__composeGeometry.resampleLanczos(px, [0, 0, 48, 8], 48 / step, 8, [0, 0, 48, 8]);
+    let darkest = 255;
+    for (let i = 0; i < out.width * out.height; i += 1) darkest = Math.min(darkest, out.data[i * 4]);
+    assert.ok(darkest < 230, `at step ${step} the darkest pixel is ${darkest}: the line is gone`);
+  }
+});
+
+test('resampleLanczos returns a flat field unchanged, alpha and all, from a fractional source', () => {
+  const px = canvas(16, 16, [37, 99, 235]);
+  for (let i = 0; i < 16 * 16; i += 1) px.data[i * 4 + 3] = 128;
+  const out = sandbox.__composeGeometry.resampleLanczos(px, [2.25, 3.5, 7.5, 6], 30, 24, [0, 0, 16, 16]);
+  assert.deepEqual([out.width, out.height], [30, 24]);
+  assert.equal(countNear(out, [37, 99, 235, 128], 1), 30 * 24);
+});
+
+// sourceOf takes a rule at a frame edge off before trimBlank reads the frame, so
+// these read the two in that order: the trim then passes the ground beyond the rule.
+const shedThenTrim = (geo, px, frame) => {
+  const shed = [...geo.shedEdgeRules(px, frame, null, {}).box];
+  const { box, trimmed } = geo.trimBlank(px, shed, null);
+  return { box: [...box], trimmed: { ...trimmed } };
+};
+
+function borderAtRight() {
+  const px = canvas(500, 100).fill(40, 40, 100, 20, INK);
+  return px.fill(440, 0, 1, 100, [209, 213, 219]);
+}
+
+test('a border at the right edge leaves with the shed, and the trim takes the blank ground past it to the content', () => {
+  const { box, trimmed } = shedThenTrim(sandbox.__composeGeometry, borderAtRight(), [0, 0, 441, 100]);
+  assert.equal(box[0] + box[2], 140 + 12, 'the right edge sits TRIM_PAD past the content');
+  assert.ok(trimmed.right > 280, `the right side trimmed ${trimmed.right} px of blank ground`);
+});
+
+test('at scale 2 a border at the right edge trims to twice the scale 1 box', () => {
+  const one = shedThenTrim(sandbox.__composeGeometry, borderAtRight(), [0, 0, 441, 100]).box;
+  const two = shedThenTrim(sandbox.__composeGeometry.withScale(2), doubled(borderAtRight()), [0, 0, 882, 200]).box;
+  assert.deepEqual(two, times2(one));
+});
+
+test('a divider along the bottom edge that stops short of the corner no longer holds the right side', () => {
+  const px = canvas(500, 100).fill(40, 30, 100, 20, INK).fill(0, 97, 484, 1, [226, 227, 229]);
+  const frame = [0, 0, 500, 99];
+  assert.equal(trimBlank(px, frame, null).trimmed.right, 4, 'read alone, every column crosses the divider until it ends');
+  const { box } = shedThenTrim(sandbox.__composeGeometry, px, frame);
+  assert.equal(box[0] + box[2], 140 + 12);
+});
+
+const fillRect = (...args) => [...sandbox.__composeGeometry.fillRect(...args)];
+// An imported redaction: a pad of 12 px round a box drawn by eye, a fill 2 px off what it found (page-layout.js).
+const importFill = (px, box, options = {}) => {
+  const { rect, rects, density, grew, capped } = sandbox.__composeGeometry.importFill(px, box, { pad: 12, back: 2, ...options });
+  const { extended, near, bridged, spared, peek } = sandbox.__composeGeometry.importFill(px, box, { pad: 12, back: 2, ...options });
+  return { rect: [...rect], rects: Array.from(rects, (r) => [...r]), density, grew, capped: Array.from(capped, (c) => ({ ...c })), extended: [...extended], near: [...near], bridged: [...bridged], spared: [...spared], peek: [...peek] };
+};
+// What an imported fill paints: its rects.
+const importedFill = (px, box) => importFill(px, box).rects;
+const ICON = [99, 102, 241];
+const inRect = (x, y, [rx, ry, rw, rh]) => x >= rx && x < rx + rw && y >= ry && y < ry + rh;
+// Whether a fill, one rect or the rects it paints, covers the pixel.
+const covers = (fill, x, y) => (Array.isArray(fill[0]) ? fill.some((r) => inRect(x, y, r)) : inRect(x, y, fill));
+// Every pixel of `area` more than 8 off the white ground lies under the fill.
+const assertHidden = (px, fill, area) => {
+  const [ax, ay, aw, ah] = area;
+  for (let y = ay; y < ay + ah; y += 1) for (let x = ax; x < ax + aw; x += 1) {
+    const at = (y * px.width + x) * 4;
+    if ([0, 1, 2].every((c) => px.data[at + c] >= 247)) continue;
+    assert.ok(covers(fill, x, y), `pixel ${x},${y} of the value shows outside the fill ${JSON.stringify(fill)}`);
+  }
+};
+// A value on rows 20..29 under a box drawn tight to it, and a row with an icon below.
+const valueOver = (iconTop) => canvas(300, 100).fill(44, 20, 90, 10, INK).fill(40, iconTop, 12, 12, ICON).fill(60, iconTop + 2, 80, 8, INK);
+const VALUE_BOX = [40, 18, 100, 12];
+
+// Regression guards: an imported fill keeps its whole pad, which hides every pixel of the value it reaches.
+test('an imported fill keeps its whole pad over a neighbouring row 6 px under its box', () => {
+  const px = valueOver(36);
+  const { rect, rects } = importFill(px, VALUE_BOX);
+  assert.ok(rect[1] + rect[3] >= 42, `the fill ${rect} gave back some of its pad`);
+  assertHidden(px, rects, [28, 6, 124, 30]);
+});
+
+test('descenders past the box stay hidden', () => {
+  const px = valueOver(40);
+  for (const x of [50, 70, 96, 120]) px.fill(x, 30, 2, 4, INK);
+  assertHidden(px, importedFill(px, VALUE_BOX), [28, 6, 124, 34]);
+});
+
+test('an underline under the value stays hidden', () => {
+  const px = valueOver(41).fill(44, 31, 90, 1, INK);
+  assertHidden(px, importedFill(px, VALUE_BOX), [28, 6, 124, 35]);
+});
+
+test('a faint antialiased tail past the value stays hidden', () => {
+  const px = valueOver(40).fill(60, 30, 2, 3, INK).fill(60, 33, 2, 1, [240, 240, 240]);
+  const fill = importedFill(px, VALUE_BOX);
+  assert.ok(covers(fill, 60, 33), `the fill ${JSON.stringify(fill)} leaves the tail bare`);
+});
+
+test('a value whose descenders and underline sit beside the next row is hidden in every arrangement', () => {
+  for (let iconTop = 31; iconTop <= 40; iconTop += 1) for (let tail = 0; tail <= 6; tail += 1) for (const underline of [false, true]) {
+    const px = valueOver(iconTop);
+    if (tail) px.fill(70, 30, 2, Math.min(tail, iconTop - 30), INK);
+    if (underline && iconTop > 31) px.fill(44, 30, 90, 1, INK);
+    const fill = importedFill(px, VALUE_BOX);
+    const valueEnd = Math.min(iconTop, 30 + Math.max(tail, underline ? 1 : 0));
+    assertHidden(px, fill, [28, 6, 124, valueEnd - 6]);
+  }
+});
+
+test('a value whose last glyph overhangs its box beside a neighbour on its right is hidden in every arrangement', () => {
+  for (let next = 141; next <= 150; next += 1) for (let overhang = 0; overhang <= 6; overhang += 1) {
+    const px = canvas(300, 100).fill(44, 20, 90, 10, INK).fill(next, 18, 30, 14, ICON);
+    if (overhang) px.fill(134, 22, Math.min(overhang, next - 134), 9, INK);
+    const fill = importedFill(px, [40, 18, 94, 12]);
+    assertHidden(px, fill, [28, 6, Math.min(next, 134 + overhang) - 28, 36]);
+  }
+});
+
+test('a value whose glyphs reach into a band of another ground is hidden', () => {
+  const px = canvas(300, 100).fill(30, 0, 200, 14, [238, 242, 247]).fill(44, 20, 90, 10, INK).fill(60, 12, 2, 8, INK);
+  const fill = importedFill(px, VALUE_BOX);
+  assert.ok(covers(fill, 60, 12) && covers(fill, 61, 12), `the fill ${JSON.stringify(fill)} leaves the ascender bare`);
+});
+
+test('a box with nothing of its own in it keeps its pad, which may be all that hides the value', () => {
+  const px = canvas(300, 100).fill(44, 24, 90, 6, INK);
+  assertHidden(px, importedFill(px, [40, 8, 100, 10]), [28, 0, 124, 31]);
+});
+
+test('content on the value\'s own rows, beside the box, stays hidden', () => {
+  const px = canvas(300, 100).fill(50, 20, 90, 10, INK).fill(40, 20, 5, 10, INK).fill(145, 20, 6, 10, INK);
+  assertHidden(px, importedFill(px, [48, 18, 94, 12]), [36, 6, 118, 36]);
+});
+
+// The reviewer's probes A1 to A10: the value's own ink past a few plain lines.
+test('A1: a short last word in the pad after a word space stays hidden', () => {
+  const px = canvas(300, 100);
+  for (let x = 40; x < 100; x += 6) px.fill(x, 20, 4, 10, INK);
+  px.fill(102, 20, 3, 10, INK).fill(107, 20, 3, 10, INK);
+  assertHidden(px, importedFill(px, [38, 18, 62, 14]), [26, 6, 100, 40]);
+});
+
+test('A2: on a 2x image the letter past a 3 px gap stays hidden', () => {
+  const px = canvas(400, 140);
+  for (let x = 40; x < 140; x += 11) px.fill(x, 40, 8, 20, INK);
+  assertHidden(px, importedFill(px, [38, 38, 98, 24]), [26, 26, 140, 50]);
+});
+
+test('A3: on a 2x image tittles 4 px above the x-height stay hidden', () => {
+  const px = canvas(400, 140);
+  for (let x = 40; x < 140; x += 11) px.fill(x, 50, 6, 16, INK);
+  px.fill(40, 42, 6, 4, INK).fill(62, 42, 6, 4, INK);
+  assertHidden(px, importedFill(px, [38, 50, 104, 16]), [26, 30, 130, 50]);
+});
+
+test('A4: an underline 3 or 4 rows under the baseline stays hidden', () => {
+  for (const under of [33, 34]) {
+    const px = canvas(300, 100);
+    for (let x = 40; x < 130; x += 6) px.fill(x, 20, 4, 10, INK);
+    px.fill(40, under, 90, 1, INK);
+    assertHidden(px, importedFill(px, [38, 18, 94, 12]), [26, 6, 120, 40]);
+  }
+});
+
+test('A10: a 2x underline 4 rows under the baseline stays hidden', () => {
+  const px = canvas(400, 140);
+  for (let x = 40; x < 140; x += 11) px.fill(x, 40, 8, 20, INK);
+  px.fill(40, 64, 100, 2, INK);
+  assertHidden(px, importedFill(px, [38, 38, 104, 22]), [26, 26, 130, 50]);
+});
+
+test('a thick underline or a border-bottom under the value stays hidden, at 1x and 2x', () => {
+  for (const [under, thick] of [[33, 3], [34, 4]]) {
+    const px = canvas(300, 100);
+    for (let x = 40; x < 130; x += 6) px.fill(x, 20, 4, 10, INK);
+    px.fill(40, under, 90, thick, INK);
+    assertHidden(px, importedFill(px, [38, 18, 94, 12]), [26, 6, 120, 40]);
+  }
+  for (const [under, thick] of [[64, 6], [66, 6]]) {
+    const px = canvas(400, 140);
+    for (let x = 40; x < 140; x += 11) px.fill(x, 40, 8, 20, INK);
+    px.fill(38, under, 104, thick, [203, 213, 225]);
+    assertHidden(px, importedFill(px, [38, 38, 104, 22]), [26, 26, 130, 54]);
+  }
+});
+
+test('a box drawn short of a 2x value\'s height still hides the glyphs below it', () => {
+  const px = canvas(400, 140);
+  for (let x = 40; x < 140; x += 11) px.fill(x, 40, 8, 16, INK);
+  assertHidden(px, importedFill(px, [38, 40, 104, 6]), [26, 28, 130, 30]);
+});
+
+test('a thin line past a wide gap, an underline or a divider, stays hidden', () => {
+  const px = valueOver(60).fill(30, 37, 200, 2, [203, 213, 225]);
+  assertHidden(px, importedFill(px, VALUE_BOX), [28, 6, 124, 36]);
+});
+
+test('a stray of the value\'s own ink and a short run before a neighbour keep the pad whole', () => {
+  const px = canvas(300, 100).fill(44, 20, 90, 10, INK).fill(70, 34, 2, 1, INK).fill(40, 38, 12, 12, ICON);
+  const { rect } = importFill(px, VALUE_BOX);
+  assert.ok(rect[1] + rect[3] >= 42, `the fill ${rect} gave back some of its pad`);
+});
+
+test('a live fill is the box and its reach less the ground', () => {
+  const px = valueOver(36);
+  assert.deepEqual(fillRect(px, [40, 18, 100, 12], { reach: 2, back: 2 }), [42, 18, 94, 14]);
+  assert.deepEqual(fillRect(px, [400, 18, 100, 12], { reach: 2, back: 2 }).slice(2), [0, 0], 'a box off the image covers nothing');
+});
+
+// The reviewer's other synthetic probes: every pixel off the ground in `area`, a neighbour's aside, lies under the fill.
+const assertValueHidden = (px, fill, area, neighbours = []) => {
+  const [ax, ay, aw, ah] = area;
+  for (let y = ay; y < ay + ah; y += 1) for (let x = ax; x < ax + aw; x += 1) {
+    if (neighbours.some((r) => inRect(x, y, r))) continue;
+    const at = (y * px.width + x) * 4;
+    if ([0, 1, 2].every((c) => px.data[at + c] === 255)) continue;
+    assert.ok(covers(fill, x, y), `pixel ${x},${y} of the value shows outside the fill ${JSON.stringify(fill)}`);
+  }
+};
+const stems = (px, from, to, y, h, step, colour = INK) => { for (let x = from; x < to; x += step) px.fill(x, y, step - 2, h, colour); return px; };
+
+test('A5 to A9: the value\'s faint, light, fractional and chip-held ink stays hidden', () => {
+  { const px = stems(canvas(300, 100), 40, 130, 20, 10, 6).fill(70, 30, 2, 3, INK).fill(40, 36, 12, 12, ICON);
+    assertValueHidden(px, importedFill(px, [38, 18, 94, 12]), [26, 6, 120, 30], [[40, 36, 12, 12]]); }
+  { const px = stems(canvas(300, 100), 40, 130, 20, 10, 6).fill(90, 30, 1, 8, [236, 236, 236]).fill(40, 33, 12, 12, ICON);
+    assertValueHidden(px, importedFill(px, [38, 18, 94, 12]), [26, 6, 120, 34], [[40, 33, 12, 12]]); }
+  { const px = canvas(300, 100);
+    for (let x = 40; x < 130; x += 6) px.fill(x, 20, 4, 10, [200, 200, 200]).fill(x - 1, 20, 1, 10, [232, 232, 232]).fill(x + 4, 20, 1, 10, [232, 232, 232]);
+    px.fill(70, 30, 2, 2, [232, 232, 232]).fill(40, 36, 12, 12, INK);
+    assertValueHidden(px, importedFill(px, [38, 18, 94, 9]), [26, 6, 120, 30], [[40, 36, 12, 12]]); }
+  { const px = stems(canvas(300, 100), 40, 130, 20, 10, 6).fill(40, 34, 12, 12, ICON);
+    assertValueHidden(px, importedFill(px, [38.6, 18.4, 93.7, 11.3]), [26, 6, 120, 28], [[40, 34, 12, 12]]); }
+  { const px = stems(canvas(300, 100).fill(34, 14, 104, 22, [238, 242, 247]), 40, 130, 20, 10, 6);
+    assertValueHidden(px, importedFill(px, [40, 20, 90, 10]), [26, 6, 120, 40]); }
+});
+
+test('an imported fill is never smaller than the fill of its box and its 12 px pad', () => {
+  let seed = 11; const rnd = () => ((seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648);
+  for (let i = 0; i < 1500; i += 1) {
+    const W = 80 + Math.floor(rnd() * 160); const H = 60 + Math.floor(rnd() * 100);
+    const px = canvas(W, H, rnd() < 0.3 ? [17, 24, 39] : [255, 255, 255]);
+    for (let k = 0; k < 1 + rnd() * 6; k += 1) {
+      const colour = [rnd() * 255, rnd() * 255, rnd() * 255].map(Math.floor);
+      const [x, y] = [Math.floor(rnd() * W), Math.floor(rnd() * H)];
+      px.fill(x, y, Math.min(W - x, Math.floor(rnd() * 40)), Math.min(H - y, Math.floor(rnd() * 20)), colour);
+    }
+    const box = [rnd() * (W + 40) - 30, rnd() * (H + 40) - 30, rnd() * 60, rnd() * 30].map((v) => (rnd() < 0.5 ? Math.round(v) : v));
+    const pad = fillRect(px, box, { reach: 12, back: 2 });
+    if (pad[2] <= 0 || pad[3] <= 0) continue;
+    const bounds = rnd() < 0.5 ? undefined : [Math.floor(rnd() * 20), Math.floor(rnd() * 20), W - 20, H - 20];
+    const { rects } = importFill(px, box, { bounds });
+    assert.ok(rects.some((rect) => rect[0] <= pad[0] && rect[1] <= pad[1] && rect[0] + rect[2] >= pad[0] + pad[2] && rect[1] + rect[3] >= pad[1] + pad[3]), `case ${i}: the fill ${JSON.stringify(rects)} is smaller than the pad's ${pad}`);
+  }
+});
+
+// A line of lowercase text at `d` device px per CSS px: an x-height of 7 CSS px of stems 1 CSS px wide and 2 apart,
+// a third of them starting a CSS px lower and another third ending one higher as round letters do, and three
+// ascenders of 3 more CSS px.
+const textLine = (px, x, y, width, d, colour = INK) => {
+  for (let i = 0, sx = x; sx < x + width; i += 1, sx += 3 * d) px.fill(sx, y + 3 * d + (i % 3 === 1 ? d : 0), d, 7 * d - (i % 3 === 0 ? 0 : d), colour);
+  for (const k of [0, 4, 9]) if (x + k * 3 * d < x + width) px.fill(x + k * 3 * d, y, d, 3 * d, colour);
+  return px;
+};
+
+test('an imported fill reads the density from the value\'s x-height, rounding up, and a blank box from its height', () => {
+  for (const d of [1, 2, 3]) {
+    const px = textLine(canvas(200 * d, 80 * d), 20 * d, 20 * d, 60 * d, d);
+    assert.equal(importFill(px, [20 * d, 20 * d, 60 * d, 10 * d]).density, d, `a ${d}x value`);
+  }
+  assert.equal(importFill(canvas(200, 120), [20, 20, 100, 48]).density, 2, 'a blank box 48 px tall reads as one line at 2x');
+});
+
+test('an imported fill grows over an underline or a border past its pad, at 1x and 2x, and says so', () => {
+  for (const d of [1, 2]) {
+    const px = textLine(canvas(200 * d, 100 * d), 20 * d, 20 * d, 60 * d, d).fill(20 * d, 46 * d, 60 * d, 3 * d, INK);
+    const pad = fillRect(px, [20 * d, 20 * d, 60 * d, 10 * d], { reach: 12, back: 2 });
+    assert.ok(pad[1] + pad[3] <= 46 * d, 'the border lies past the pad');
+    const fill = importFill(px, [20 * d, 20 * d, 60 * d, 10 * d]);
+    assertValueHidden(px, fill.rects, [0, 0, px.width, px.height]);
+    assert.equal(fill.grew, true);
+    assert.deepEqual(fill.capped, []);
+  }
+});
+
+test('an imported fill grows over a wrapped line under or over its box, wider than it, and the leading between', () => {
+  for (const d of [1, 2]) for (const below of [true, false]) {
+    const px = canvas(240 * d, 140 * d);
+    const [boxed, other] = below ? [30, 54] : [54, 30];
+    textLine(px, 20 * d, boxed * d, 50 * d, d);
+    textLine(px, 20 * d, other * d, 80 * d, d);
+    const fill = importFill(px, [20 * d, boxed * d, 50 * d, 10 * d]);
+    assertValueHidden(px, fill.rects, [0, 0, px.width, px.height]);
+    assert.deepEqual(fill.capped, [], `${d}x, the other line ${below ? 'below' : 'above'}`);
+  }
+});
+
+test('an imported fill grows over the rest of a word its box stops short of, on the value\'s own line', () => {
+  const px = textLine(canvas(300, 80), 20, 20, 80, 1);
+  const fill = importFill(px, [20, 20, 40, 10]);
+  assertValueHidden(px, fill.rects, [0, 0, 300, 80]);
+  assert.equal(fill.grew, true);
+});
+
+test('an imported fill does not grow into ground of another colour, a rule that runs past it, or another mark\'s box', () => {
+  const chart = textLine(canvas(300, 100).fill(10, 0, 280, 18, [238, 242, 247]), 40, 20, 60, 1);
+  assert.equal(importFill(chart, [40, 20, 60, 10]).grew, false, 'a chart flush above the value');
+  const ruled = textLine(canvas(300, 100).fill(0, 44, 300, 1, [203, 213, 225]), 40, 20, 60, 1);
+  textLine(ruled, 40, 50, 60, 1);
+  const fill = importFill(ruled, [40, 20, 60, 10]).rect;
+  assert.ok(fill[1] + fill[3] <= 44, `the fill ${fill} crosses the divider`);
+  const marked = textLine(textLine(canvas(300, 100), 40, 20, 60, 1), 40, 44, 60, 1);
+  const kept = importFill(marked, [40, 20, 60, 10], { keep: [[38, 42, 64, 14]] }).rect;
+  assert.ok(kept[1] + kept[3] <= 42, `the fill ${kept} grows into another mark's box`);
+  const grown = importFill(marked, [40, 20, 60, 10]).rect;
+  assert.ok(grown[1] + grown[3] > 54, `without that box the fill ${grown} takes the line below`);
+});
+
+test('an imported fill reads nothing past its bounds, so ink there neither grows it nor caps it', () => {
+  const px = textLine(canvas(300, 100), 40, 20, 60, 1).fill(40, 44, 60, 2, INK);
+  const fill = importFill(px, [40, 20, 60, 10], { bounds: [0, 0, 300, 42] });
+  assert.ok(fill.rect[1] + fill.rect[3] <= 42);
+  assert.deepEqual(fill.capped, []);
+});
+
+test('ink that runs on along the value\'s own line past the limit refuses the board; another line is covered to its end', () => {
+  const own = textLine(canvas(600, 80), 20, 20, 560, 1);
+  assert.deepEqual(importFill(own, [20, 20, 40, 10]).capped, [{ side: 'right', why: 'limit', refuse: true }]);
+  const beside = textLine(textLine(canvas(600, 80), 20, 20, 40, 1), 20, 38, 560, 1);
+  const fill = importFill(beside, [20, 20, 40, 10]);
+  assert.deepEqual(fill.capped, []);
+  assert.deepEqual(fill.extended, ['right']);
+  assertValueHidden(beside, fill.rects, [0, 0, 600, 80]);
+});
+
+test('a line beside the value is followed to its end either way, as a right-aligned or wrapped-left value runs', () => {
+  const px = textLine(textLine(canvas(400, 80), 200, 40, 40, 1), 20, 22, 240, 1);
+  const fill = importFill(px, [200, 40, 40, 10]);
+  assertValueHidden(px, fill.rects, [0, 0, 400, 80]);
+  assert.ok(fill.extended.includes('left'), `${fill.extended}`);
+});
+
+test('ink that runs into another mark\'s box is named, and refuses the board under the value\'s columns or past the limit', () => {
+  // A mark's box over the line under the value may hold the value's own wrapped line: refused. A context box there
+  // is the driver's word, and the walk stops at it.
+  const px = textLine(textLine(canvas(300, 100), 40, 20, 60, 1), 40, 44, 60, 1);
+  assert.deepEqual(importFill(px, [40, 20, 60, 10], { keep: [[38, 42, 64, 14]] }).capped, [{ side: 'bottom', why: 'mark', refuse: true }]);
+  // Off the value's columns a mark is still no reason to leave a line its reach takes in; further off, it is.
+  const beside = textLine(textLine(canvas(300, 100), 40, 20, 60, 1), 160, 44, 60, 1);
+  assert.deepEqual(importFill(beside, [40, 20, 60, 10], { keep: [[158, 42, 64, 14]] }).capped.filter((c) => c.refuse).map((c) => [c.why, c.at[0], c.at[1]]), [['mark', 160, 44]]);
+  const off = textLine(textLine(canvas(300, 160), 40, 20, 60, 1), 160, 130, 60, 1);
+  assert.deepEqual(importFill(off, [40, 20, 60, 10], { keep: [[158, 128, 64, 14]] }).capped.filter((c) => c.refuse), [], 'a mark over a line beyond the value\'s reach refuses nothing');
+  const long = textLine(textLine(canvas(600, 80), 20, 20, 40, 1), 20, 38, 560, 1);
+  const capped = importFill(long, [20, 20, 40, 10], { keep: [[400, 30, 40, 30]] }).capped;
+  assert.ok(capped.some((c) => c.side === 'right' && c.why === 'mark' && c.refuse), JSON.stringify(capped));
+});
+
+test('a context box over the value\'s own wrapped line refuses the board naming the line; one over a line a rule fences off does not', () => {
+  const wrapped = textLine(textLine(canvas(300, 100), 40, 20, 60, 1), 40, 44, 60, 1);
+  const fill = importFill(wrapped, [40, 20, 60, 10], { held: [[38, 42, 64, 14]] });
+  assert.deepEqual(fill.capped.filter((c) => c.why === 'context').map((c) => [c.side, c.refuse, [...c.at]]), [['bottom', true, [40, 44, 58, 10]]]);
+  assert.ok(!fill.rects.some((r) => r[1] + r[3] > 44), `the fill ${JSON.stringify(fill.rects)} paints into the context box`);
+  const fenced = textLine(textLine(canvas(300, 100), 40, 20, 60, 1), 40, 50, 60, 1).fill(0, 40, 300, 1, [203, 213, 225]);
+  assert.deepEqual(importFill(fenced, [40, 20, 60, 10], { held: [[38, 48, 64, 14]] }).capped.filter((c) => c.refuse), [], 'the line past the rule is the driver\'s to keep');
+});
+
+// A row's border under the value's line, across the frame, and the value's line past it.
+const ruledValue = (line2At) => textLine(textLine(canvas(400, 100), 40, 20, 60, 1).fill(0, 36, 400, 1, [203, 213, 225]), line2At, 44, 80, 1);
+
+test('a line past a row\'s border wholly beside the value\'s columns is refused, or covered, as far as a wrapped line reaches', () => {
+  // A cell on the value's own row above that line keeps the wrap rule off it: the board is refused naming it.
+  const celled = textLine(ruledValue(130), 150, 20, 50, 1);
+  const rule = importFill(celled, [40, 20, 60, 10]).capped.find((c) => c.why === 'rule');
+  assert.ok(rule?.refuse && rule.at[0] <= 130 && rule.at[0] + rule.at[2] >= 205, JSON.stringify(rule));
+  // With that row clear, the wrap rule may take the line for the value's wrapped right to left: never left bare.
+  const clear = ruledValue(130);
+  const fill = importFill(clear, [40, 20, 60, 10]);
+  if (!fill.capped.some((c) => c.refuse)) assertValueHidden(clear, fill.rects, [120, 40, 100, 20]);
+  assert.deepEqual(importFill(ruledValue(300), [40, 20, 60, 10]).capped.filter((c) => c.refuse), [], 'a line beyond a wrap\'s reach refuses nothing');
+});
+
+test('a lift\'s box over the line past a row\'s border is read, so that line refuses the board', () => {
+  const px = textLine(textLine(canvas(400, 100), 40, 20, 60, 1).fill(0, 36, 400, 1, [203, 213, 225]), 40, 44, 60, 1);
+  const fill = importFill(px, [40, 20, 60, 10], { keep: [[38, 42, 64, 14]] });
+  assert.deepEqual(fill.capped.filter((c) => c.refuse).map((c) => [c.why, [...c.at]]), [['rule', [40, 44, 58, 10]]]);
+});
+
+test('a mark\'s or a context box over the value\'s line wrapped to its container\'s edge refuses the board naming that line', () => {
+  // The value ends a line at 200 and wraps to the left edge under it, off the fill's columns.
+  const px = textLine(textLine(canvas(400, 100), 200, 20, 60, 1), 20, 40, 80, 1);
+  const lift = importFill(px, [200, 20, 60, 10], { keep: [[18, 38, 84, 14]] });
+  assert.deepEqual(lift.capped.filter((c) => c.refuse).map((c) => [c.why, c.at[0], c.at[1]]), [['mark', 20, 40]]);
+  const context = importFill(px, [200, 20, 60, 10], { held: [[18, 38, 84, 14]] });
+  assert.deepEqual(context.capped.filter((c) => c.refuse).map((c) => [c.why, c.at[0], c.at[1]]), [['context', 20, 40]]);
+  assertValueHidden(px, importFill(px, [200, 20, 60, 10]).rects, [0, 0, 400, 100]);
+});
+
+test('the gate refuses a line within the value\'s reach that the fill leaves bare, unless a context mark holds it alone', () => {
+  // Above the value past a gap of more than a lead, overlapping its columns too little to be taken for its line.
+  const above = (y) => textLine(textLine(canvas(400, 140), 100, 80, 60, 1), 150, y, 100, 1);
+  const fill = importFill(above(42), [100, 80, 60, 10]);
+  assert.deepEqual(fill.capped.filter((c) => c.refuse).map((c) => [c.why, c.side, [...c.at]]), [['reach', 'top', [150, 42, 100, 10]]]);
+  const held = importFill(above(42), [100, 80, 60, 10], { held: [[148, 40, 104, 14]] });
+  assert.deepEqual(held.capped.filter((c) => c.refuse), [], 'the driver\'s word on that line');
+  assert.deepEqual(importFill(above(14), [100, 80, 60, 10]).capped.filter((c) => c.refuse), [], 'a line further off than two leads');
+  // A line wholly left of the value past a clear gutter, with a label beside the value on its row: a column's
+  // gutter is no reason either, and a context mark is the driver's recovery.
+  const apart = textLine(textLine(textLine(canvas(400, 140), 200, 80, 60, 1), 20, 80, 60, 1), 20, 42, 100, 1);
+  assert.deepEqual(importFill(apart, [200, 80, 60, 10]).capped.filter((c) => c.refuse).map((c) => [c.why, c.at[0], c.at[1]]), [['reach', 20, 42]]);
+  const columns = importFill(apart, [200, 80, 60, 10], { held: [[18, 40, 104, 14]] });
+  assert.deepEqual(columns.capped.filter((c) => c.refuse), [], 'the other column marked context');
+  assert.ok(!columns.rects.some((r) => r[0] < 120), `the fill ${JSON.stringify(columns.rects)} reaches the other column`);
+});
+
+test('the gate refuses a line past a rule the walk never reached, and leaves one beyond two leads past it', () => {
+  // The walk stops at the gap before the rule; the line past it lies beside the value's columns, which the wrap rule
+  // does not cross a rule to take.
+  const line = (y) => textLine(textLine(canvas(400, 140), 40, 20, 60, 1).fill(0, 62, 400, 1, [203, 213, 225]), 130, y, 80, 1);
+  assert.deepEqual(importFill(line(66), [40, 20, 60, 10]).capped.filter((c) => c.refuse).map((c) => [c.why, c.at[0], c.at[1]]), [['rule', 130, 66]]);
+  assert.deepEqual(importFill(line(110), [40, 20, 60, 10]).capped.filter((c) => c.refuse), [], 'further than two leads past the rule');
+});
+
+test('a line of capitals whose inkiest row is one bar still reads its density', () => {
+  for (const d of [2, 3]) {
+    // An L: a stem 9 CSS px tall and a foot 5 wide, 2 CSS px apart, as 12px capitals are.
+    const px = canvas(200 * d, 80 * d);
+    for (let x = 20 * d; x < 80 * d; x += 7 * d) px.fill(x, 20 * d, d, 9 * d, INK).fill(x, 28 * d, 5 * d, d, INK);
+    assert.ok(importFill(px, [20 * d, 20 * d, 60 * d, 9 * d]).density >= d, `a ${d}x line of capitals`);
+  }
+});
+
+test('a word a word space past the box\'s 12 CSS px reach is covered, at 1x, 2x and 3x', () => {
+  for (const d of [1, 2, 3]) {
+    const px = textLine(textLine(canvas(260 * d, 60 * d), 20 * d, 20 * d, 60 * d, d), 94 * d, 20 * d, 30 * d, d);
+    assertValueHidden(px, importFill(px, [20 * d, 20 * d, 60 * d, 10 * d]).rects, [0, 0, px.width, px.height]);
+  }
+});
+
+test('a value wrapped onto three or four lines is covered to its last line, from a box on any of them', () => {
+  for (const d of [1, 2, 3]) for (const count of [3, 4]) for (let boxed = 0; boxed < count; boxed += 1) {
+    const px = canvas(240 * d, (40 + 22 * count) * d);
+    for (let n = 0; n < count; n += 1) textLine(px, 20 * d, (20 + 22 * n) * d, (n === 1 ? 110 : 60) * d, d);
+    const fill = importFill(px, [20 * d, (20 + 22 * boxed) * d, 60 * d, 10 * d]);
+    assertValueHidden(px, fill.rects, [0, 0, px.width, px.height]);
+  }
+});
+
+// A value line at rows 20 to 30 has a lead of 21 rows below its fill's edge at row 32.
+test('ink that resumes within one more lead past a gap is covered, and said so', () => {
+  const px = textLine(textLine(canvas(240, 120), 20, 20, 60, 1), 20, 60, 60, 1);
+  const fill = importFill(px, [20, 20, 60, 10]);
+  assertValueHidden(px, fill.rects, [0, 0, 240, 120]);
+  assert.deepEqual(fill.bridged, ['bottom']);
+});
+
+test('ink farther past a gap, under the value with nothing between, is covered through; with a line between, it is left, named, and inside what the gate shows', () => {
+  // The far line 78 rows under the pad's edge: past three leads of 21, within five.
+  const clear = textLine(textLine(canvas(240, 160), 20, 20, 60, 1), 20, 110, 60, 1);
+  const through = importFill(clear, [20, 20, 60, 10]);
+  assertValueHidden(clear, through.rects, [0, 0, 240, 160]);
+  assert.deepEqual(through.bridged, ['bottom']);
+  const between = textLine(clear, 160, 70, 50, 1);
+  const fill = importFill(between, [20, 20, 60, 10]);
+  assert.ok(fill.rect[1] + fill.rect[3] < 110, `the fill ${fill.rect} reaches the far line`);
+  assert.deepEqual(fill.near, ['bottom']);
+  assert.ok(fill.peek[1] + fill.peek[3] >= 120, `the gate's view ${fill.peek} stops short of the far line`);
+});
+
+test('a border past a gap is neither covered through nor named: only text is', () => {
+  const px = textLine(canvas(240, 140), 20, 20, 60, 1).fill(0, 60, 240, 1, [203, 213, 225]).fill(0, 82, 240, 1, [203, 213, 225]);
+  const fill = importFill(px, [20, 20, 60, 10]);
+  assert.deepEqual([fill.bridged, fill.near], [[], []]);
+});
+
+test('ink at the frame on the value\'s own line refuses the board; on a line beside it, it is named', () => {
+  const own = textLine(canvas(300, 80), 20, 20, 200, 1);
+  assert.deepEqual(importFill(own, [20, 20, 40, 10], { bounds: [0, 0, 120, 80] }).capped, [{ side: 'right', why: 'frame', refuse: true }]);
+  const beside = textLine(textLine(canvas(300, 80), 20, 20, 40, 1), 20, 38, 200, 1);
+  assert.deepEqual(importFill(beside, [20, 20, 40, 10], { bounds: [0, 0, 120, 80] }).capped, [{ side: 'right', why: 'frame', refuse: false }]);
+});
+
+test('a value with nothing beside it keeps the fill of its box and pad', () => {
+  const px = textLine(canvas(300, 100), 40, 20, 60, 1);
+  const fill = importFill(px, [40, 20, 60, 10]);
+  assert.deepEqual(fill.rect, fillRect(px, [40, 20, 60, 10], { reach: 12, back: 2 }));
+  assert.deepEqual(fill.rects, [fill.rect], 'and paints that one rect');
+  assert.equal(fill.grew, false);
+});
+
+// A value of three lines, the last past a gap of 38 rows: within two leads of 21 at 1x.
+const threeLines = (d) => {
+  const px = canvas(240 * d, 160 * d);
+  for (const [y, width] of [[40, 60], [62, 50], [110, 70]]) textLine(px, 20 * d, y * d, width * d, d);
+  return px;
+};
+
+test('a box drawn just off its value, holding no ink, takes the line under its pad as the value\'s and covers through a gap to its last line', () => {
+  for (const d of [1, 2, 3]) {
+    const px = threeLines(d);
+    const fill = importFill(px, [20 * d, 28 * d, 60 * d, 10 * d]);
+    assertValueHidden(px, fill.rects, [0, 0, px.width, px.height]);
+    assert.ok(fill.bridged.includes('bottom'), `${d}x: ${fill.bridged}`);
+    assert.equal(fill.density, d);
+  }
+});
+
+test('a box off its value by more than its pad takes the line its lead reaches as the value\'s, reads the density from it, and grows again from there', () => {
+  for (const d of [2, 3]) {
+    const px = threeLines(d);
+    const pad = fillRect(px, [20 * d, 24 * d, 60 * d, 10 * d], { reach: 12, back: 2 });
+    assert.ok(pad[1] + pad[3] <= 40 * d, 'the pad reaches no ink');
+    const fill = importFill(px, [20 * d, 24 * d, 60 * d, 10 * d]);
+    assertValueHidden(px, fill.rects, [0, 0, px.width, px.height]);
+    assert.ok(fill.bridged.includes('bottom'), `${d}x: ${fill.bridged}`);
+    assert.equal(fill.density, d, `${d}x reads its density from the line it reached`);
+  }
+});
+
+test('a blank box in a clearing covers through no gap: the ink two leads off is left to the gate', () => {
+  const px = textLine(canvas(240, 120), 20, 70, 60, 1);
+  const fill = importFill(px, [20, 20, 60, 10]);
+  assert.equal(fill.grew, false);
+  assert.deepEqual([fill.bridged, fill.rects], [[], [fill.rect]]);
+  assert.ok(fill.peek[1] + fill.peek[3] >= 80, `the gate's view ${fill.peek} stops short of the line`);
+});
+
+test('an imported fill paints one rectangle per line it covers: a label on the value\'s line past a clean gap, and the next column\'s rows, stay bare', () => {
+  const px = canvas(360, 120);
+  textLine(px, 20, 44, 40, 1); textLine(px, 100, 44, 60, 1); textLine(px, 200, 44, 60, 1);
+  textLine(px, 100, 20, 160, 1);
+  const fill = importFill(px, [100, 44, 60, 10]);
+  assertValueHidden(px, fill.rects, [98, 18, 64, 40]);
+  assertValueHidden(px, fill.rects, [160, 18, 102, 14]);
+  assert.ok(fill.rects.length >= 2, `${JSON.stringify(fill.rects)}`);
+  assert.ok(inRect(230, 48, fill.rect) && !covers(fill.rects, 230, 48), 'the next column\'s words lie inside the bounding box and outside every rect');
+  assert.ok(!covers(fill.rects, 30, 48) && !covers(fill.rects, 56, 48), 'the label 40 px before the value stays bare');
+});
+
+test('ink past a gap is covered through only when its line lies under or over the value\'s: a wide heading set off from it is left to the gate', () => {
+  const value = (px) => textLine(px, 100, 60, 60, 1);
+  const offset = value(textLine(canvas(300, 140), 20, 20, 100, 1));
+  const fill = importFill(offset, [100, 60, 60, 10]);
+  assert.deepEqual([fill.bridged, fill.near], [[], ['top']]);
+  assert.ok(fill.rect[1] > 30 && fill.peek[1] <= 20, `the fill ${fill.rect} covers the heading, or the gate's view ${fill.peek} leaves it out`);
+  const under = value(textLine(canvas(300, 140), 100, 20, 100, 1));
+  const covered = importFill(under, [100, 60, 60, 10]);
+  assert.deepEqual(covered.bridged, ['top']);
+  assertValueHidden(under, covered.rects, [0, 0, 300, 140]);
+});
+
+// A value that starts mid-line (after a text indent or a label set far off) and wraps to its container's left
+// edge: the second line lies wholly left of the first line's columns, 30 rows below it (over a lead of 21).
+const wrappedLeft = (d) => textLine(textLine(canvas(300 * d, 120 * d), 150 * d, 30 * d, 60 * d, d), 20 * d, 70 * d, 40 * d, d);
+
+test('a value that wraps to its container\'s left edge, wholly left of its first line, is covered from a box on either line', () => {
+  for (const d of [1, 2, 3]) {
+    const onFirst = importFill(wrappedLeft(d), [150 * d, 30 * d, 60 * d, 10 * d]);
+    assertValueHidden(wrappedLeft(d), onFirst.rects, [0, 0, 300 * d, 120 * d]);
+    assert.equal(onFirst.grew, true);
+    const onSecond = importFill(wrappedLeft(d), [20 * d, 70 * d, 40 * d, 10 * d]);
+    assertValueHidden(wrappedLeft(d), onSecond.rects, [0, 0, 300 * d, 120 * d]);
+  }
+});
+
+test('a wrapped line too faint to seed a piece is still painted: the walk reads it, so a piece of it is kept', () => {
+  for (const d of [1, 2]) {
+    const px = textLine(textLine(canvas(240 * d, 100 * d), 20 * d, 20 * d, 60 * d, d, [240, 240, 240]), 20 * d, 42 * d, 80 * d, d, [240, 240, 240]);
+    const fill = importFill(px, [20 * d, 20 * d, 60 * d, 10 * d]);
+    assertValueHidden(px, fill.rects, [0, 0, px.width, px.height]);
+  }
+});
+
+// A definition grid: a label column at x 20 and a value column at x 120, rows `pitch` apart, the value on row 1.
+const grid = (d, pitch, labelPitch = pitch) => {
+  const px = canvas(300 * d, 160 * d);
+  for (let row = 0; row < 4; row += 1) textLine(px, 20 * d, (20 + row * labelPitch) * d, 50 * d, d, [107, 114, 128]);
+  for (let row = 0; row < 4; row += 1) textLine(px, 120 * d, (20 + row * pitch) * d, (row === 0 ? 90 : 60) * d, d);
+  return px;
+};
+
+// A definition grid whose redacted row has a two-line label beside a two-line value (its lines 20 apart), the
+// other rows `gap` rows under the line before them.
+const wrappedGrid = (d, gap) => {
+  const px = canvas(300 * d, 200 * d);
+  textLine(px, 20 * d, 20 * d, 50 * d, d, [107, 114, 128]); textLine(px, 20 * d, 40 * d, 60 * d, d, [107, 114, 128]);
+  textLine(px, 120 * d, 20 * d, 70 * d, d); textLine(px, 120 * d, 40 * d, 90 * d, d);
+  for (const row of [1, 2]) { const y = 40 + row * (20 + gap); textLine(px, 20 * d, y * d, 50 * d, d, [107, 114, 128]); textLine(px, 120 * d, y * d, 60 * d, d); }
+  return px;
+};
+
+test('a grid row\'s value is hidden whole, whether the label column keeps the value\'s rhythm or one of its own', () => {
+  for (const d of [1, 2]) {
+    const px = grid(d, 26);
+    assertValueHidden(px, importFill(px, [120 * d, 20 * d, 90 * d, 10 * d]).rects, [118 * d, 18 * d, 94 * d, 14 * d]);
+  }
+  const uneven = grid(1, 24, 22);
+  assertValueHidden(uneven, importFill(uneven, [120, 20, 90, 10]).rects, [118, 18, 94, 14]);
+});
+
+test('a two-line value beside a two-line label is hidden whole from a box on either line, at any row gap', () => {
+  for (const d of [1, 2]) {
+    for (const gap of [0, 6, 12]) {
+      const px = wrappedGrid(d, gap);
+      assertValueHidden(px, importFill(px, [120 * d, 20 * d, 70 * d, 10 * d]).rects, [118 * d, 18 * d, 94 * d, 34 * d]);
+      assertValueHidden(px, importFill(px, [120 * d, 40 * d, 90 * d, 10 * d]).rects, [118 * d, 18 * d, 94 * d, 34 * d]);
+    }
+  }
+});
+
+test('text that runs right to left wraps to its container\'s right edge: the wrap below and a lone tail above are covered', () => {
+  for (const d of [1, 2]) {
+    // Line 1 indented from the right (x 80 to 140), line 2 flush right (x 190 to 230), 22 rows apart.
+    const rtl = () => textLine(textLine(canvas(300 * d, 100 * d), 80 * d, 30 * d, 60 * d, d), 190 * d, 52 * d, 40 * d, d);
+    const onFirst = importFill(rtl(), [80 * d, 30 * d, 60 * d, 10 * d]);
+    assertValueHidden(rtl(), onFirst.rects, [0, 0, 300 * d, 100 * d]);
+    const onSecond = importFill(rtl(), [190 * d, 52 * d, 40 * d, 10 * d]);
+    assertValueHidden(rtl(), onSecond.rects, [0, 0, 300 * d, 100 * d]);
+  }
+});
+
+test('a row of cells to the upper left of the value is no tail: it is named for the gate and left readable', () => {
+  const px = textLine(textLine(textLine(canvas(400, 100), 20, 30, 50, 1), 90, 30, 50, 1), 220, 52, 60, 1);
+  const fill = importFill(px, [220, 52, 60, 10]);
+  assert.ok(!covers(fill.rects, 25, 35) && !covers(fill.rects, 95, 35), `the row above is covered: ${JSON.stringify(fill.rects)}`);
+  assert.deepEqual(fill.near, ['top']);
+  assert.ok(fill.peek[0] <= 20 && fill.peek[1] <= 30, `the gate's view ${fill.peek} leaves the row out`);
+});
+
+test('a rounded corner\'s arc, hanging off a card\'s border below the value, is no wrapped line', () => {
+  // At 2x: a 2 px border 360 px long with a 20 px block at its left end, 50 rows under the value and wholly left of it.
+  const px = textLine(canvas(500, 200), 150, 60, 60, 2).fill(40, 120, 360, 2, [229, 231, 235]).fill(20, 120, 20, 20, [229, 231, 235]);
+  const fill = importFill(px, [150, 60, 60, 20]);
+  assert.ok(!covers(fill.rects, 25, 125), `the arc is painted: ${JSON.stringify(fill.rects)}`);
+});
+
+// A card heading over an inner card, at `d` device px per CSS px: the outer card's left side a hairline beside the
+// heading, and 12 CSS px under it the inner card's 1 CSS px border, its top far wider than the heading and its left
+// side running down from a rounded corner. Inside, an icon and a sentence; below them, a row of facts.
+const CARD_LINE = [229, 231, 235];
+const headingOverCard = (d) => {
+  const px = canvas(520 * d, 200 * d).fill(19 * d, 4 * d, d, 192 * d, CARD_LINE);
+  textLine(px, 24 * d, 20 * d, 150 * d, d);
+  px.fill(28 * d, 42 * d, 466 * d, d, CARD_LINE).fill(24 * d, 46 * d, d, 140 * d, CARD_LINE);
+  for (let i = 1; i < 4; i += 1) px.fill((24 + i) * d, (46 - i) * d, d, d, CARD_LINE);
+  px.fill(36 * d, 56 * d, 10 * d, 10 * d, ICON);
+  textLine(px, 52 * d, 56 * d, 300 * d, d);
+  textLine(px, 36 * d, 92 * d, 80 * d, d); textLine(px, 200 * d, 92 * d, 80 * d, d);
+  return px;
+};
+
+test('a fill stops at a card\'s hairline border past a clean gap: the border and what it holds stay bare', () => {
+  for (const d of [1, 2, 3]) for (const box of [[24, 20, 150, 10], [84, 20, 50, 10]]) {
+    const px = headingOverCard(d);
+    const fill = importFill(px, box.map((v) => v * d));
+    const label = `${d}x, box ${box}`;
+    assertValueHidden(px, fill.rects, [20 * d, 0, 480 * d, 36 * d]);
+    // Over the whole heading nothing lies past the pad to grow onto; over one word, the rest of the heading does.
+    if (box[2] === 150) assert.equal(fill.grew, false, `${label}: the fill grew ${JSON.stringify(fill.rects)}`);
+    for (const [x, y] of [[300, 42], [480, 42], [26, 44], [24, 60], [24, 120], [40, 60], [100, 60], [300, 62], [60, 96], [220, 96]]) {
+      assert.ok(!covers(fill.rects, x * d, y * d), `${label}: ${x},${y} is covered by ${JSON.stringify(fill.rects)}`);
+    }
+  }
+});
+
+test('a fill inside a card stops short of its hairline border and the rounded corner that leads into it', () => {
+  for (const d of [1, 2, 3]) for (const box of [[52, 56, 300, 10], [36, 56, 316, 10]]) {
+    const px = headingOverCard(d);
+    const fill = importFill(px, box.map((v) => v * d));
+    const label = `${d}x, box ${box}`;
+    assertValueHidden(px, fill.rects, [30 * d, 52 * d, 330 * d, 16 * d]);
+    // The pad's own fill may reach the corner: nothing is painted short of it.
+    const pad = fillRect(px, box.map((v) => v * d), { reach: 12, back: 2 });
+    for (const [x, y] of [[100, 42], [300, 42], [480, 42], [25, 45], [26, 44], [27, 43], [24, 50], [24, 120], [60, 24], [150, 24]]) {
+      if (inRect(x * d, y * d, pad)) continue;
+      assert.ok(!covers(fill.rects, x * d, y * d), `${label}: ${x},${y} is covered by ${JSON.stringify(fill.rects)}`);
+    }
+  }
+});
+
+// A link that wraps in a narrow column, its first line long and its second short, each underlined `offset` CSS px
+// under its text: the first line's underline runs far past the second line's columns.
+const underlinedWrap = (d, offset) => {
+  const px = canvas(300 * d, 120 * d);
+  textLine(px, 20 * d, 20 * d, 150 * d, d).fill(20 * d, (30 + offset) * d, 150 * d, d, INK);
+  return textLine(px, 20 * d, 42 * d, 50 * d, d).fill(20 * d, (52 + offset) * d, 50 * d, d, INK);
+};
+
+test('an underline that hugs the line past it is no card border: a wrapped link is covered from a box on its short line', () => {
+  for (const d of [1, 2, 3]) for (const offset of [2, 3, 4]) {
+    const px = underlinedWrap(d, offset);
+    assertValueHidden(px, importFill(px, [20 * d, 42 * d, 50 * d, 10 * d]).rects, [0, 0, px.width, px.height]);
+  }
+});
+
+test('a row\'s border that a wrapped value overflows past is no edge of the value: its first line is covered', () => {
+  for (const d of [1, 2, 3]) {
+    // The row's border 3 CSS px under the first line, 7 over the second.
+    const px = textLine(textLine(canvas(480 * d, 120 * d), 20 * d, 20 * d, 170 * d, d), 20 * d, 40 * d, 90 * d, d).fill(20 * d, 33 * d, 420 * d, d, CARD_LINE);
+    assertValueHidden(px, importFill(px, [20 * d, 40 * d, 90 * d, 10 * d]).rects, [0, 0, px.width, px.height], [[0, 33 * d, px.width, d]]);
+  }
+});
+
+test('a fill that stops at a hairline with ink just past it names that side for the gate', () => {
+  for (const d of [1, 2]) {
+    const fill = importFill(headingOverCard(d), [24 * d, 20 * d, 150 * d, 10 * d]);
+    assert.deepEqual(fill.near, ['bottom'], `${d}x`);
+  }
+});
+
+// An icon-led list at `d` device px per CSS px: a heading at y 20, then rows at a pitch of 27 from y 60, each an icon
+// 12 CSS px square at x 40 and a line of text at x 60. `rtl` mirrors it in a 300 CSS px wide image: icons at x
+// 248, text ending at x 240. `heading` sets where the heading starts and whether a sparkle leads it; `pitch` the
+// heading's distance above the first row.
+const iconList = (d, { rtl = false, heading = 'sparkle', pitch = 40, rows = 3, widths = [90, 80, 60] } = {}) => {
+  const px = canvas(300 * d, 160 * d);
+  const headY = (60 - pitch) * d;
+  if (heading !== 'none') {
+    if (rtl) {
+      textLine(px, 70 * d, headY, 170 * d, d);
+      if (heading === 'sparkle') px.fill(270 * d, headY, 8 * d, 8 * d, ICON);
+    } else {
+      textLine(px, (heading === 'sparkle' ? 30 : 40) * d, headY, 170 * d, d);
+      if (heading === 'sparkle') px.fill(14 * d, headY, 8 * d, 8 * d, ICON);
+    }
+  }
+  for (let i = 0; i < rows; i += 1) {
+    const y = (60 + 27 * i) * d;
+    if (rtl) { px.fill(248 * d, y, 12 * d, 12 * d, ICON); textLine(px, (240 - widths[i]) * d, y, widths[i] * d, d); }
+    else { px.fill(40 * d, y, 12 * d, 12 * d, ICON); textLine(px, 60 * d, y, widths[i] * d, d); }
+  }
+  return px;
+};
+const ROW_BOX = (d, rtl = false) => (rtl ? [148 * d, 58 * d, 114 * d, 16 * d] : [38 * d, 58 * d, 116 * d, 16 * d]);
+// Points of the list's other rows and heading, CSS px: the icon's centre and two points along each line.
+const otherRows = (rtl = false) => (rtl ? [[254, 93], [200, 92], [170, 92], [254, 120], [220, 119], [200, 119]] : [[46, 93], [70, 92], [120, 92], [46, 120], [70, 119], [100, 119]]);
+const headingPoints = (rtl = false, pitch = 40) => (rtl ? [[150, 65 - pitch], [100, 65 - pitch]] : [[60, 65 - pitch], [150, 65 - pitch]]);
+const assertBare = (fill, points, d, label) => { for (const [x, y] of points) assert.ok(!covers(fill.rects, x * d, y * d), `${label}: ${x},${y} is covered by ${JSON.stringify(fill.rects)}`); };
+const inPeek = (fill, points, d, label) => { for (const [x, y] of points) assert.ok(inRect(x * d, y * d, fill.peek), `${label}: ${x},${y} lies outside the gate's view ${fill.peek}`); };
+
+test('a redaction of one row of an icon-led list spares the other rows and the heading above, and refuses the board naming each', () => {
+  for (const d of [1, 2, 3]) for (const rtl of [false, true]) {
+    const px = iconList(d, { rtl });
+    const fill = importFill(px, ROW_BOX(d, rtl));
+    const label = `${d}x${rtl ? ' rtl' : ''}`;
+    assertValueHidden(px, fill.rects, rtl ? [146 * d, 56 * d, 118 * d, 18 * d] : [36 * d, 56 * d, 120 * d, 18 * d]);
+    assertBare(fill, [...otherRows(rtl), ...headingPoints(rtl)], d, label);
+    assert.deepEqual(fill.spared, ['top', 'bottom'], label);
+    inPeek(fill, [...otherRows(rtl), ...headingPoints(rtl)], d, label);
+    assert.deepEqual(fill.capped.map((c) => [c.side, c.why, c.refuse]), [['top', 'row', true], ['bottom', 'row', true]], label);
+    // The rows named lie where the spared lines are: the heading above, the two rows below.
+    const [top, bottom] = fill.capped.map((c) => c.at);
+    assert.ok(top[1] + top[3] <= 60 * d && top[1] >= 16 * d, `${label}: the heading's box ${top}`);
+    assert.ok(bottom[1] >= 85 * d && bottom[1] + bottom[3] >= 114 * d, `${label}: the rows' box ${bottom}`);
+    assert.deepEqual([fill.extended, fill.bridged], [[], []], label);
+  }
+});
+
+test('a context box on a list\'s next row holds the walk there, though the pad reaches it, so the board is written', () => {
+  for (const d of [1, 2]) {
+    const px = iconList(d);
+    const row = [38 * d, 85 * d, 116 * d, 16 * d];
+    const fill = importFill(px, ROW_BOX(d), { held: [row] });
+    assertValueHidden(px, fill.rects, [36 * d, 56 * d, 120 * d, 18 * d]);
+    assert.ok(!fill.capped.some((c) => c.why === 'row' && c.side === 'bottom'), `${d}x: ${JSON.stringify(fill.capped)}`);
+    assert.ok(!fill.rects.some((r) => r[1] + r[3] > 85 * d + 2 * d), `${d}x: the fill ${JSON.stringify(fill.rects)} enters the held row`);
+  }
+});
+
+test('a heading above an icon-led list is spared by the list\'s pitch, or by starting outside the icon column, and otherwise covered', () => {
+  for (const d of [1, 2]) {
+    // Flush with the icon column, a clear pitch above the rows.
+    const byPitch = importFill(iconList(d, { heading: 'flush', pitch: 40 }), ROW_BOX(d));
+    assertBare(byPitch, headingPoints(false, 40), d, `${d}x by pitch`);
+    assert.deepEqual(byPitch.spared, ['top', 'bottom'], `${d}x by pitch`);
+    // Led by a glyph left of the icon column, at the rows' own pitch.
+    const byStart = importFill(iconList(d, { heading: 'sparkle', pitch: 27 }), ROW_BOX(d));
+    assertBare(byStart, headingPoints(false, 27), d, `${d}x by start`);
+    // Flush with the icon column at the rows' own pitch: nothing proves it is not the value's first line.
+    const near = iconList(d, { heading: 'flush', pitch: 27 });
+    const kept = importFill(near, ROW_BOX(d));
+    assertValueHidden(near, kept.rects, [36 * d, 30 * d, 220 * d, 44 * d]);
+    assert.deepEqual(kept.spared, ['bottom'], `${d}x near heading`);
+  }
+});
+
+test('a value that wraps under its text column is covered whole; a list row proven after it is spared', () => {
+  for (const d of [1, 2, 3]) {
+    const px = canvas(300 * d, 160 * d);
+    px.fill(40 * d, 60 * d, 12 * d, 12 * d, ICON); textLine(px, 60 * d, 60 * d, 90 * d, d);
+    textLine(px, 60 * d, 80 * d, 70 * d, d);
+    px.fill(40 * d, 107 * d, 12 * d, 12 * d, ICON); textLine(px, 60 * d, 107 * d, 80 * d, d);
+    const fill = importFill(px, ROW_BOX(d));
+    assertValueHidden(px, fill.rects, [36 * d, 56 * d, 120 * d, 36 * d]);
+    assertBare(fill, [[46, 113], [70, 112], [120, 112]], d, `${d}x`);
+    assert.deepEqual(fill.spared, ['bottom'], `${d}x`);
+  }
+});
+
+test('a line wrapped to the container\'s edge is covered unless its first word takes the icon\'s place and its text the value\'s column, which is then named', () => {
+  for (const d of [1, 2, 3]) {
+    const row = (first, gap) => {
+      const px = canvas(300 * d, 160 * d);
+      px.fill(40 * d, 60 * d, 12 * d, 12 * d, ICON); textLine(px, 60 * d, 60 * d, 90 * d, d);
+      textLine(px, 40 * d, 87 * d, first * d, d); textLine(px, (40 + first + gap) * d, 87 * d, 70 * d, d);
+      return px;
+    };
+    const word = row(4, 6);
+    const fill = importFill(word, ROW_BOX(d));
+    assertValueHidden(word, fill.rects, [36 * d, 56 * d, 160 * d, 44 * d]);
+    assert.deepEqual(fill.spared, [], `${d}x a short word`);
+    const chance = row(12, 8);
+    const spared = importFill(chance, ROW_BOX(d));
+    assert.deepEqual(spared.spared, ['bottom'], `${d}x a word of the icon's size at its text column`);
+    inPeek(spared, [[46, 92], [70, 92], [120, 92]], d, `${d}x`);
+  }
+});
+
+test('a value boxed without its icon, or whose first run is a word, spares nothing', () => {
+  for (const d of [1, 2]) {
+    const px = iconList(d);
+    const textOnly = importFill(px, [58 * d, 58 * d, 96 * d, 16 * d]);
+    assert.deepEqual(textOnly.spared, [], `${d}x text only`);
+    assertValueHidden(px, textOnly.rects, [36 * d, 56 * d, 120 * d, 72 * d]);
+    const words = canvas(300 * d, 160 * d);
+    for (let i = 0; i < 3; i += 1) { textLine(words, 40 * d, (60 + 27 * i) * d, 30 * d, d); textLine(words, 78 * d, (60 + 27 * i) * d, 60 * d, d); }
+    const plain = importFill(words, [38 * d, 58 * d, 104 * d, 16 * d]);
+    assert.deepEqual(plain.spared, [], `${d}x words`);
+    assertValueHidden(words, plain.rects, [36 * d, 56 * d, 120 * d, 72 * d]);
+  }
+});
+
+test('a two-line label beside a two-line value is no list: both lines of the value stay covered', () => {
+  for (const d of [1, 2]) {
+    const px = canvas(300 * d, 160 * d);
+    textLine(px, 30 * d, 60 * d, 40 * d, d); textLine(px, 90 * d, 60 * d, 80 * d, d);
+    textLine(px, 30 * d, 80 * d, 44 * d, d); textLine(px, 90 * d, 80 * d, 60 * d, d);
+    textLine(px, 30 * d, 112 * d, 36 * d, d); textLine(px, 90 * d, 112 * d, 50 * d, d);
+    const fill = importFill(px, [28 * d, 58 * d, 144 * d, 16 * d]);
+    assertValueHidden(px, fill.rects, [26 * d, 56 * d, 150 * d, 36 * d]);
+    assert.deepEqual(fill.spared, [], `${d}x`);
+  }
+});
+
+// A blank tile with a hairline border and rounded bottom corners, narrower than the pad of the value's box 8 CSS
+// px under it: the pad reaches into the tile, and the corners' rows differ from the tile's, so the walk takes
+// them for ink at its edge and grows onto the tile.
+test('an imported fill never grows into a slot\'s blank, and paints nothing inside it', () => {
+  for (const d of [1, 2, 3]) {
+    const px = canvas(320 * d, 180 * d).fill(99 * d, 19 * d, 142 * d, 102 * d, REGION_BORDER).fill(100 * d, 20 * d, 140 * d, 100 * d, REGION);
+    px.fill(100 * d, 115 * d, d, 2 * d, REGION_BORDER).fill(239 * d, 115 * d, d, 2 * d, REGION_BORDER);
+    textLine(px, 100 * d, 128 * d, 140 * d, d);
+    const box = [96 * d, 128 * d, 148 * d, 10 * d];
+    const pad = fillRect(px, box, { reach: 12, back: 2 });
+    if (d === 1) {
+      assert.equal(pad[1], 116, 'the 12 px pad reaches 4 px into the tile');
+      assert.ok(importFill(px, box).rect[1] < 116, `without the blank the fill ${JSON.stringify(importFill(px, box).rects)} does not grow into the tile`);
+    }
+    const fill = importFill(px, box, { blanks: [[100 * d, 20 * d, 140 * d, 100 * d]] });
+    // The own line's piece is painted its own back past the pad; nothing reaches into the tile past the pad.
+    for (const rect of fill.rects) assert.ok(rect[1] >= Math.min(pad[1], 120 * d), `${d}x: ${rect} is painted into the tile past the pad ${pad}`);
+    assertValueHidden(px, fill.rects, [84 * d, 121 * d, 172 * d, 22 * d]);
+  }
+});
+
+const snapSlot = (geo, ...args) => [...geo.snapSlot(...args)];
+const REGION = [241, 245, 249];
+const REGION_BORDER = [226, 232, 240];
+// A blank region [50, 30, 200, 100] with a 1 px border round it, on white.
+const blankRegion = () => canvas(320, 180).fill(49, 29, 202, 102, REGION_BORDER).fill(50, 30, 200, 100, REGION);
+
+test('a slot drawn by eye snaps each edge to the inside of its blank, either way', () => {
+  assert.deepEqual(snapSlot(sandbox.__composeGeometry, blankRegion(), [46, 34, 206, 92]), [50, 30, 200, 100]);
+});
+
+test('a slot edge further than SLOT_SNAP from the blank stays where it was drawn', () => {
+  assert.deepEqual(snapSlot(sandbox.__composeGeometry, blankRegion(), [40, 34, 206, 92]), [40, 30, 210, 100]);
+});
+
+test('a slot over text is no blank and stays as drawn', () => {
+  const px = canvas(320, 80);
+  px.fill(40, 23, 2, 10, INK);
+  for (let x = 46; x < 150; x += 7) px.fill(x, 26, 4, 7, INK);
+  assert.deepEqual(snapSlot(sandbox.__composeGeometry, px, [40, 20, 120, 16]), [40, 20, 120, 16]);
+});
+
+test('a slot over a gap does not snap onto the glyphs of the line beside it', () => {
+  const px = canvas(200, 100);
+  for (let x = 30; x < 80; x += 4) px.fill(x, 50, 3, 9, INK).fill(x + 1, 50, 1, 1, [120, 120, 120]);
+  assert.deepEqual(snapSlot(sandbox.__composeGeometry, px, [40, 20, 28, 26]), [40, 20, 28, 26]);
+});
+
+test('a slot edge never moves to cover more of a fill', () => {
+  const px = blankRegion().fill(60, 126, 120, 20, [203, 213, 225]);
+  const keep = [[60, 126, 120, 20]];
+  const box = snapSlot(sandbox.__composeGeometry, px, [46, 34, 206, 88], { keep });
+  assert.ok(box[1] + box[3] <= 126, `the slot ${box} reaches into the fill`);
+  assert.deepEqual(box.slice(0, 3), [50, 30, 200]);
+});
+
+test('two slot edges moving out together never take a fill in the corner between them', () => {
+  const fill = [50, 30, 5, 5];
+  const px = blankRegion().fill(...fill, [203, 213, 225]);
+  const [x, y, w, h] = snapSlot(sandbox.__composeGeometry, px, [56, 36, 190, 90], { keep: [fill] });
+  const overlap = Math.max(0, Math.min(x + w, 55) - Math.max(x, 50)) * Math.max(0, Math.min(y + h, 35) - Math.max(y, 30));
+  assert.equal(overlap, 0, `the slot ${[x, y, w, h]} covers the fill in its corner`);
+});
+
+test('a slot that overlaps a fill may snap back off it, read past the fill', () => {
+  const px = blankRegion().fill(60, 128, 120, 20, [203, 213, 225]);
+  const box = snapSlot(sandbox.__composeGeometry, px, [46, 34, 206, 102], { keep: [[60, 128, 120, 20]] });
+  assert.deepEqual(box, [50, 30, 200, 100]);
+});
+
+test('at scale 2 a slot snaps to twice its scale 1 box', () => {
+  const one = snapSlot(sandbox.__composeGeometry, blankRegion(), [43, 34, 206, 92]);
+  const two = snapSlot(atScale(2), doubled(blankRegion()), times2([43, 34, 206, 92]));
+  assert.deepEqual(two, times2(one));
+});
+
+const holdsContent = (...args) => sandbox.__composeGeometry.holdsContent(...args);
+
+test('a box over text holds content; a blank, or one a border merely crosses, holds none', () => {
+  const text = canvas(200, 60);
+  for (let x = 42; x < 110; x += 7) text.fill(x, 24, 4, 8, INK);
+  assert.equal(holdsContent(text, [40, 20, 80, 16]), true);
+  assert.equal(holdsContent(canvas(200, 60), [40, 20, 80, 16]), false);
+  const ruled = canvas(200, 100).fill(80, 0, 1, 100, [203, 213, 225]);
+  assert.equal(holdsContent(ruled, [40, 20, 80, 16]), false, 'a hairline running through the box is no content');
+});
+
+test('at scale 2 a slot too thin to read stays as given, as its 1x twin does', () => {
+  assert.deepEqual(snapSlot(sandbox.__composeGeometry, blankRegion(), [53, 40, 1, 60]), [53, 40, 1, 60]);
+  assert.deepEqual(snapSlot(atScale(2), doubled(blankRegion()), times2([53, 40, 1, 60])), times2([53, 40, 1, 60]));
+});
+
+const edgeGround = (...args) => { const ground = sandbox.__composeGeometry.edgeGround(...args); return ground && [...ground]; };
+
+test('edgeGround reads the ground of the lines inside an edge, not the glyphs its own line runs through', () => {
+  // Glyphs 8 px wide every 10 cover the box's bottom two rows, so its edge line is mostly ink.
+  const px = canvas(200, 100);
+  for (let x = 20; x < 120; x += 10) px.fill(x, 58, 8, 2, INK);
+  const box = [20, 20, 100, 40];
+  assert.deepEqual(edgeGround(px, box, 'bottom', [], 1), INK, 'the edge line alone is ink');
+  assert.deepEqual(edgeGround(px, box, 'bottom', [], 12), [255, 255, 255], 'twelve lines in are mostly ground');
+  assert.deepEqual(edgeGround(px, box, 'bottom', [], 0.4), INK, 'a depth under a line still reads the edge line');
+  assert.deepEqual(edgeGround(px, box, 'top', [], 12), [255, 255, 255]);
+});
+
+test('edgeGround skips a fill, reads whole pixels inside a fractional box, and is null with nothing to read', () => {
+  const px = canvas(200, 100).fill(20, 40, 100, 20, RED);
+  assert.deepEqual(edgeGround(px, [20, 20, 100, 40], 'bottom', [], 12), RED, 'a fill across the lines reads as their colour');
+  assert.equal(edgeGround(px, [20, 20, 100, 40], 'bottom', [[20, 40, 100, 20]], 12), null, 'a fill over every pixel leaves nothing to read');
+  assert.deepEqual(edgeGround(px, [20, 20, 100, 40], 'bottom', [[20, 40, 60, 20]], 12), RED, 'the part of the lines beside the fill is read');
+  // The bottom edge at y 39.6 keeps row 38 as its last whole line: row 39 is white, and red ends at 39.
+  const half = canvas(200, 100).fill(20, 0, 100, 39, RED);
+  assert.deepEqual(edgeGround(half, [20, 20, 100, 19.6], 'bottom', [], 1), RED);
+});
+
+const edgeInGap = (...args) => sandbox.__composeGeometry.edgeInGap(...args);
+// A row of words: a 4 px word space at x 50-53 and a 2 px letter gap at x 84-85.
+const wordRow = () => canvas(200, 60).fill(20, 20, 30, 12, INK).fill(54, 20, 30, 12, INK).fill(86, 20, 34, 12, INK);
+
+test('edgeInGap holds an edge in a word space and not in a letter gap', () => {
+  assert.equal(edgeInGap(wordRow(), [0, 0, 52, 60], 'right', null, []), true, 'x 51 lies in the 4 px word space');
+  assert.equal(edgeInGap(wordRow(), [0, 0, 85, 60], 'right', null, []), false, 'x 84 lies in the 2 px letter gap');
+  assert.equal(edgeInGap(wordRow(), [51, 0, 100, 60], 'left', null, []), true);
+  assert.equal(edgeInGap(wordRow(), [20, 0, 100, 60], 'left', null, []), false, 'the left edge runs down the first word');
+});
+
+test('edgeInGap counts a run the bounds cut short, reads past an ignored rect, and refuses an edge into content', () => {
+  assert.equal(edgeInGap(wordRow(), [0, 0, 86, 60], 'right', [0, 0, 86, 60], []), true, 'the letter gap runs to the bounds');
+  const crossed = wordRow().fill(50, 24, 4, 4, RED);
+  assert.equal(edgeInGap(crossed, [0, 0, 52, 60], 'right', null, []), false, 'a mark crosses the word space');
+  assert.equal(edgeInGap(crossed, [0, 0, 52, 60], 'right', null, [[50, 24, 4, 4]]), true, 'and is ignored');
+  assert.equal(edgeInGap(wordRow(), [0, 0, 52, 60], 'right', null, [], [{ rect: [40, 0, 20, 60], colour: [37, 99, 235] }]), false, 'the edge runs into a block of another colour');
+  assert.equal(edgeInGap(wordRow(), [0, 0, 52, 60], 'right', null, [], [{ rect: [40, 0, 20, 60], colour: [255, 255, 255] }]), true, 'a block of the line\'s own colour is its ground');
+});
+
+test('at scale 2 edgeInGap answers as at scale 1', () => {
+  for (const [box, side] of [[[0, 0, 52, 60], 'right'], [[0, 0, 85, 60], 'right'], [[51, 0, 100, 60], 'left']]) {
+    assert.equal(atScale(2).edgeInGap(doubled(wordRow()), times2(box), side, null, []), edgeInGap(wordRow(), box, side, null, []), `${side} edge of ${box}`);
+  }
+});
+
+const lensView = (...args) => {
+  const { centre, hide } = sandbox.__composeGeometry.lensView(...args);
+  return { centre: [...centre], hide: new Set(hide) };
+};
+// A 12 px badge at x 50-61, y 24-35, and a glyph 3 px wide to its left. A lens of radius 11 about the badge's
+// centre (56, 30) shows the glyph's columns x 44 and 45, within a px of its circle, and not x 43.
+const BADGE = [50, 24, 12, 12];
+const badgeRow = () => canvas(100, 60).fill(...BADGE, BLUE).fill(43, 25, 3, 10, INK);
+const pixelsOf = ([x, y, w, h], width) => Array.from({ length: w * h }, (_, i) => (y + Math.floor(i / w)) * width + x + (i % w));
+const away = ([cx, cy], i, width) => Math.hypot((i % width) + 0.5 - cx, Math.floor(i / width) + 0.5 - cy);
+const ALL = { bounds: [0, 0, 100, 60] };
+// At radius 13 the circle about the badge shows x 42 of a glyph at x 41-43; 3 px left it holds the glyph whole.
+const takeIn = () => canvas(100, 60).fill(...BADGE, BLUE).fill(41, 26, 3, 8, INK);
+
+test('lensView moves the window the least that takes a glyph the circle cuts in whole', () => {
+  const { centre, hide } = lensView(takeIn(), [56, 30], 13, BADGE, ALL);
+  assert.deepEqual([centre, hide.size], [[53, 30], 0]);
+  assert.ok(pixelsOf([41, 26, 3, 8], 100).every((i) => away(centre, i, 100) + Math.SQRT1_2 < 13), 'the glyph lies wholly in the circle');
+  assert.ok([[50, 24], [62, 24], [50, 36], [62, 36]].every(([x, y]) => Math.hypot(x - centre[0], y - centre[1]) <= 12), 'and the badge a px clear of its edge');
+});
+
+test('lensView leaves out a glyph the circle cuts where no move that keeps the target whole takes it in', () => {
+  // At radius 11 the badge allows a move of 3 px, and the glyph wants 4.
+  const { centre, hide } = lensView(badgeRow(), [56, 30], 11, BADGE, ALL);
+  assert.deepEqual(centre, [56, 30], 'the circle stays on the badge');
+  assert.ok(pixelsOf([43, 25, 3, 10], 100).every((i) => hide.has(i)), 'every pixel of the glyph is left out');
+  assert.ok(!pixelsOf(BADGE, 100).some((i) => hide.has(i)), 'no pixel of the badge is');
+});
+
+test('lensView leaves out only a sliver, never a glyph whole inside whose faint edge it shares', () => {
+  // A second glyph at x 47-48 lies whole in the circle; a faint column at x 46 joins it to the sliver at x 43-45.
+  const px = badgeRow().fill(47, 25, 2, 10, INK).fill(46, 25, 1, 10, [180, 180, 180]);
+  const { centre, hide } = lensView(px, [56, 30], 11, BADGE, ALL);
+  assert.deepEqual(centre, [56, 30]);
+  assert.ok(pixelsOf([43, 25, 3, 10], 100).every((i) => hide.has(i)), 'the sliver is left out');
+  assert.ok(!pixelsOf([46, 25, 3, 10], 100).some((i) => hide.has(i)), 'the glyph inside keeps every pixel, its faint edge too');
+});
+
+test('lensView moves to take in a glyph nearly whole inside, and leaves out the sliver it cannot take in', () => {
+  // A glyph at x 64-66 is cut at the circle's right edge with most of it inside; 1 px right takes it in whole.
+  const px = badgeRow().fill(64, 26, 3, 8, INK);
+  const { centre, hide } = lensView(px, [56, 30], 11, BADGE, ALL);
+  assert.deepEqual(centre, [57, 30]);
+  assert.ok(pixelsOf([43, 25, 3, 10], 100).every((i) => hide.has(i)), 'the sliver is left out');
+  assert.ok(!pixelsOf([64, 26, 3, 8], 100).some((i) => hide.has(i)), 'the glyph taken in is not');
+});
+
+test('lensView leaves a glyph nearly whole inside where no move takes it in', () => {
+  // At radius 9 nothing moves; the glyph at x 63-64 shows all but the outer edge of its last column.
+  const px = canvas(100, 60).fill(...BADGE, BLUE).fill(63, 27, 2, 6, INK);
+  assert.deepEqual(lensView(px, [56, 30], 9, BADGE, ALL), { centre: [56, 30], hide: new Set() });
+});
+
+test('lensView reads a faint glyph as a glyph beside a target far darker than it', () => {
+  const px = canvas(100, 60).fill(...BADGE, [0, 0, 0]).fill(43, 25, 3, 10, [150, 150, 150]);
+  const { hide } = lensView(px, [56, 30], 11, BADGE, ALL);
+  assert.ok(pixelsOf([43, 25, 3, 10], 100).every((i) => hide.has(i)), 'the faint sliver is left out');
+});
+
+test('lensView paints a glyph it leaves out from the ground beside it on its row', () => {
+  const ground = (x) => Math.round(255 - x * 1.2);
+  const px = canvas(100, 60);
+  for (let x = 0; x < 100; x += 1) px.fill(x, 0, 1, 60, [ground(x), ground(x), ground(x)]);
+  px.fill(...BADGE, BLUE).fill(43, 25, 3, 10, INK);
+  const { hide, paint } = sandbox.__composeGeometry.lensView(px, [56, 30], 11, BADGE, ALL);
+  assert.ok(hide.length > 0);
+  hide.forEach((i, n) => assert.ok(Math.abs(paint[n][0] - ground(i % 100)) <= 2, `x ${i % 100} is painted ${paint[n][0]} on ground ${ground(i % 100)}`));
+});
+
+test('lensView reads a glyph apart from a neighbour its antialiased edge joins', () => {
+  // A faint row of grey joins the glyph to one 13 px further left: 16 px of ink together, wider than the lens holds.
+  const px = badgeRow().fill(30, 25, 3, 10, INK).fill(33, 29, 10, 1, [200, 200, 200]);
+  const { hide } = lensView(px, [56, 30], 11, BADGE, ALL);
+  assert.ok(pixelsOf([43, 25, 3, 10], 100).every((i) => hide.has(i)), 'the glyph is left out');
+  assert.ok(!pixelsOf([30, 25, 3, 10], 100).some((i) => hide.has(i)), 'its neighbour is not');
+});
+
+test('lensView keeps a rule too long to take in whole, a glyph it sees whole, and a glyph under a kept rect', () => {
+  const none = (px, radius, keep) => assert.deepEqual(lensView(px, [56, 30], radius, BADGE, { ...ALL, keep }), { centre: [56, 30], hide: new Set() });
+  none(canvas(100, 60).fill(...BADGE, BLUE).fill(0, 42, 100, 1, INK), 15);
+  none(canvas(100, 60).fill(...BADGE, BLUE).fill(46, 26, 2, 8, INK), 11);
+  none(badgeRow(), 11, [[43, 25, 3, 10]]);
+});
+
+test('lensView reads no ink outside its bounds', () => {
+  const { centre, hide } = lensView(badgeRow(), [56, 30], 11, BADGE, { bounds: [47, 0, 53, 60] });
+  assert.deepEqual([centre, hide.size], [[56, 30], 0]);
+});
+
+test('at scale 2 lensView moves the window, or leaves a glyph out, as at scale 1', () => {
+  const moved = atScale(2).lensView(doubled(takeIn()), [112, 60], 26, times2(BADGE), { bounds: [0, 0, 200, 120] });
+  assert.deepEqual([...moved.centre].map((v) => v / 2), [53, 30]);
+  const left = atScale(2).lensView(doubled(badgeRow()), [112, 60], 22, times2(BADGE), { bounds: [0, 0, 200, 120] });
+  assert.deepEqual([...left.centre], [112, 60]);
+  const hidden = new Set(left.hide);
+  assert.ok(pixelsOf(times2([43, 25, 3, 10]), 200).every((i) => hidden.has(i)), 'every pixel of the glyph is left out');
 });

@@ -1,0 +1,9 @@
+{ "state": "FLOW", "title": "Three small marks on one tracker page", "layout": "steps", "out": "fx-steps-tagged.png",
+  "expect": { "headNotes": true },
+  "panels": [
+    { "label": "Create", "tag": "NEW", "note": "The new task button opens an empty draft.", "fixture": { "page": "steps-cropped", "targets": { "new": "[data-testid=new-task]" }, "frame": "[data-testid=tracker]" },
+      "marks": [ { "lift": "new" } ] },
+    { "label": "Finish", "tag": "CHANGED", "note": "The status chip reads Done.", "fixture": { "page": "steps-cropped", "targets": { "status": "[data-testid=status]" }, "frame": "[data-testid=tracker]" },
+      "marks": [ { "lift": "status" } ] },
+    { "label": "Save", "tag": "OK", "fixture": { "page": "steps-cropped", "targets": { "saved": "[data-testid=saved]" }, "frame": "[data-testid=tracker]" },
+      "marks": [ { "lift": "saved" } ] } ] }

@@ -3,6 +3,7 @@ import { lstat, readdir, readFile, readlink } from 'node:fs/promises';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
+import vm from 'node:vm';
 
 import { OFFERED_PALETTES } from '../../lib/annotate/palette.mjs';
 
@@ -908,6 +909,13 @@ test('composing-evidence states the compose contract and the blind-run lessons',
 
   assert.match(text, /`browser_capture_evidence`/);
   assert.match(text, /targets: \{ <key>: "<selector>" \}, frame: "auto", out: "<board>\.c1"/);
+  // Step 2 said `frame: "auto"` while the rules below named a frame.
+  assert.match(text, phrase('Pass `frame: "<css selector>"` instead when a rule below names the frame'));
+  // Two drivers passed a `role=` frame and were refused.
+  assert.match(text, phrase('A `frame` selector is CSS'));
+  assert.match(text, phrase('The capture refuses `role=` and `text=` frames'));
+  assert.match(text, phrase('build the selector from an id, a data attribute or an aria attribute'));
+  assert.doesNotMatch(text, /frame: "<selector>"/);
   assert.doesNotMatch(text, /browser_run_code_unsafe/);
   assert.doesNotMatch(text, /--seal/);
   assert.doesNotMatch(text, /capture-evidence\.js/);
@@ -926,7 +934,7 @@ test('composing-evidence states the compose contract and the blind-run lessons',
   assert.match(text, phrase('other boards in the same job continue'));
   assert.doesNotMatch(text, /after two captures/);
   assert.doesNotMatch(text, /nothing to seal/i);
-  assert.match(text, phrase('`frameSnap` is `union`: pass `frame: "<selector>"` for the element that holds the targets'));
+  assert.match(text, phrase('`frameSnap` is `union`: pass `frame: "<css selector>"` for the element that holds the targets'));
   assert.doesNotMatch(text, phrase('If it is still `union`'));
   assert.match(text, phrase('for the element that holds the targets and capture again. The frame from that capture is final, thin strip or not; if it is a thin strip, say so in the report.'));
   // One frame selector that is too large does not show that no element fits:
@@ -968,6 +976,8 @@ test('composing-evidence states the compose contract and the blind-run lessons',
   assert.match(text, /\bnever `nth=`/);
   assert.match(text, /browser_find/);
   assert.match(text, phrase('Lift the whole fact'));
+  // A frame round two far-apart places takes in the personal details between them.
+  assert.match(text, phrase('That frame also holds everything between them'));
   assert.match(text, /`union`/);
   assert.match(text, phrase('thin strip'));
   assert.match(text, phrase('compose refuses it'));
@@ -975,6 +985,45 @@ test('composing-evidence states the compose contract and the blind-run lessons',
   assert.match(text, phrase('with a solid fill, not a blur'));
   assert.match(text, phrase("the fill covers that element's box only"));
   assert.doesNotMatch(text, /`redact` blurs/);
+  // A fill on an imported image grows over ink that continues its value, up to a limit.
+  // Compose grows only an imported redaction, so the guidance lives with the ticket steps.
+  const ticketSteps = text.slice(text.indexOf('## A screenshot from a ticket'));
+  assert.match(ticketSteps, phrase('starts `a redaction on panel <n> (<mark>)`'.replace(/[()]/g, '\\$&')));
+  assert.match(ticketSteps, /\| `grew to cover ink beside it` \| warning \|/);
+  assert.match(ticketSteps, /\| `covered a line beside it to that line's end, past its <side> edge` \| warning \|/);
+  assert.match(ticketSteps, /\| `covered ink past a gap at its <side> edge` \| warning \|/);
+  assert.match(ticketSteps, /\| `stopped at a gap with more ink just past its <side> edge` \| warning: /);
+  assert.match(ticketSteps, phrase('Each crop shows a margin of what lies just past its fill, so you can check that nothing of the value continues beyond it'));
+  assert.match(ticketSteps, /\| `stopped at a rule with more ink just past its <side> edge` \| warning: /);
+  assert.match(ticketSteps, /\| `met another mark's box with ink still at its <side> edge` \| warning; a refusal on the value's own line, or when the ink in that box lies under or over the value's columns \|/);
+  assert.match(ticketSteps, /\| `met a context mark's box over a line that continues the value, at \[x, y, w, h\] in the image` \| refusal: /);
+  assert.match(ticketSteps, /\| `reached the frame with ink still at its <side> edge` \| warning; a refusal on the value's own line \|/);
+  // A written board never shows ink that may be the value's: what the fill cannot cover refuses the board, and
+  // every refusal names the line and how to recover.
+  assert.match(ticketSteps, phrase('A written board never shows ink that may be the value\'s'));
+  assert.match(ticketSteps, /\| `reached its growth limit with ink still at its <side> edge` \| refusal \|/);
+  assert.match(ticketSteps, /\| `stopped at a rule past its <side> edge with a line of text just past it, at \[x, y, w, h\] in the image` \| refusal: /);
+  assert.match(ticketSteps, /\| `left a line past its <side> edge uncovered, at \[x, y, w, h\] in the image, as another row of its list` \| refusal: /);
+  assert.match(ticketSteps, /\| `met an empty slot at its <side> edge with text inside the slot's box, at \[x, y, w, h\] in the image` \| refusal: /);
+  // The gate after the fill: a line in the value's reach left bare without a reason, and a mark's box over one.
+  assert.match(ticketSteps, /\| `left ink past its <side> edge uncovered, at \[x, y, w, h\] in the image, where the value may go on` \| refusal: /);
+  assert.match(ticketSteps, /\| `met another mark's box over a line the value may go on to, past its <side> edge, at \[x, y, w, h\] in the image` \| refusal: /);
+  assert.match(ticketSteps, phrase('A lift, loupe or ghost box never clears a line'));
+  assert.match(ticketSteps, phrase('A `context` mark clears only the ink inside its box'));
+  // The strict rule: within the value's reach only a context mark or another redaction excuses a bare line.
+  assert.match(ticketSteps, phrase('mark every line near it that is not the value as `context`'));
+  assert.match(ticketSteps, phrase('not a border, a column gap or a list\'s layout'));
+  assert.match(ticketSteps, /\| `left ink past its <side> edge uncovered, at \[x, y, w, h\] in the image, where the value may go on` \| refusal: a line within the value's reach is bare and no `context` mark or other redaction covers it \|/);
+  assert.match(ticketSteps, phrase("the value's ink runs into the board past its <side> edge` is a refusal"));
+  assert.match(ticketSteps, phrase('A covered neighbouring line is expected, because hiding comes first'));
+  assert.match(ticketSteps, phrase('On a refusal, no board was written. Do what the message says, then render again'));
+  assert.match(ticketSteps, phrase('add a `context` mark on it, and the fill stops at that box'));
+  assert.match(ticketSteps, phrase('do not shrink the box to clear a neighbour'));
+  assert.doesNotMatch(ticketSteps, phrase('Draw that redact box over the whole value'));
+  assert.doesNotMatch(text, phrase('reached its growth limit with ink still at its <side> edge` means read the crop'));
+  assert.doesNotMatch(text, phrase('some of the value may show beside the fill'));
+  assert.doesNotMatch(text, phrase('grew to cover ink beside it` means read that redaction\'s crop'));
+  assert.doesNotMatch(text, phrase('no board was written: the redact box covers only part of a value'));
   assert.match(text, phrase('Read the PNG'));
   for (const state of STATES) assert.ok(text.includes(`\`${state}\``), state);
   for (const tag of TAGS) assert.ok(text.includes(`\`${tag}\``), tag);
@@ -1010,7 +1059,7 @@ test('composing-evidence states the compose contract and the blind-run lessons',
   assert.match(text, phrase("A `pair` board shows each panel's frame whole"));
   assert.match(text, phrase('less any blank margin at its edges'));
   assert.match(text, phrase('A `steps` panel is already cropped to its marks, so there mark fewer things in the panel'));
-  assert.match(text, phrase('The warning `a crop edge cuts through content` means'));
+  assert.match(text, phrase('| `a crop edge cuts through content` | A `steps` panel was cut'));
   assert.match(text, phrase('A `single` board and each panel of a `steps` board are cropped to their marks'));
   assert.match(text, phrase('never a thin strip'));
   assert.match(text, phrase("the page's `main` region, or any container that holds most of the page, is the whole page"));
@@ -1023,19 +1072,23 @@ test('composing-evidence states the compose contract and the blind-run lessons',
   assert.match(text, phrase('in a `pair` of one region, capture both panels again on the same tighter region, with one selector where one names it on both pages'));
   assert.doesNotMatch(text, phrase('capture both panels again with the same tighter selector'));
   assert.match(text, phrase("for a ticket image, shrink the panel's `frame` rectangle instead"));
-  assert.match(text, phrase('`a panel is drawn small; frame the card that holds its marks` means'));
+  assert.match(text, phrase('| `a panel is drawn small; frame the card that holds its marks` | The panel shows too much to read at its size'));
   assert.match(text, phrase("An element in a card's header or toolbar is often not inside the container the card's body has"));
   assert.match(text, phrase('A capture that comes back `no-match` is a capture spent'));
   assert.match(text, phrase('a different icon beside it carries a name'));
   assert.match(text, phrase('whose accessible name is `Pinned`, selected as'));
   assert.match(text, phrase('report the case as not done'));
-  assert.match(text, phrase('`FOUND` is a problem found'));
+  // The state table: a neutral comparison of two things is AFTER, and FLOW is narrow.
+  assert.match(text, /\| `AFTER` \| a fact on the page as it is now, in one panel or two, including a neutral comparison of two things/);
+  assert.match(text, /\| `FOUND` \| a problem on the page/);
+  assert.match(text, /\| `BEFORE → AFTER` \| only a `pair` that shows one thing before and after a change/);
+  assert.match(text, /\| `FLOW` \| only a `steps` board, or a single panel the brief calls the start of a flow/);
   assert.match(text, phrase('`lift` that text instead'));
   assert.match(text, phrase('one, with no `label`: the board\'s `state` already says what it is'));
   assert.match(text, phrase('give each capture its own frame selector for the element that holds that same visible region'));
   assert.match(text, phrase('never one outside the frame'));
   // A blind run left the absent side of a pair unmarked, so its whole panel sat under the wash.
-  assert.match(text, phrase("Mark that element with a `lift` whose `title` says the thing is not there"));
+  assert.match(text, phrase("Mark that element with a `lift` whose callout says the thing is not there and where it would sit"));
   assert.match(text, phrase('a heading, block or card lifted here is the one exception to lifting the whole fact'));
   // A later run lifted the absent side's tab in the strip, and the judge read it as pointing at the wrong place.
   assert.match(text, phrase('at the spot where the thing sits on the other page'));
@@ -1044,8 +1097,7 @@ test('composing-evidence states the compose contract and the blind-run lessons',
   assert.match(text, phrase('saying the frame selector does not contain every target: the frame is too tight'));
   assert.match(text, phrase('Another selector for the same element is not a fix'));
   assert.match(text, phrase('is not a fix. If that fails too, report it and stop that board'));
-  assert.match(text, phrase('one panel that shows a step or the starting point of a flow the brief describes'));
-  assert.match(text, phrase('A board that shows a problem uses `FOUND`, and one that shows a fact on the page as it is uses `AFTER`'));
+  assert.match(text, phrase('`ISSUE` goes only on a problem; a neutral fact gets no tag, or `OK`'));
   assert.doesNotMatch(text, phrase('no problem in it'));
   assert.match(text, phrase('A fact with a sub-line under it is one item'));
   assert.match(text, phrase('This retry is required, not optional'));
@@ -1063,7 +1115,47 @@ test('composing-evidence states the compose contract and the blind-run lessons',
   assert.match(text, phrase('Restore the starting viewport size after the last capture'));
   assert.match(text, phrase('named in the brief or not, all in the first capture'));
   assert.match(text, phrase("In `steps`, each panel's mark sits on the thing its `label` names"));
-  assert.match(text, phrase("the mark's `title` calls it by the label's words"));
+  assert.match(text, phrase("its panel `tag` and its panel `note`. So a mark inside a step may go without text"));
+  assert.doesNotMatch(text, phrase("calls it by the label's words"));
+  // A context mark far from a step's mark made the crop huge and the marked item small.
+  // The old rule named the record in the label and allowed context only when the label did not: it never applied.
+  assert.match(text, phrase("When the mark does not show the record, name it in the step's `label`. If what identifies it \\(its name, the selected tab\\) sits about one card from the mark, also add"));
+  assert.match(text, phrase('Never add context for anything farther'));
+  // A run that added context dropped the record from the label.
+  assert.match(text, phrase('the `label` still names the record, because `context` draws no words'));
+  assert.doesNotMatch(text, phrase("only when the step's `label` does not name the record"));
+  assert.doesNotMatch(text, phrase('Distance is no reason to leave it out'));
+  assert.doesNotMatch(text, phrase('target that element too and add `{ "context": "<key>" }`'));
+  // A blind run framed a whole wide card round a tiny badge at its edge.
+  assert.match(text, phrase('A tiny target at the edge of a wide card gets a frame on its row or column, not the card'));
+  assert.match(text, phrase('a small target is framed on its row or column instead \\(see Marks\\)'));
+  // Blind runs paraphrased the field in the board title.
+  assert.match(text, phrase("The board title uses the page's own words for the field it proves"));
+  // Bare lifts lost the callouts reviewers read: a title naming the thing and a note with its state.
+  assert.match(text, phrase('Every `lift`, `loupe`, `ghost` and `empty` outside `steps` gets a callout: a `title` naming the record, field or control in a few words'));
+  // An empty's text is drawn inside the blank; compose drops it when it does not fit.
+  assert.match(text, phrase('An `empty` keeps its `text`, drawn inside the blank to say what is missing; compose drops it when it does not fit, so then say it in the `note`'));
+  assert.match(text, phrase('and a `note` giving what that title does not: the value, the state, or where on the page it is'));
+  assert.match(text, phrase('Outside `steps`, `lift`, `loupe`, `ghost` and `empty` need a `title` and a `note`; `bracket` and `link` always need a `title`'));
+  assert.match(text, /\{ "loupe": "badge", "zoom": 4, "title": "Tiny badge", "note": "One line" \}/);
+  assert.doesNotMatch(text, phrase("Leave that lift bare"));
+  assert.doesNotMatch(text, /goes\s+bare/);
+  // Boards titled with the record and section name left the claim to the labels.
+  assert.match(text, phrase('The board title states the fact the board proves, as a short sentence'));
+  // A status line lifted alone faded out whose status it was; the whole record row kept it.
+  assert.match(text, phrase("lift the smallest header or card row that holds the record's name, tag or picture and the status with its icon, never the status line alone"));
+  assert.match(text, phrase('With two or more such records, the board title states each fact'));
+  assert.doesNotMatch(text, phrase("lift each one's status line with its icon"));
+  assert.doesNotMatch(text, phrase('The board title then names the field'));
+  assert.doesNotMatch(text, phrase('never the whole headers'));
+  assert.doesNotMatch(text, phrase("When two or more headers each show that status"));
+  // A note quoted a cut-short sub-line and drew the eye to noise.
+  assert.match(text, phrase('No label quotes that sub-line'));
+  assert.doesNotMatch(text, phrase('or its `note` says what the sub-line is'));
+  // A ghost box that took in a neighbouring glyph read as holding something.
+  assert.match(text, phrase('draw that over the empty gap only, unpadded, clear of any glyph, icon or text beside it'));
+  assert.match(text, phrase('compose grows a small `ghost` to a readable size'));
+  assert.doesNotMatch(text, phrase('A box over a gap covers the empty gap only'));
   // A blind run marked the heading a menu click revealed, not the menu item left selected.
   assert.match(text, phrase('A step reached by clicking a control that stays selected, such as a tab or a menu item, marks that selected control'));
   assert.match(text, phrase('so every step marks the same kind of thing'));
@@ -1079,10 +1171,71 @@ test('composing-evidence states the compose contract and the blind-run lessons',
   assert.match(text, phrase('a thin strip the tool chose has had its retry or was left for the hiding budget'));
   assert.doesNotMatch(text, phrase('not optional: a report that names a thin strip names its retry too'));
   assert.match(text, phrase("report the case as not done and do not give that board's path as a result"));
-  assert.match(text, phrase("never repeats the board's title or the lifted words, except a `steps` mark's `title` and a value the page wraps"));
+  // The exceptions cover the lifted words only; a label that repeats the title still warns.
+  assert.match(text, phrase("never copies its sentence or the tag, never quotes the lifted words \\(except a value the page wraps"));
+  assert.doesNotMatch(text, phrase("never repeats the board's title, the tag or the lifted words, except"));
+  assert.match(text, phrase('lifted words \\(see Marks for the exceptions\\)'));
+  assert.doesNotMatch(text, phrase('unless it names a status two or more headers show'));
+  // Drivers cleared the warning by making the board title vaguer.
+  assert.match(text, phrase("Reword the label so it says what the title does not"));
+  assert.match(text, phrase("never weaken the board title: it keeps stating the fact"));
+  assert.doesNotMatch(text, phrase("Reword the label or the board title"));
+  assert.match(text, phrase('\\("Sprint 4, Release panel"\\) or how an element looks'));
+  assert.doesNotMatch(text, phrase("rewrite or drop that label's line"));
+  // Step 7 pointed at itself.
+  assert.match(text, phrase('unless cut short or meaningless alone; see below'));
+  assert.doesNotMatch(text, phrase('meaningless alone; see step 7\\)'));
+  // One snapshot rule, in step 1, that also covers a frame the tool chooses.
+  const stepOne = text.slice(text.indexOf('1. **Choose selectors.**'), text.indexOf('2. **Capture.**'));
+  assert.match(stepOne, phrase('Before the first capture of any frame, take a snapshot scoped to the frame element'));
+  assert.match(stepOne, phrase('with `frame: "auto"`, snapshot the card that holds the targets'));
+  assert.equal(text.split(/Before\s+the\s+first\s+capture\s+of\s+any\s+frame/).length, 2);
+  assert.match(text, phrase('so its snapshot \\(step 1\\) needs a `redact` target'));
+  assert.doesNotMatch(text, phrase('and the snapshot of the frame element under Marks'));
+  assert.doesNotMatch(text, phrase('To know what the frame will hold'));
+  assert.doesNotMatch(text, phrase('and a snapshot scoped to the frame if you need one'));
   assert.match(text, phrase('a value the board compares wrapped onto two lines: widen the viewport with `browser_resize`'));
+  // A board titled after one of its two facts left the second lift a label
+  // that described the layout ("Separate summary point").
+  assert.match(text, phrase('When the board proves more than one fact, the title states each of them'));
+  assert.match(text, phrase('and so does a board of two or more records\' statuses'));
+  assert.doesNotMatch(text, phrase('there the title names the field'));
+  assert.match(text, phrase('never describes the board\'s layout \\("separate point"\\)'));
+  assert.match(text, phrase("or that describes the board's layout, so it adds what the title does not; outside `steps`, never leave a mark without its callout"));
+  assert.doesNotMatch(text, phrase('Delete any label line'));
+  assert.doesNotMatch(text, phrase("already states may go without a label"));
+  // A lift that left its sub-line out still showed the sub-line's top under the card.
+  assert.match(text, phrase("check the PNG for a part of that sub-line peeking out under the lift's card. If any of it shows, target the whole item instead"));
+  // Compose evens step zooms out only above a floor, so steps need comparable frames.
+  assert.match(text, phrase('Steps share one zoom only when compose can'));
+  assert.match(text, phrase('unless that would draw a panel below about 0.55'));
+  assert.match(text, phrase('frame each step on a comparable region'));
+  assert.doesNotMatch(text, phrase('none of that needs anything from you'));
 
   const pointer = await readFile(path.join(pluginRoot, 'skills/annotating-screenshots/SKILL.md'), 'utf8');
   const body = pointer.replace(/^---\n[\s\S]*?\n---\n/, '');
   assert.match(body.slice(0, 900), /composing-evidence/);
+});
+
+// A short callout may name the record or status the board title states; a
+// label that copies the board title must still warn.
+test('composing-evidence: its record-status example matches the wording check', async () => {
+  const text = await readFile(path.join(pluginRoot, 'skills/composing-evidence/SKILL.md'), 'utf8');
+  const flat = text.replace(/\s+/g, ' ');
+  const calloutTitle = flat.match(/Its `title` names the record \("([^"]+)"\)/)?.[1];
+  const calloutNote = flat.match(/gives the status in the page's words \("([^"]+)"\)/)?.[1];
+  const title = flat.match(/the board title states each fact \("([^"]+)"\)/)?.[1];
+  assert.equal(calloutTitle, 'Atlas project');
+  assert.equal(calloutNote, 'Budget approved');
+  assert.equal(title, "Atlas has its budget approved; Borealis's budget is pending");
+
+  const sandbox = {};
+  vm.runInNewContext(await readFile(path.join(pluginRoot, 'lib/compose/wording.js'), 'utf8'), sandbox);
+  const { wordingWarnings } = sandbox.__composeWording;
+  const check = (marks) => [...wordingWarnings({ title, panels: [{ marks }] }, [{ source: 'live' }])];
+  assert.deepEqual(check([
+    { lift: 'atlasCard', title: calloutTitle, note: calloutNote },
+    { lift: 'borealisCard', title: 'Borealis project', note: 'Budget pending' },
+  ]), []);
+  assert.deepEqual(check([{ lift: 'atlasCard', title: 'Atlas has its budget approved' }]), ["a label repeats the board's title"]);
 });

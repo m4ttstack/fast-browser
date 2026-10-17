@@ -1,0 +1,7 @@
+{ "state": "FLOW", "title": "Reviewing a task from its activity page, dark", "layout": "steps", "out": "fx-steps-dense-dark.png",
+  "expect": { "cropped": true, "dark": [true, true], "cropEdgesIn": ["snapped", "word", "clamped", "frame", "margin"], "wordRowsClean": true, "darkFades": true },
+  "panels": [
+    { "label": "Open its activity", "fixture": { "page": "dense-text-dark", "targets": { "tab": "[data-testid=activity-tab]" }, "frame": "[data-testid=activity]" },
+      "marks": [ { "lift": "tab", "title": "Activity" } ] },
+    { "label": "Filter to review", "fixture": { "page": "dense-text-dark", "targets": { "tab": "[data-testid=review-tab]" }, "frame": "[data-testid=activity]" },
+      "marks": [ { "lift": "tab", "title": "Review" } ] } ] }

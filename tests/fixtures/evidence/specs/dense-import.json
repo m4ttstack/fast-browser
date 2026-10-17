@@ -1,0 +1,7 @@
+{ "state": "FOUND", "title": "The activity tab sits among dense notes", "layout": "single", "out": "fx-dense-import.png",
+  "expect": { "origin": [true], "frameInside": true, "wordRowsClean": true, "frameEdges": { "left": "inward", "top": "word", "right": "cut", "bottom": "cut" } },
+  "panels": [
+    { "fixture": { "import": { "page": "dense-text", "dpr": 1, "format": "png" } },
+      "frame": [200, 170, 420, 210],
+      "boxes": { "tab": [434, 270, 61, 22] },
+      "marks": [ { "lift": "tab", "title": "Activity" } ] } ] }

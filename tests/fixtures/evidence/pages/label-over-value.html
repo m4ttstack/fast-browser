@@ -1,0 +1,19 @@
+<!doctype html><meta charset="utf-8">
+<style>body{margin:0;font:14px Helvetica,Arial,sans-serif;background:#f6f7f9;color:#111827}
+.card{box-sizing:border-box;margin:20px;width:960px;padding:20px 20px 60px;background:#fff;border:1px solid #e5e7eb;border-radius:8px}
+.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px 24px}
+/* A label box 9px tall ends at its baseline, so the box is its ink. */
+.label{display:block;height:9px;margin-bottom:7px;font-size:11px;line-height:1;color:#6b7280}
+.value{display:block;font:17px/1.25 Menlo,Consolas,monospace}</style>
+<div class="card" data-testid="fields">
+  <div class="grid">
+    <div><span class="label">Task</span><span class="value" data-testid="pinned">7F3A9C21E0B4D856</span></div>
+    <div><span class="label">Opened</span><span class="value">March 3, 2025</span></div>
+    <div><span class="label">Due</span><span class="value">April 18, 2025</span></div>
+    <div><span class="label">Owner</span><span class="value">Avery Lane</span></div>
+    <div><span class="label">Project</span><span class="value">Atlas</span></div>
+    <div><span class="label">Milestone</span><span class="value">Beta</span></div>
+    <div><span class="label">Area</span><span class="value">Exports</span></div>
+    <div><span class="label" data-testid="build-label">Build id</span><span class="value" data-testid="build">7F3A9C21E0B4D856</span></div>
+  </div>
+</div>

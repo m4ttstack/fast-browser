@@ -1,0 +1,5 @@
+{ "state": "AFTER", "title": "The Atlas Platform migration is the selected task", "layout": "single", "out": "fx-outlined-tab-accent.png",
+  "page": "outlined-tab-accent", "frame": "[data-testid=list]",
+  "targets": { "item": "[data-testid=item]" },
+  "expect": { "liftKeeps": [["left", [79, 70, 229]], ["bottom", [203, 213, 225]]] },
+  "panels": [ { "marks": [ { "lift": "item", "title": "Atlas Platform migration" } ] } ] }

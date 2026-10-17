@@ -1,0 +1,5 @@
+{ "state": "AFTER", "title": "Atlas Platform is the open project tab", "layout": "single", "out": "fx-outlined-tab.png",
+  "page": "outlined-tab", "frame": "[data-testid=strip]",
+  "targets": { "tab": "[data-testid=tab]" },
+  "expect": { "noPartialOutline": true },
+  "panels": [ { "marks": [ { "lift": "tab", "title": "Atlas Platform", "note": "On track, due Friday" } ] } ] }

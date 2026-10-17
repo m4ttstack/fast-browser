@@ -1,0 +1,5 @@
+{ "state": "AFTER", "title": "The project shows the ready badge", "layout": "single", "out": "fx-loupe-at-edge.png",
+  "targets": { "badge": "[data-testid=badge]" },
+  "page": "loupe-at-edge", "frame": "[data-testid=card]",
+  "expect": { "loupes": [2], "dark": [true], "lensNoColour": [255, 43, 214] },
+  "panels": [{ "marks": [ { "loupe": "badge", "zoom": 2, "title": "Ready badge", "note": "The project can ship" } ] }] }

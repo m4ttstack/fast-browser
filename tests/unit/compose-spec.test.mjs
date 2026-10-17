@@ -192,3 +192,21 @@ test('inspection geometry on a live panel is refused', () => {
   const withBoxes = { ...base([]), panels: [{ capture: 'c.json', boxes: { name: [0, 0, 10, 10] }, marks: [{ lift: 'name' }] }] };
   assert.ok(validateSpec(withBoxes, [capture()]).includes('panels[0].frame and panels[0].boxes are only for an imported panel'));
 });
+
+test('a context mark keeps an element in the crop and takes no words', () => {
+  assert.deepEqual(validateSpec(base([{ context: 'name' }]), [capture()]), []);
+  assert.deepEqual(validateSpec(base([{ context: ['name', 'phone'] }]), [capture()]), []);
+  assert.ok(validateSpec(base([{ context: 'name', title: 'x' }]), [capture()]).some((p) => p.includes('a context mark takes no words')));
+  assert.ok(validateSpec(base([{ context: 'name', tag: 'NEW' }]), [capture()]).some((p) => p.includes('a context mark takes no words')));
+  assert.ok(validateSpec(base([{ context: 'nope' }]), [capture()]).includes('panels[0].marks[0] names a key the capture did not measure'));
+});
+
+test('a panel may carry a tag from the mark tags and a note of up to 120 characters', () => {
+  const withHead = (head) => ({ ...base([{ lift: 'name' }]), panels: [{ capture: 'x.json', marks: [{ lift: 'name' }], ...head }] });
+  assert.deepEqual(validateSpec(withHead({ tag: 'NEW', note: 'The name is shown.' }), [capture()]), []);
+  assert.deepEqual(validateSpec(withHead({ note: 'x'.repeat(120) }), [capture()]), []);
+  assert.ok(validateSpec(withHead({ tag: 'SHINY' }), [capture()]).includes('panels[0].tag must be one of NEW, CHANGED, REMOVED, ISSUE, PENDING, OK'));
+  for (const note of [7, '', '  ', 'x'.repeat(121)]) {
+    assert.ok(validateSpec(withHead({ note }), [capture()]).includes('panels[0].note must be text of at most 120 characters'), JSON.stringify(note));
+  }
+});

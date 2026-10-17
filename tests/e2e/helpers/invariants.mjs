@@ -26,6 +26,13 @@ export const pathsCross = (a, b) => a.slice(1).some((p, i) => b.slice(1).some((q
 // A line on a label's edge touches its text, so the rect is inflated by the 1px segmentHitsRect trims.
 const inflate = (r) => [r[0] - 1, r[1] - 1, r[2] + 2, r[3] + 2];
 
+// Every panel is drawn at one zoom, board px per CSS px of its frame, but for its drawn size's rounding to a whole board px.
+export const oneZoom = (panels) => {
+  const css = (panel, k) => panel.frame[k] / (panel.scale ?? 1);
+  const zoom = (panel, k) => panel.capture[k] / css(panel, k);
+  return [2, 3].every((k) => panels.every((a) => panels.every((b) => Math.abs(zoom(a, k) - zoom(b, k)) <= 0.5 / css(a, k) + 0.5 / css(b, k) + 1e-9)));
+};
+
 // Lift sources, pads and the panel's frame are in that panel's capture pixels, so the numbers compared with them scale by its scale.
 export function assertPanel(panel, stage) {
   const scale = panel.scale ?? 1;
@@ -50,13 +57,19 @@ export function assertPanel(panel, stage) {
     assert.ok(inside([x - left, y - top, w + left + right, h + top + bottom], panel.frame, 0.5 * scale), 'a lift draws capture pixels outside the panel\'s shown region');
   }
   for (const r of panel.redactions) assert.ok(inside(r.rect, panel.capture), 'a redaction is drawn outside the screenshot');
+  for (const fade of panel.fades ?? []) {
+    for (const part of fade.parts) {
+      assert.ok(inside(part, panel.capture), 'a fade is drawn outside the screenshot');
+      for (const r of panel.redactions) for (const rect of r.rects) assert.equal(intersects(part, rect), false, 'a fade is drawn over a redaction');
+    }
+  }
   for (const slot of panel.slots ?? []) assert.ok(inside(slot.rect, panel.capture), 'a slot leaves the frame');
   for (const bracket of panel.brackets ?? []) {
     const gap = bracket.rect[0] - (bracket.rows[0] + bracket.rows[2]);
     assert.ok(gap >= 0 && gap <= (bracket.inMargin ? BRACKET_FAR : BRACKET_NEAR), 'a bracket sits away from its rows');
     assert.ok(Math.abs(bracket.rect[1] - bracket.rows[1]) <= 1 && Math.abs(bracket.rect[3] - bracket.rows[3]) <= 1, 'a bracket does not span its rows');
     for (const lift of panel.lifts) assert.equal(intersects(bracket.rect, lift.rect), false, 'a bracket is drawn over a lift');
-    for (const r of panel.redactions) assert.equal(intersects(bracket.rect, r.rect), false, 'a bracket is drawn through a redaction');
+    for (const r of panel.redactions) for (const rect of r.rects) assert.equal(intersects(bracket.rect, rect), false, 'a bracket is drawn through a redaction');
   }
   for (const link of panel.links ?? []) {
     assert.equal(link.targets.length, 2, 'a link has two lifts');
@@ -179,9 +192,9 @@ export function assertPanel(panel, stage) {
       assert.ok(rectDistance(pin.center, other.rect) >= pin.r - 0.5, "a pin sits on another mark's target");
     });
     // A fill a lift holds is drawn inside its card; one outside the pin's own target is never under a pin.
-    for (const r of panel.redactions) {
-      if (intersects(r.rect, target.rect)) continue;
-      assert.ok(rectDistance(pin.center, r.rect) >= pin.r - 0.5, 'a pin sits on a redaction');
+    for (const r of panel.redactions) for (const rect of r.rects) {
+      if (intersects(rect, target.rect)) continue;
+      assert.ok(rectDistance(pin.center, rect) >= pin.r - 0.5, 'a pin sits on a redaction');
     }
     for (const label of panel.labels) assert.ok(rectDistance(pin.center, label.rect) >= pin.r, 'a pin sits on a label');
   }
@@ -223,6 +236,26 @@ export function assertPanel(panel, stage) {
   }
 }
 
+// A copy of ZOOM_SPREAD in lib/compose/page-geometry.js, kept apart so the check does not read the code it checks.
+const ZOOM_SPREAD = 1.25;
+
+// A board of more than one panel draws them at one height, or stacked one width.
+export function assertPanelSizes(report) {
+  const spread = (k) => { const values = report.panels.map((p) => p.capture[k]); return Math.max(...values) - Math.min(...values); };
+  // Steps may share one zoom in place of one size, but only where one size would draw them at zooms more than
+  // ZOOM_SPREAD apart: those zooms stand as the CSS sizes do, inverted.
+  const k = report.stacked ? 2 : 3;
+  const css = report.panels.map((p) => p.frame[k] / (p.scale ?? 1));
+  const zoomed = report.layout === 'steps' && Math.max(...css) > ZOOM_SPREAD * Math.min(...css) && oneZoom(report.panels);
+  if (report.stacked) {
+    assert.ok(spread(2) <= 0.5 || zoomed, 'stacked panels differ in width');
+    assert.ok(spread(0) <= 0.5, 'stacked panels do not line up');
+  } else {
+    assert.ok(spread(3) <= 0.5 || zoomed, 'panels differ in height');
+    assert.ok(spread(1) <= 0.5, 'panels do not line up');
+  }
+}
+
 export function assertInvariants(report) {
   assert.ok(Array.isArray(report.panels) && report.panels.length > 0, 'the report lists its panels');
   for (const panel of report.panels) assertPanel(panel, report.stage);
@@ -242,14 +275,7 @@ export function assertInvariants(report) {
     }
   }
   if (report.panels.length > 1) {
-    const spread = (k) => { const values = report.panels.map((p) => p.capture[k]); return Math.max(...values) - Math.min(...values); };
-    if (report.stacked) {
-      assert.ok(spread(2) <= 0.5, 'stacked panels differ in width');
-      assert.ok(spread(0) <= 0.5, 'stacked panels do not line up');
-    } else {
-      assert.ok(spread(3) <= 0.5, 'panels differ in height');
-      assert.ok(spread(1) <= 0.5, 'panels do not line up');
-    }
+    assertPanelSizes(report);
     assert.equal(new Set(report.panels.map((p) => p.wash)).size, 1, 'one panel is washed and another is not');
     report.panels.forEach((a, i) => report.panels.slice(i + 1).forEach((b) => {
       assert.equal(intersects(a.extent, b.extent), false, 'two panels overlap');

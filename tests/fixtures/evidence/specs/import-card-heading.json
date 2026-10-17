@@ -1,0 +1,95 @@
+{
+  "state": "FOUND",
+  "title": "The notes card names who wrote it",
+  "layout": "single",
+  "out": "fx-import-card-heading.png",
+  "expect": {
+    "bare": [
+      "border",
+      "side",
+      "spark",
+      "note"
+    ],
+    "covered": [
+      "ink"
+    ],
+    "crops": 1,
+    "frameInside": true,
+    "grownFills": 0
+  },
+  "panels": [
+    {
+      "fixture": {
+        "import": {
+          "page": "card-heading",
+          "dpr": 2,
+          "format": "png"
+        }
+      },
+      "frame": [
+        70,
+        70,
+        1140,
+        420
+      ],
+      "boxes": {
+        "heading": [
+          122,
+          120,
+          358,
+          36
+        ],
+        "ink": [
+          123,
+          123,
+          355,
+          26
+        ],
+        "border": [
+          130,
+          182,
+          1000,
+          2
+        ],
+        "side": [
+          110,
+          200,
+          2,
+          76
+        ],
+        "spark": [
+          148,
+          218,
+          24,
+          24
+        ],
+        "note": [
+          188,
+          218,
+          448,
+          34
+        ],
+        "facts": [
+          802,
+          345,
+          182,
+          24
+        ]
+      },
+      "marks": [
+        {
+          "redact": "heading"
+        },
+        {
+          "context": "spark"
+        },
+        {
+          "context": "note"
+        },
+        {
+          "context": "facts"
+        }
+      ]
+    }
+  ]
+}

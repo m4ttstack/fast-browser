@@ -1,0 +1,50 @@
+{
+  "state": "FOUND",
+  "title": "The usage marker shows on the plan card",
+  "layout": "single",
+  "out": "fx-import-thin-meter.png",
+  "expect": {
+    "crops": 1,
+    "frameInside": true,
+    "thinRects": true
+  },
+  "panels": [
+    {
+      "fixture": {
+        "import": {
+          "page": "usage-meter",
+          "dpr": 1,
+          "format": "png"
+        }
+      },
+      "frame": [
+        34,
+        34,
+        432,
+        162
+      ],
+      "boxes": {
+        "meter": [
+          340,
+          104,
+          2,
+          12
+        ],
+        "near1": [
+          59,
+          59,
+          101,
+          21
+        ]
+      },
+      "marks": [
+        {
+          "redact": "meter"
+        },
+        {
+          "context": "near1"
+        }
+      ]
+    }
+  ]
+}
