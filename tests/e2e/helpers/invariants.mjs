@@ -34,8 +34,7 @@ export const oneZoom = (panels) => {
 };
 
 // Lift sources, pads and the panel's frame are in that panel's capture pixels, so the numbers compared with them scale by its scale.
-// `type` is the board's annotation type scale (report.textScale): the legend's gap grows with it.
-export function assertPanel(panel, stage, type = 1) {
+export function assertPanel(panel, stage) {
   const scale = panel.scale ?? 1;
   const pinned = (panel.pins?.length ?? 0) > 0;
   for (const label of panel.labels) {
@@ -215,13 +214,13 @@ export function assertPanel(panel, stage, type = 1) {
     for (const entry of panel.legend) {
       assert.equal(intersects(entry.rect, panel.capture), false, 'a legend number overlaps the screenshot');
       assert.ok(inside(entry.rect, stage), 'a legend number leaves the stage');
-      // Its label, or the lens of a loupe that has none, starts LEGEND_GAP, at the board's type scale, right of the number and stands level with it.
+      // Its label, or the lens of a loupe that has none, starts LEGEND_GAP right of the number and stands level with it.
       const label = panel.labels.find((l) => l.number === entry.number);
       const lens = (panel.loupes ?? []).find((l) => panel.pins.some((pin) => pin.number === entry.number && pin.target === l.target))?.lens;
       const beside = lens ?? label?.rect;
       assert.ok(beside, 'a legend number stands alone');
       const [x, y, w, h] = entry.rect;
-      assert.ok(Math.abs(beside[0] - (x + w + LEGEND_GAP * type)) <= 0.5, 'a legend number is not beside its label');
+      assert.ok(Math.abs(beside[0] - (x + w + LEGEND_GAP)) <= 0.5, 'a legend number is not beside its label');
       assert.ok(y + h / 2 >= beside[1] && y + h / 2 <= beside[1] + beside[3], 'a legend number is not level with its label');
       for (const other of [...panel.labels.map((l) => l.rect), ...(panel.loupes ?? []).map((l) => l.lens)]) {
         assert.equal(intersects(entry.rect, other), false, 'a legend number is covered');
@@ -259,7 +258,7 @@ export function assertPanelSizes(report) {
 
 export function assertInvariants(report) {
   assert.ok(Array.isArray(report.panels) && report.panels.length > 0, 'the report lists its panels');
-  for (const panel of report.panels) assertPanel(panel, report.stage, report.textScale ?? 1);
+  for (const panel of report.panels) assertPanel(panel, report.stage);
   for (const panel of report.panels) if (panel.extent) assert.ok(inside(panel.extent, report.stage), 'a panel leaves the stage');
   for (const panel of report.panels) {
     if (report.pinned) assert.equal(panel.leaders.length + panel.connectors.length + panel.dots.length, 0, 'a panel of a pinned board draws leaders');

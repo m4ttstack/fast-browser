@@ -3292,8 +3292,10 @@ test('a narrow single frame draws up to 1.25x, so its capture is at least 600 bo
 });
 
 // The board's computed annotation type in CSS px, from the page that drew it, with its layout report.
-async function typeOf(boardSpec, capture) {
-  const html = buildBoardHtml({ spec: boardSpec, captures: [capture], fontBytes: font, geometrySource, layoutSource });
+// `plain` draws the board with its type held at CSS size, the board the type scale must not widen.
+async function typeOf(boardSpec, capture, { plain = false } = {}) {
+  const geometry = plain ? `${geometrySource}\nglobalThis.__composeGeometry.textScale = () => 1;` : geometrySource;
+  const html = buildBoardHtml({ spec: boardSpec, captures: [capture], fontBytes: font, geometrySource: geometry, layoutSource });
   const { chromium } = await import(renderer.playwrightCore);
   const browser = await chromium.launch({ headless: true, executablePath: renderer.executablePath });
   try {
@@ -3328,25 +3330,40 @@ test('a lone panel drawn past CSS size sets its annotation type larger by its zo
   }
 });
 
-test('zoomed annotation type keeps its hierarchy, wraps at a width grown with it, and its labels stay clear of each other and the screenshot', { skip }, async () => {
+test('zoomed annotation type never widens the board: it keeps its hierarchy and wraps onto more lines within the widths CSS-size type took', { skip }, async () => {
   const long = 'A note that runs well past any sensible label width so it must wrap across several lines cleanly';
   const bars = [[20, 60, 100, 20], [20, 130, 100, 20]];
   const marks = [{ lift: 'a', title: 'A fairly long label title for a lifted element', note: long, tag: 'CHANGED' }, { lift: 'b', title: 'Another label', note: long }];
+  const headline = 'A headline over the board that runs long enough to wrap once its type grows';
   // A ghost far out to the right keeps the frame whole, so its width alone sets the zoom.
-  const at = async (width) => typeOf(spec([...marks, { ghost: 'hold' }], 'A headline over the board'), await syntheticCapture({ size: [width, 200], bars: [...bars, holdOf([width])], boxes: { a: bars[0], b: bars[1], hold: holdOf([width]) } }));
-  const zoomed = await at(480);
-  const plain = await at(900);
+  const capture = await syntheticCapture({ size: [480, 200], bars: [...bars, holdOf([480])], boxes: { a: bars[0], b: bars[1], hold: holdOf([480]) } });
+  const board = spec([...marks, { ghost: 'hold' }], headline);
+  const zoomed = await typeOf(board, capture);
+  const plain = await typeOf(board, capture, { plain: true });
   assert.equal(zoomed.report.textScale, 1.25);
   assert.equal(plain.report.textScale, 1);
   for (const { report, sizes } of [zoomed, plain]) {
     assertInvariants(report);
     assert.ok(sizes.title > sizes.ltitle && sizes.ltitle > sizes.lnote, `the headline (${sizes.title}) stands over the callout title (${sizes.ltitle}) over its note (${sizes.lnote})`);
   }
-  const widest = (report) => Math.max(...p0(report).labels.map((label) => label.rect[2]));
-  assert.ok(widest(plain.report) <= 240 + 0.5, `a label at CSS size wraps within 240 px, not ${widest(plain.report)}`);
-  assert.ok(widest(zoomed.report) > 240 && widest(zoomed.report) <= 240 * 1.25 + 0.5, `a label at 1.25x wraps within ${240 * 1.25} px, not ${widest(zoomed.report)}`);
-  const lines = (report) => p0(report).labels.map((label) => label.rect[3]);
-  assert.deepEqual(lines(zoomed.report).map((h, i) => Math.abs(h / lines(plain.report)[i] - 1.25) < 0.08), [true, true], `each label grows with its type: ${lines(zoomed.report)} against ${lines(plain.report)}`);
+  assert.ok(Math.abs(zoomed.report.stage[2] - plain.report.stage[2]) <= 0.5, `the board is ${zoomed.report.stage[2]} px wide at 1.25x type, ${plain.report.stage[2]} at CSS size`);
+  assert.ok(zoomed.report.stage[3] > plain.report.stage[3], 'the larger type makes the board taller');
+  assert.deepEqual(p0(zoomed.report).capture.slice(2), p0(plain.report).capture.slice(2), 'the screenshot is drawn at the same size');
+  p0(zoomed.report).labels.forEach((label, i) => {
+    const before = p0(plain.report).labels[i].rect;
+    assert.ok(label.rect[2] <= Math.max(before[2], 240) + 0.5, `label ${i} is ${label.rect[2]} px wide, past its ${before[2]} and the 240 px wrap`);
+    assert.ok(label.rect[3] > before[3], `label ${i} wraps onto more lines: ${label.rect[3]} px high against ${before[3]}`);
+  });
+});
+
+test('a board whose larger type would run a word past the width it holds steps its type down, to CSS size at the least', { skip }, async () => {
+  const bars = [[20, 60, 100, 20]];
+  const capture = await syntheticCapture({ size: [480, 200], bars: [...bars, holdOf([480])], boxes: { a: bars[0], hold: holdOf([480]) } });
+  const { report, sizes } = await typeOf(spec([{ lift: 'a', title: 'Unbreakablewordthatfillsthelabelcolumnwhole' }, { ghost: 'hold' }]), capture);
+  const plain = await typeOf(spec([{ lift: 'a', title: 'Unbreakablewordthatfillsthelabelcolumnwhole' }, { ghost: 'hold' }]), capture, { plain: true });
+  assert.equal(report.textScale, 1);
+  assert.equal(sizes.ltitle, TYPE_CSS.ltitle);
+  assert.deepEqual(report.stage, plain.report.stage, 'the board is the one CSS-size type draws');
 });
 
 test("an empty slot's own words grow with the board's type, and still sit inside a slot that holds them", { skip }, async () => {
@@ -3362,7 +3379,7 @@ test("an empty slot's own words grow with the board's type, and still sit inside
 
 test('a pinned board with zoomed annotation type draws its pins and legend numbers at that size, clear of each other', { skip }, async () => {
   const bars = [[100, 100, 60, 20], [200, 100, 60, 20], [100, 160, 60, 20]];
-  const marks = [{ lift: 'a', title: 'Boxed' }, { lift: 'b' }, { lift: 'c' }];
+  const marks = [{ lift: 'a', title: 'Boxed', note: 'A note wider than its title' }, { lift: 'b' }, { lift: 'c' }];
   for (const [width, zoom] of [[480, 1.25], [900, 1]]) {
     const { report, sizes } = await typeOf(spec([...marks, { ghost: 'hold' }]), await syntheticCapture({ size: [width, 260], bars: [...bars, holdOf([width])], boxes: { a: bars[0], b: bars[1], c: bars[2], hold: holdOf([width]) } }));
     assertInvariants(report);
