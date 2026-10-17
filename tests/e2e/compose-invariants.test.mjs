@@ -3291,6 +3291,80 @@ test('a narrow single frame draws up to 1.25x, so its capture is at least 600 bo
   }
 });
 
+// The board's computed annotation type in CSS px, from the page that drew it, with its layout report.
+async function typeOf(boardSpec, capture) {
+  const html = buildBoardHtml({ spec: boardSpec, captures: [capture], fontBytes: font, geometrySource, layoutSource });
+  const { chromium } = await import(renderer.playwrightCore);
+  const browser = await chromium.launch({ headless: true, executablePath: renderer.executablePath });
+  try {
+    const page = await browser.newPage({ viewport: { width: 2400, height: 1600 } });
+    await page.setContent(html, { waitUntil: 'load' });
+    const report = await page.evaluate(() => window.__composeLayout());
+    const sizes = await page.evaluate(() => Object.fromEntries(['title', 'state', 'ltitle', 'lnote', 'tag', 'pin', 'lnum'].map((cls) => {
+      const node = document.querySelector(`.${cls}`);
+      return [cls, node ? parseFloat(getComputedStyle(node).fontSize) : null];
+    })));
+    return { report, sizes };
+  } finally { await browser.close(); }
+}
+// The page CSS sizes in page.mjs, kept apart so the check does not read the code it checks.
+const TYPE_CSS = { title: 15, state: 11, ltitle: 13, lnote: 12, tag: 10, pin: 11, lnum: 11 };
+const PIN_CSS_R = 9;
+
+test('a lone panel drawn past CSS size sets its annotation type larger by its zoom; at or under CSS size the type keeps its CSS size', { skip }, async () => {
+  const marks = [{ lift: 'a', title: 'Left', note: 'A short note', tag: 'NEW' }, { lift: 'b', title: 'Right' }];
+  // 480 CSS px is drawn at 1.25x, 560 at 640 / 560, and 900 at under 1x.
+  for (const [width, scale, zoom] of [[480, 1, 1.25], [480, 2, 1.25], [560, 1, 1.14], [900, 1, 1]]) {
+    const bars = [[20, 90, 100, 20], [width - 120, 90, 100, 20]];
+    const capture = await syntheticCapture({ size: [width, 200], bars, boxes: { a: bars[0], b: bars[1] }, scale });
+    const { report, sizes } = await typeOf(spec(marks), capture);
+    assertInvariants(report);
+    const drawn = p0(report).capture[2] / (p0(report).frame[2] / p0(report).scale);
+    assert.ok(Math.abs(Math.min(1.25, Math.max(1, drawn)) - zoom) < 0.01, `a ${width} CSS px frame at scale ${scale} is drawn at ${drawn}x`);
+    assert.equal(report.textScale, zoom, `a ${width} CSS px frame at scale ${scale} sets its type at ${report.textScale}x`);
+    for (const [cls, css] of Object.entries({ title: TYPE_CSS.title, state: TYPE_CSS.state, ltitle: TYPE_CSS.ltitle, lnote: TYPE_CSS.lnote, tag: TYPE_CSS.tag })) {
+      assert.ok(Math.abs(sizes[cls] - css * zoom) < 0.01, `.${cls} is ${sizes[cls]} px on a ${width} CSS px frame, not ${css * zoom}`);
+    }
+  }
+});
+
+test('zoomed annotation type keeps its hierarchy, wraps at a width grown with it, and its labels stay clear of each other and the screenshot', { skip }, async () => {
+  const long = 'A note that runs well past any sensible label width so it must wrap across several lines cleanly';
+  const bars = [[20, 60, 100, 20], [20, 130, 100, 20]];
+  const marks = [{ lift: 'a', title: 'A fairly long label title for a lifted element', note: long, tag: 'CHANGED' }, { lift: 'b', title: 'Another label', note: long }];
+  // A ghost far out to the right keeps the frame whole, so its width alone sets the zoom.
+  const at = async (width) => typeOf(spec([...marks, { ghost: 'hold' }], 'A headline over the board'), await syntheticCapture({ size: [width, 200], bars: [...bars, holdOf([width])], boxes: { a: bars[0], b: bars[1], hold: holdOf([width]) } }));
+  const zoomed = await at(480);
+  const plain = await at(900);
+  assert.equal(zoomed.report.textScale, 1.25);
+  assert.equal(plain.report.textScale, 1);
+  for (const { report, sizes } of [zoomed, plain]) {
+    assertInvariants(report);
+    assert.ok(sizes.title > sizes.ltitle && sizes.ltitle > sizes.lnote, `the headline (${sizes.title}) stands over the callout title (${sizes.ltitle}) over its note (${sizes.lnote})`);
+  }
+  const widest = (report) => Math.max(...p0(report).labels.map((label) => label.rect[2]));
+  assert.ok(widest(plain.report) <= 240 + 0.5, `a label at CSS size wraps within 240 px, not ${widest(plain.report)}`);
+  assert.ok(widest(zoomed.report) > 240 && widest(zoomed.report) <= 240 * 1.25 + 0.5, `a label at 1.25x wraps within ${240 * 1.25} px, not ${widest(zoomed.report)}`);
+  const lines = (report) => p0(report).labels.map((label) => label.rect[3]);
+  assert.deepEqual(lines(zoomed.report).map((h, i) => Math.abs(h / lines(plain.report)[i] - 1.25) < 0.08), [true, true], `each label grows with its type: ${lines(zoomed.report)} against ${lines(plain.report)}`);
+});
+
+test('a pinned board with zoomed annotation type draws its pins and legend numbers at that size, clear of each other', { skip }, async () => {
+  const bars = [[100, 100, 60, 20], [200, 100, 60, 20], [100, 160, 60, 20]];
+  const marks = [{ lift: 'a', title: 'Boxed' }, { lift: 'b' }, { lift: 'c' }];
+  for (const [width, zoom] of [[480, 1.25], [900, 1]]) {
+    const { report, sizes } = await typeOf(spec([...marks, { ghost: 'hold' }]), await syntheticCapture({ size: [width, 260], bars: [...bars, holdOf([width])], boxes: { a: bars[0], b: bars[1], c: bars[2], hold: holdOf([width]) } }));
+    assertInvariants(report);
+    assert.equal(report.pinned, true);
+    assert.equal(report.textScale, zoom);
+    assert.ok(p0(report).pins.every((pin) => Math.abs(pin.r - PIN_CSS_R * zoom) < 1e-6), `pins of radius ${p0(report).pins.map((pin) => pin.r)} at ${zoom}x`);
+    assert.ok(p0(report).legend.every(({ rect }) => Math.abs(rect[2] - 2 * PIN_CSS_R * zoom) < 1e-6), `legend numbers ${p0(report).legend.map(({ rect }) => rect[2])} px across at ${zoom}x`);
+    for (const cls of ['pin', 'lnum']) assert.ok(Math.abs(sizes[cls] - TYPE_CSS[cls] * zoom) < 0.01, `.${cls} is ${sizes[cls]} px at ${zoom}x`);
+    const [label] = p0(report).labels; const [entry] = p0(report).legend;
+    assert.equal(intersects(label.rect, entry.rect), false, 'the legend number stands clear of its label');
+  }
+});
+
 // Stems of a line of text from x to x + width: 1 px wide, 2 apart, a third starting a px lower and a third ending
 // one higher, so no run of its rows repeats.
 const textStems = (x, y, width) => Array.from({ length: Math.ceil(width / 3) }, (_, i) => [x + 3 * i, y + (i % 3 === 1 ? 1 : 0), 1, 10 - (i % 3 === 0 ? 0 : 1)]);
