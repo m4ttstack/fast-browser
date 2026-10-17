@@ -3047,20 +3047,21 @@ test('the gate refuses a line within the value\'s reach that the fill leaves bar
   const held = importFill(above(42), [100, 80, 60, 10], { held: [[148, 40, 104, 14]] });
   assert.deepEqual(held.capped.filter((c) => c.refuse), [], 'the driver\'s word on that line');
   assert.deepEqual(importFill(above(14), [100, 80, 60, 10]).capped.filter((c) => c.refuse), [], 'a line further off than two leads');
-  // A line wholly left of the value past a clear gutter, with a label beside the value on its row, is another
-  // column's.
+  // A line wholly left of the value past a clear gutter, with a label beside the value on its row: a column's
+  // gutter is no reason either, and a context mark is the driver's recovery.
   const apart = textLine(textLine(textLine(canvas(400, 140), 200, 80, 60, 1), 20, 80, 60, 1), 20, 42, 100, 1);
-  const columns = importFill(apart, [200, 80, 60, 10]);
-  assert.deepEqual(columns.capped.filter((c) => c.refuse), [], 'another column');
+  assert.deepEqual(importFill(apart, [200, 80, 60, 10]).capped.filter((c) => c.refuse).map((c) => [c.why, c.at[0], c.at[1]]), [['reach', 20, 42]]);
+  const columns = importFill(apart, [200, 80, 60, 10], { held: [[18, 40, 104, 14]] });
+  assert.deepEqual(columns.capped.filter((c) => c.refuse), [], 'the other column marked context');
   assert.ok(!columns.rects.some((r) => r[0] < 120), `the fill ${JSON.stringify(columns.rects)} reaches the other column`);
 });
 
-test('the gate refuses a line within a lead past a rule the walk never reached, and leaves one beyond the value\'s reach', () => {
+test('the gate refuses a line past a rule the walk never reached, and leaves one beyond two leads past it', () => {
   // The walk stops at the gap before the rule; the line past it lies beside the value's columns, which the wrap rule
   // does not cross a rule to take.
   const line = (y) => textLine(textLine(canvas(400, 140), 40, 20, 60, 1).fill(0, 62, 400, 1, [203, 213, 225]), 130, y, 80, 1);
   assert.deepEqual(importFill(line(66), [40, 20, 60, 10]).capped.filter((c) => c.refuse).map((c) => [c.why, c.at[0], c.at[1]]), [['rule', 130, 66]]);
-  assert.deepEqual(importFill(line(100), [40, 20, 60, 10]).capped.filter((c) => c.refuse), [], 'further off than two leads');
+  assert.deepEqual(importFill(line(110), [40, 20, 60, 10]).capped.filter((c) => c.refuse), [], 'further than two leads past the rule');
 });
 
 test('a line of capitals whose inkiest row is one bar still reads its density', () => {

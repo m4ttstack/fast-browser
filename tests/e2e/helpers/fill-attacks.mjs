@@ -720,11 +720,14 @@ function gateReviewScenes(scenes) {
     push('FT', `${colour} below${below} box l2 ${dpr}x`, dpr, html, L2);
   }
   for (const dpr of [1, 2]) for (const gap of [0, 4]) {
-    const row = (id, name, text) => `<div style="display:flex;height:36px;line-height:36px;border-bottom:1px solid #e5e7eb;margin-bottom:${gap}px"><div id=${id}label style="width:120px;color:#6b7280">${name}</div><div><span id=${id}>${text}</span></div></div>`;
+    const row = (id, name, text) => `<div id=${id}row style="display:flex;height:36px;line-height:36px;border-bottom:1px solid #e5e7eb;margin-bottom:${gap}px"><div id=${id}label style="width:120px;color:#6b7280">${name}</div><div><span id=${id}>${text}</span></div></div>`;
     const html = card(520, 220, `<div style="position:absolute;left:20px;top:20px;width:400px">${row('v', 'Name', 'Samantha Rivera-Okafor')}${row('e', 'Email', 'samantha.ro@tracker.example')}${row('s', 'Status', 'Open')}</div>`);
     push('TR', `name+email gap${gap} ${dpr}x`, dpr, html, WHOLE, [{ kind: 'redact', sel: '#e' }]);
     push('TR', `name+email+context gap${gap} ${dpr}x`, dpr, html, WHOLE, [{ kind: 'redact', sel: '#e' }, { kind: 'context', sel: '#e' }]);
     push('TR', `name alone gap${gap} ${dpr}x`, dpr, html, WHOLE, []);
+    // The recoveries the refusals name: the next row, or each label and the row past the last redaction.
+    push('TR', `name alone, context on email row gap${gap} ${dpr}x`, dpr, html, WHOLE, [{ kind: 'context', sel: '#erow' }]);
+    push('TR', `name+email, context on labels and status row gap${gap} ${dpr}x`, dpr, html, WHOLE, [{ kind: 'redact', sel: '#e' }, { kind: 'context', sel: '#vlabel' }, { kind: 'context', sel: '#elabel' }, { kind: 'context', sel: '#srow' }]);
   }
   for (const dpr of [1, 2, 3]) for (const pad of [2, 4, 8, 12, 16]) {
     const row = (id, name, text) => `<div id=${id}row style="display:flex;line-height:18px;padding:${pad}px 0;border-bottom:1px solid #e5e7eb"><div id=${id}label style="width:120px;color:#6b7280">${name}</div><div><span id=${id}>${text}</span></div></div>`;
