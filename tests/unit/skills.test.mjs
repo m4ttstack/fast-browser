@@ -1010,6 +1010,10 @@ test('composing-evidence states the compose contract and the blind-run lessons',
   assert.match(ticketSteps, /\| `met another mark's box over a line the value may go on to, past its <side> edge, at \[x, y, w, h\] in the image` \| refusal: /);
   assert.match(ticketSteps, phrase('A lift, loupe or ghost box never clears a line'));
   assert.match(ticketSteps, phrase('A `context` mark clears only the ink inside its box'));
+  // The strict rule: within the value's reach only a context mark or another redaction excuses a bare line.
+  assert.match(ticketSteps, phrase('mark every line near it that is not the value as `context`'));
+  assert.match(ticketSteps, phrase('not a border, a column gap or a list\'s layout'));
+  assert.match(ticketSteps, /\| `left ink past its <side> edge uncovered, at \[x, y, w, h\] in the image, where the value may go on` \| refusal: a line within the value's reach is bare and no `context` mark or other redaction covers it \|/);
   assert.match(ticketSteps, phrase("the value's ink runs into the board past its <side> edge` is a refusal"));
   assert.match(ticketSteps, phrase('A covered neighbouring line is expected, because hiding comes first'));
   assert.match(ticketSteps, phrase('On a refusal, no board was written. Do what the message says, then render again'));
