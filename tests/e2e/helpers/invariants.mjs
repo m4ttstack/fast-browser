@@ -183,7 +183,7 @@ export function assertPanel(panel, stage) {
   }
   for (const pin of panel.pins ?? []) {
     const target = panel.targets[pin.target];
-    assert.ok(rectDistance(pin.center, target.rect) <= pin.r + ringOf(target) + 1 + 1e-9, 'a pin is detached from its target');
+    assert.ok(rectDistance(pin.center, target.rect) <= pin.r + ringOf(target) + 1, 'a pin is detached from its target');
     // A bracket in the margin stands outside the frame, and so does its pin.
     const inMargin = target.kind === 'bracket' && !intersects(target.rect, panel.capture);
     assert.ok(inside([pin.center[0] - pin.r, pin.center[1] - pin.r, 2 * pin.r, 2 * pin.r], inMargin ? stage : panel.capture, 1), 'a pin leaves the frame');

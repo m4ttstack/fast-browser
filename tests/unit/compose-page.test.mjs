@@ -30,6 +30,6 @@ test('the page styles a pin and the number of a legend alike', () => {
     fontBytes: Buffer.from('wOF2fake'), geometrySource: '', layoutSource: '',
   });
   const css = html.slice(html.indexOf('<style>'), html.indexOf('</style>'));
-  assert.match(css, /\.pin,\.lnum\{[^}]*position:absolute[^}]*width:calc\(18px\*var\(--t\)\);height:calc\(18px\*var\(--t\)\)[^}]*background:var\(--accent\)/, 'a pin and a legend number are one disc, sized with the board\'s type');
+  assert.match(css, /\.pin,\.lnum\{[^}]*position:absolute[^}]*width:18px;height:18px[^}]*background:var\(--accent\)/, 'a pin and a legend number are one disc');
   assert.match(css, /\.pin\{[^}]*box-shadow:0 0 0 2px #fff/, 'and a pin stands in a white ring');
 });

@@ -1139,6 +1139,7 @@ test('a pair draws two captures of very different sizes at one height', { skip }
     assertInvariants(report);
     assert.equal(report.panels.length, 2);
     assert.equal(report.panels[0].capture[3], report.panels[1].capture[3]);
+    assert.equal(report.textScale, 1, 'a pair is never drawn past CSS size, so its type keeps CSS size');
     assert.equal(report.arrows.length, 0);
     assert.equal(pixels.width, Math.round(report.stage[2] * 2));
   } finally { await rm(dir, { recursive: true, force: true }); }
@@ -2909,6 +2910,7 @@ test('steps crops grow to the largest crop, so the steps share a scale', { skip 
 
 test('steps crops grow alike on a 2x capture and its 1x twin', { skip }, async () => {
   const [one, two] = [await stepsOfThree(1), await stepsOfThree(2)];
+  assert.deepEqual([one.textScale, two.textScale], [1, 1], 'steps are never drawn past CSS size, so their type keeps CSS size');
   assert.deepEqual(two.panels.map((p) => p.cropped), one.panels.map((p) => p.cropped));
   cssFrames(two).forEach((frame, i) => frame.forEach((n, k) => assert.ok(Math.abs(n - cssFrames(one)[i][k]) <= 1, `panel ${i + 1} shows ${frame} at 2x and ${cssFrames(one)[i]} at 1x`)));
   assert.deepEqual(two.panels.map((p) => p.capture), one.panels.map((p) => p.capture));
@@ -3377,20 +3379,24 @@ test("an empty slot's own words grow with the board's type, and still sit inside
   }
 });
 
-test('a pinned board with zoomed annotation type draws its pins and legend numbers at that size, clear of each other', { skip }, async () => {
+test('a pinned board with zoomed annotation type keeps its pins and legend numbers at CSS size, clear of each other', { skip }, async () => {
   const bars = [[100, 100, 60, 20], [200, 100, 60, 20], [100, 160, 60, 20]];
   const marks = [{ lift: 'a', title: 'Boxed', note: 'A note wider than its title' }, { lift: 'b' }, { lift: 'c' }];
-  for (const [width, zoom] of [[480, 1.25], [900, 1]]) {
-    const { report, sizes } = await typeOf(spec([...marks, { ghost: 'hold' }]), await syntheticCapture({ size: [width, 260], bars: [...bars, holdOf([width])], boxes: { a: bars[0], b: bars[1], c: bars[2], hold: holdOf([width]) } }));
+  const at = async (width, options) => typeOf(spec([...marks, { ghost: 'hold' }]), await syntheticCapture({ size: [width, 260], bars: [...bars, holdOf([width])], boxes: { a: bars[0], b: bars[1], c: bars[2], hold: holdOf([width]) } }), options);
+  const zoomed = await at(480);
+  const plain = await at(480, { plain: true });
+  for (const { report, sizes } of [zoomed, plain]) {
     assertInvariants(report);
     assert.equal(report.pinned, true);
-    assert.equal(report.textScale, zoom);
-    assert.ok(p0(report).pins.every((pin) => Math.abs(pin.r - PIN_CSS_R * zoom) < 1e-6), `pins of radius ${p0(report).pins.map((pin) => pin.r)} at ${zoom}x`);
-    assert.ok(p0(report).legend.every(({ rect }) => Math.abs(rect[2] - 2 * PIN_CSS_R * zoom) < 1e-6), `legend numbers ${p0(report).legend.map(({ rect }) => rect[2])} px across at ${zoom}x`);
-    for (const cls of ['pin', 'lnum']) assert.ok(Math.abs(sizes[cls] - TYPE_CSS[cls] * zoom) < 0.01, `.${cls} is ${sizes[cls]} px at ${zoom}x`);
+    assert.ok(p0(report).pins.every((pin) => pin.r === PIN_CSS_R), `pins of radius ${p0(report).pins.map((pin) => pin.r)}`);
+    assert.ok(p0(report).legend.every(({ rect }) => rect[2] === 2 * PIN_CSS_R), `legend numbers ${p0(report).legend.map(({ rect }) => rect[2])} px across`);
+    for (const cls of ['pin', 'lnum']) assert.equal(sizes[cls], TYPE_CSS[cls], `.${cls} is ${sizes[cls]} px`);
     const [label] = p0(report).labels; const [entry] = p0(report).legend;
     assert.equal(intersects(label.rect, entry.rect), false, 'the legend number stands clear of its label');
   }
+  assert.equal(zoomed.report.textScale, 1.25);
+  const onCapture = (report) => p0(report).pins.map(({ center: [x, y] }) => [x - p0(report).capture[0], y - p0(report).capture[1]]);
+  assert.deepEqual(onCapture(zoomed.report), onCapture(plain.report), 'the pins stand on the screenshot where they stand at CSS-size type');
 });
 
 // Stems of a line of text from x to x + width: 1 px wide, 2 apart, a third starting a px lower and a third ending
