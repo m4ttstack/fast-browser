@@ -831,6 +831,31 @@ test('a snapped bottom crop edge backs away from content until 12 clean lines li
   assert.equal(edges.bottom, 'snapped');
 });
 
+const { textScale } = sandbox.__composeGeometry;
+
+test('annotation type grows with a panel drawn past CSS size, as much as the panel does', () => {
+  assert.equal(textScale([1.25]), 1.25);
+  assert.equal(textScale([1.12]), 1.12);
+  assert.ok(textScale([1.2]) > textScale([1]), 'a zoomed-in panel gets larger type than one at CSS size');
+});
+
+test('annotation type never shrinks below its CSS size, however small the panel is drawn', () => {
+  assert.equal(textScale([1]), 1);
+  assert.equal(textScale([0.55]), 1);
+  assert.equal(textScale([0.2]), 1);
+});
+
+test('annotation type stops at 1.25 times its CSS size, however far a panel is zoomed', () => {
+  assert.equal(textScale([1.6]), 1.25);
+  assert.equal(textScale([3]), 1.25);
+});
+
+test('annotation type follows the least zoomed panel, and a rounding hair past CSS size is no zoom', () => {
+  assert.equal(textScale([1.25, 0.8]), 1);
+  assert.equal(textScale([1.2, 1.1]), 1.1);
+  assert.equal(textScale([1.001, 1.001, 1]), 1);
+});
+
 const panelSizes = (...args) => ({ ...sandbox.__composeGeometry.panelSizes(...args) });
 
 test('two frames of one shape share the height their width budget allows', () => {
