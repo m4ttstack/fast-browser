@@ -533,12 +533,24 @@ function reviewSets(cases) {
   }
 }
 
+// From the re-review of the default-refuse gate. FT: a faint value, 9 to 55 levels off its ground, past a row's
+// border, which a reading at full contrast does not see.
+function faintSets(cases) {
+  for (const dpr of [1, 2, 3]) for (const colour of ['#c8c8c8', '#dcdcdc', '#e4e4e4', '#e8e8e8', '#ececec']) for (const below of [4, 8]) for (const lh of [20, 28]) {
+    const body = (inner) => `<div style="position:absolute;left:0;top:0;width:100%;height:100%;background:#fff;color:${colour}"><div style="position:absolute;left:40px;top:40px;width:420px;height:${lh}px;border-bottom:1px solid #e5e7eb"></div><div style="position:absolute;left:40px;top:40px;width:190px;line-height:${lh}px">Requested by <span class=vv>${inner.replace('<br>', `<br><span style="display:inline-block;margin-top:${below}px"></span>`)}</span></div></div>`;
+    const add = (name, measure, shown) => cases.push({ set: 'FT', name: `${colour} below${below} lh${lh} ${name} ${dpr}x`, dpr, cell: [560, 300], rows: 4, masked: true, glyphs: true, measure: body(measure), shown: body(shown) });
+    add('box l1', `Samantha<br>${TG('Rivera-Okafor')}`, 'Samantha<br>Rivera-Okafor');
+    add('box l2', `${TG('Samantha')}<br>Rivera-Okafor`, 'Samantha<br>Rivera-Okafor');
+  }
+}
+
 export function fillAttackCases() {
   const cases = [];
   groundSets(cases);
   decorationSets(cases);
   listSets(cases);
   reviewSets(cases);
+  faintSets(cases);
   return cases;
 }
 
@@ -639,7 +651,88 @@ export function boardAttackScenes() {
   }
   reviewScenes(scenes);
   rereviewScenes(scenes);
+  gateReviewScenes(scenes);
   return scenes;
+}
+
+// Whole pages from the re-review of the default-refuse gate. WL, WL2: a fixed-width label before the value, which
+// wraps under it to the container's edge; the box on either line. FG: the value's second line a lead or more past a
+// row's border. SH, PR: a short or straight-stemmed second line just under the first, inside the walk's rect. FT: a
+// faint value past a row's border. TR, TR4: neighbouring bordered rows, two redactions, or one with the next row
+// marked context as the `rule` refusal asks (the recoveries must be written).
+function gateReviewScenes(scenes) {
+  const page = (body) => `<!doctype html><meta charset=utf-8><style>body{margin:0;font:14px Helvetica,Arial,sans-serif;background:#f6f7f9;color:#111827}</style>${body}`;
+  const card = (w, h, inner) => page(`<div id=frame style="position:absolute;left:40px;top:40px;width:${w}px;height:${h}px;background:#fff;border:1px solid #e5e7eb;border-radius:12px">${inner}</div>`);
+  const push = (set, name, dpr, html, box, marks = [], viewport = [680, 420]) => scenes.push({ set, name, dpr, viewport, html, value: '#v', box, marks });
+  const L1 = { sel: '#v', firstText: true }; const L2 = { sel: '#l2' }; const WHOLE = { sel: '#v' };
+  const status = (top) => `<div style="position:absolute;left:20px;top:${top}px;color:#6b7280">Status open</div>`;
+  const label = (W) => `<span style="display:inline-block;width:${W}px;color:#6b7280">Requested by</span>`;
+  for (const dpr of [1, 2, 3]) for (const W of [120, 160, 200, 240]) for (const l2 of ['Rivera-Okafor', 'Ng']) {
+    const html = card(520, 200, `<div style="position:absolute;left:20px;top:30px;width:400px;line-height:20px">${label(W)}<span id=v>Samantha<br><span id=l2>${l2}</span></span></div>${status(140)}`);
+    push('WL', `W${W} "${l2}" box l1 ${dpr}x`, dpr, html, L1);
+    push('WL', `W${W} "${l2}" box l2 ${dpr}x`, dpr, html, L2);
+  }
+  for (const dpr of [1, 2, 3]) for (const W of [160, 200, 240]) {
+    const html = card(520, 200, `<div style="position:absolute;left:20px;top:30px;width:${W + 92}px;line-height:20px">${label(W)}<span id=v>Samantha <span id=l2>Rivera-Okafor</span></span></div>${status(140)}`);
+    push('WL', `nat W${W} box l1 ${dpr}x`, dpr, html, L1);
+    push('WL', `nat W${W} box l2 ${dpr}x`, dpr, html, L2);
+    push('WL', `nat W${W} widen ${dpr}x`, dpr, html, WHOLE);
+  }
+  for (const dpr of [1, 2, 3]) for (const W of [240, 280, 320, 360]) {
+    const br = card(600, 200, `<div style="position:absolute;left:20px;top:30px;width:${W + 120}px;line-height:20px">${label(W)}<span id=v>Samantha<br><span id=l2>Rivera-Okafor</span></span></div>${status(140)}`);
+    push('WL2', `br W${W} box l1 ${dpr}x`, dpr, br, L1, [], [700, 420]);
+    push('WL2', `br W${W} box l2 ${dpr}x`, dpr, br, L2, [], [700, 420]);
+    const nat = card(600, 200, `<div style="position:absolute;left:20px;top:30px;width:${W + 92}px;line-height:20px">${label(W)}<span id=v>Samantha <span id=l2>Rivera-Okafor</span></span></div>${status(140)}`);
+    push('WL2', `nat W${W} box l1 ${dpr}x`, dpr, nat, L1, [], [700, 420]);
+    push('WL2', `nat W${W} box l2 ${dpr}x`, dpr, nat, L2, [], [700, 420]);
+  }
+  const lead = (shape, lh, top) => (shape === 'hang' ? `<div style="position:absolute;left:32px;top:${top}px;width:260px;line-height:${lh}px;padding-left:90px;text-indent:-90px">By ` : `<div style="position:absolute;left:32px;top:${top}px;width:190px;line-height:${lh}px">Requested by `);
+  for (const dpr of [1, 2, 3]) for (const shape of ['under', 'hang']) for (const below of [16, 20, 24, 28, 32]) {
+    const lh = 28;
+    const html = card(520, 220, `<div style="position:absolute;left:20px;top:20px;width:360px;height:${lh + 8}px;border-bottom:1px solid #e5e7eb;box-sizing:border-box"></div>${lead(shape, lh, 24)}<span id=v>Samantha<br><span id=l2 style="display:inline-block;margin-top:${below}px;text-indent:0">Rivera-Okafor</span></span></div><div style="position:absolute;left:32px;top:160px;color:#6b7280">Status open</div>`);
+    push('FG', `${shape} below${below} box l1 ${dpr}x`, dpr, html, L1);
+  }
+  for (const dpr of [1, 2, 3]) for (const shape of ['under', 'hang']) for (const lh of [40, 48, 56]) {
+    const html = card(520, 220, `<div style="position:absolute;left:20px;top:10px;width:360px;height:${lh + 2}px;border-bottom:1px solid #e5e7eb;box-sizing:border-box"></div>${lead(shape, lh, 10)}<span id=v>Samantha<br><span id=l2>Rivera-Okafor</span></span></div><div style="position:absolute;left:32px;top:170px;color:#6b7280">Status open</div>`);
+    push('FG', `${shape} lh${lh} box l1 ${dpr}x`, dpr, html, L1);
+  }
+  const SHORT = ['Jr', 'Li', 'Il', 'Jo', 'II', 'IV', 'K.', 'Ng'];
+  for (const dpr of [1, 2, 3]) for (const lh of [14, 16, 18, 20]) for (const short of SHORT) {
+    const hang = card(520, 200, `<div style="position:absolute;left:32px;top:24px;width:260px;line-height:${lh}px;padding-left:90px;text-indent:-90px">By <span id=v><u>Samantha</u><br><span id=l2 style="text-indent:0">${short}</span></span></div><div style="position:absolute;left:32px;top:120px;color:#6b7280">Status open</div>`);
+    push('SH', `hang "${short}" lh${lh} box l1 ${dpr}x`, dpr, hang, L1);
+    const edge = card(520, 200, `<div style="position:absolute;left:32px;top:24px;width:260px;line-height:${lh}px"><span style="display:inline-block;width:22px">By</span><span id=v><u>Samantha</u><br><span id=l2>${short}</span></span></div><div style="position:absolute;left:32px;top:120px;color:#6b7280">Status open</div>`);
+    push('SH', `edge "${short}" lh${lh} box l1 ${dpr}x`, dpr, edge, L1);
+  }
+  const bordered = (colour, l2) => `<div style="position:absolute;left:20px;top:20px;width:360px;height:36px;border-bottom:1px solid #e5e7eb;box-sizing:border-box"></div><div style="position:absolute;left:32px;top:24px;width:190px;line-height:28px${colour ? `;color:${colour}` : ''}">Requested by <span id=v>Samantha<br>${l2}</span></div><div style="position:absolute;left:32px;top:120px;color:#6b7280">Status open</div>`;
+  for (const dpr of [1, 2, 3]) for (const short of SHORT) for (const below of [4, 8]) {
+    push('SH', `border "${short}" below${below} box l1 ${dpr}x`, dpr, card(520, 200, bordered(null, `<span id=l2 style="display:inline-block;margin-top:${below}px">${short}</span>`)), L1);
+  }
+  for (const dpr of [1, 2, 3]) for (const lh of [14, 16, 18, 20]) for (const l2 of ['Rivera-Okafor', 'Okafor', 'II']) for (const deco of ['u', 'plain']) {
+    const first = deco === 'u' ? '<u>Samantha</u>' : 'Samantha';
+    const edge = card(600, 200, `<div style="position:absolute;left:32px;top:24px;width:260px;line-height:${lh}px"><span style="display:inline-block;width:22px">By</span><span id=v>${first}<br><span id=l2>${l2}</span></span></div><div style="position:absolute;left:32px;top:120px;color:#6b7280">Status open</div>`);
+    push('PR', `edge ${deco} "${l2}" lh${lh} box l1 ${dpr}x`, dpr, edge, L1, [], [700, 420]);
+    const hang = card(600, 200, `<div style="position:absolute;left:32px;top:24px;width:260px;line-height:${lh}px;padding-left:90px;text-indent:-90px">By <span id=v>${first}<br><span id=l2 style="text-indent:0">${l2}</span></span></div><div style="position:absolute;left:32px;top:120px;color:#6b7280">Status open</div>`);
+    push('PR', `hang ${deco} "${l2}" lh${lh} box l1 ${dpr}x`, dpr, hang, L1, [], [700, 420]);
+  }
+  for (const dpr of [1, 2, 3]) for (const colour of ['#c8c8c8', '#dcdcdc', '#e4e4e4', '#e8e8e8', '#ececec']) for (const below of [4, 8]) {
+    const html = card(520, 200, bordered(colour, `<span id=l2 style="display:inline-block;margin-top:${below}px">Rivera-Okafor</span>`));
+    push('FT', `${colour} below${below} box l1 ${dpr}x`, dpr, html, L1);
+    push('FT', `${colour} below${below} box l2 ${dpr}x`, dpr, html, L2);
+  }
+  for (const dpr of [1, 2]) for (const gap of [0, 4]) {
+    const row = (id, name, text) => `<div style="display:flex;height:36px;line-height:36px;border-bottom:1px solid #e5e7eb;margin-bottom:${gap}px"><div id=${id}label style="width:120px;color:#6b7280">${name}</div><div><span id=${id}>${text}</span></div></div>`;
+    const html = card(520, 220, `<div style="position:absolute;left:20px;top:20px;width:400px">${row('v', 'Name', 'Samantha Rivera-Okafor')}${row('e', 'Email', 'samantha.ro@tracker.example')}${row('s', 'Status', 'Open')}</div>`);
+    push('TR', `name+email gap${gap} ${dpr}x`, dpr, html, WHOLE, [{ kind: 'redact', sel: '#e' }]);
+    push('TR', `name+email+context gap${gap} ${dpr}x`, dpr, html, WHOLE, [{ kind: 'redact', sel: '#e' }, { kind: 'context', sel: '#e' }]);
+    push('TR', `name alone gap${gap} ${dpr}x`, dpr, html, WHOLE, []);
+  }
+  for (const dpr of [1, 2, 3]) for (const pad of [2, 4, 8, 12, 16]) {
+    const row = (id, name, text) => `<div id=${id}row style="display:flex;line-height:18px;padding:${pad}px 0;border-bottom:1px solid #e5e7eb"><div id=${id}label style="width:120px;color:#6b7280">${name}</div><div><span id=${id}>${text}</span></div></div>`;
+    const html = card(520, 240, `<div style="position:absolute;left:20px;top:20px;width:400px">${row('v', 'Name', 'Samantha Rivera-Okafor')}${row('e', 'Email', 'samantha.ro@tracker.example')}${row('s', 'Status', 'Open')}</div>`);
+    push('TR4', `pad${pad} name alone ${dpr}x`, dpr, html, WHOLE);
+    push('TR4', `pad${pad} context on email row ${dpr}x`, dpr, html, WHOLE, [{ kind: 'context', sel: '#erow' }]);
+    push('TR4', `pad${pad} context on email and name labels ${dpr}x`, dpr, html, WHOLE, [{ kind: 'context', sel: '#erow' }, { kind: 'context', sel: '#vlabel' }]);
+  }
 }
 
 // Whole pages from the re-review of the zero-bare round's first fixes. AR: the value's second line past a row's

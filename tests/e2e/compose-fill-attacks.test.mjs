@@ -66,9 +66,9 @@ test('an imported fill hides the value or refuses the board on every case of the
   assert.deepEqual(results.filter((r) => !r.holds).map((r) => `${r.set} ${r.name}`), [], 'no fill is smaller than the 12 px pad\'s');
 });
 
-const REVIEW = { NS: 576, NO: 192, LU: 576, BX: 624, SC: 216, TD: 504, RC: 72, HI: 192 };
+const REVIEW = { NS: 576, NO: 192, LU: 576, BX: 624, SC: 216, TD: 504, RC: 72, HI: 192, FT: 120 };
 
-test('an imported fill hides the value or refuses the board on every case of the border, slot and separator review sets', { skip }, async () => {
+test('an imported fill hides the value or refuses the board on every case of the border, slot, separator and faint review sets', { skip }, async () => {
   const results = await probe(Object.keys(REVIEW));
   assert.deepEqual(sizes(results), REVIEW, 'every case of every set ran');
   assert.deepEqual(bare(results), [], 'no written board shows a pixel of its value');
@@ -77,7 +77,7 @@ test('an imported fill hides the value or refuses the board on every case of the
   assert.deepEqual(results.filter((r) => r.set === 'RC' && r.refused).map((r) => r.name), [], 'every widened box is written');
 });
 
-const BOARDS = { run: 4, run3: 7, run6: 30, run7: 39, run8: 30, run9: 24, run10: 18, run11: 4, run12: 8, run13: 5, run14: 3, run15: 3, e1: 3, BX: 24, PG: 36, CX: 8, BR: 18, SL: 12, BK: 18, AR: 24, AW2: 42, AR2: 15 };
+const BOARDS = { run: 4, run3: 7, run6: 30, run7: 39, run8: 30, run9: 24, run10: 18, run11: 4, run12: 8, run13: 5, run14: 3, run15: 3, e1: 3, BX: 24, PG: 36, CX: 8, BR: 18, SL: 12, BK: 18, AR: 24, AW2: 42, AR2: 15, WL: 75, WL2: 48, FG: 48, SH: 240, PR: 144, FT: 60, TR: 12, TR4: 45 };
 
 test('a composed board hides the value or is refused on every imported attack page', { skip }, async () => {
   const { chromium } = await import(renderer.playwrightCore);
@@ -92,6 +92,8 @@ test('a composed board hides the value or is refused on every imported attack pa
   } finally { await browser.close(); }
   assert.deepEqual(sizes(results), BOARDS, 'every page of every set was composed');
   assert.deepEqual(bare(results), [], 'no written board shows a pixel of its value');
+  // The next row marked context, as a bordered row's `rule` refusal asks, is written in one retry.
+  assert.deepEqual(results.filter((r) => r.set === 'TR4' && r.name.includes('context') && r.refused).map((r) => `${r.name}: ${r.warnings[0]}`), [], 'every TR4 recovery is written');
 });
 
 const fuzz = (kind, seed, parts) => Promise.all(Array.from({ length: parts }, (_, part) => new Promise((resolve, reject) => {
