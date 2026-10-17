@@ -443,13 +443,20 @@ This is the one place you write coordinates.
    ink that may be the value's: where the fill could not cover it, compose
    refuses the board instead, and the message ends with what to do.
 
+   Within two line-heights of the value (the lines above and below it, and
+   along any line the fill covers), every line is covered, marked `context`,
+   or inside another redaction's box. Nothing else counts: not a border, a
+   column gap or a list's layout. So before you render, widen the redact box
+   over any line that is the value's, and mark every line near it that is not
+   the value as `context`, drawn over the whole line.
+
    | Rest of the message | Kind |
    |---|---|
    | `grew to cover ink beside it` | warning |
    | `covered a line beside it to that line's end, past its <side> edge` | warning |
    | `covered ink past a gap at its <side> edge` | warning |
-   | `stopped at a gap with more ink just past its <side> edge` | warning: that ink lies in another column, past another line, or past a rule by more than a line-height |
-   | `stopped at a rule with more ink just past its <side> edge` | warning: that ink is the rule's own chrome, another cell's past a divider, or less than a word |
+   | `stopped at a gap with more ink just past its <side> edge` | warning: that ink lies past another line, or further than two line-heights off |
+   | `stopped at a rule with more ink just past its <side> edge` | warning: that ink is the rule's own chrome, or less than a glyph |
    | `met another mark's box with ink still at its <side> edge` | warning; a refusal on the value's own line, or when the ink in that box lies under or over the value's columns |
    | `met a context mark's box over a line that continues the value, at [x, y, w, h] in the image` | refusal: the `context` mark sits on the value's own wrapped line |
    | `reached the frame with ink still at its <side> edge` | warning; a refusal on the value's own line |
@@ -457,7 +464,7 @@ This is the one place you write coordinates.
    | `stopped at a rule past its <side> edge with a line of text just past it, at [x, y, w, h] in the image` | refusal: a row's border with text a lead past it, under the value's columns or to either side, that may be the value's other line |
    | `left a line past its <side> edge uncovered, at [x, y, w, h] in the image, as another row of its list` | refusal: a row of an icon-led list that may hold a second value |
    | `met an empty slot at its <side> edge with text inside the slot's box, at [x, y, w, h] in the image` | refusal: the `empty` box was drawn over text |
-   | `left ink past its <side> edge uncovered, at [x, y, w, h] in the image, where the value may go on` | refusal: the next line above or below the value, in its column and within two line-heights, is bare with nothing to prove it apart |
+   | `left ink past its <side> edge uncovered, at [x, y, w, h] in the image, where the value may go on` | refusal: a line within the value's reach is bare and no `context` mark or other redaction covers it |
    | `met another mark's box over a line the value may go on to, past its <side> edge, at [x, y, w, h] in the image` | refusal: a lift, loupe or ghost box holds a line within the value's reach |
 
    A redact box the crop leaves out is a stray: `a redact mark on panel <n>
