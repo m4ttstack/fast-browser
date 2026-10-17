@@ -796,9 +796,12 @@ test('an imported fill hides capitals, digits, values wrapped onto several lines
   const wrapleft = results.filter((r) => r.set === 'wrapleft');
   assert.equal(wrapleft.length, 96);
   assert.deepEqual(wrapleft.filter((r) => r.refused || r.bare > 0).map((r) => r.name), [], 'every value wrapped to its container\'s left edge is written with both lines hidden');
+  // Right to left with a label before the value, the box on its second line, the label shares the first line's rows:
+  // no reason leaves it bare, so the board is refused naming it (a context mark on it recovers).
   const rtl = results.filter((r) => r.set === 'rtl');
   assert.equal(rtl.length, 12);
-  assert.deepEqual(rtl.filter((r) => r.refused || r.bare > 0).map((r) => r.name), [], 'every value wrapped to its container\'s right edge is written with both lines hidden');
+  assert.deepEqual(rtl.filter((r) => r.bare > 0 || (r.refused !== r.name.startsWith('label, wraps right, box on line 2'))).map((r) => r.name), [], 'every value wrapped to its container\'s right edge is hidden, written but for the label beside its first line');
+  assert.deepEqual([...new Set(rtl.filter((r) => r.refused).flatMap((r) => r.whys))], ['reach']);
   const gridRows = results.filter((r) => r.set === 'grid');
   assert.equal(gridRows.length, 24);
   assert.deepEqual(gridRows.filter((r) => r.bare > 0 && !r.refused).map((r) => r.name), [], 'a two-line label beside the value never leaves its second line bare');
