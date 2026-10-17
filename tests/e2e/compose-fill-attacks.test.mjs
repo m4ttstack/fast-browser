@@ -12,6 +12,9 @@ import { rendererForTests } from './helpers/renderer.mjs';
 
 const renderer = await rendererForTests();
 const skip = renderer ? false : 'skipped by FAST_BROWSER_SKIP_COMPOSE_E2E=1';
+// CI runs this file in shards (COMPOSE_ATTACK_SHARD); a test that names no shard runs in every one, never in none.
+const SHARD = process.env.COMPOSE_ATTACK_SHARD;
+const shard = (name, base = false) => base || (SHARD && SHARD !== name ? `runs in the ${name} shard` : false);
 const geometrySource = await readFile(new URL('../../lib/compose/page-geometry.js', import.meta.url), 'utf8');
 
 const sizes = (results) => results.reduce((n, r) => ({ ...n, [r.set]: (n[r.set] ?? 0) + 1 }), {});
@@ -37,7 +40,7 @@ const GROUND = {
   G3mixed: 24, Hpitch: 168, Hthree: 36, Hlabellh: 36, Hvaluelh: 48, Hcaps: 108,
 };
 
-test('an imported fill hides the value or refuses the board on every case of the white-ground attack sets', { skip }, async () => {
+test('an imported fill hides the value or refuses the board on every case of the white-ground attack sets', { skip: shard('sets', skip) }, async () => {
   const results = await probe(Object.keys(GROUND));
   assert.deepEqual(sizes(results), GROUND, 'every case of every set ran');
   assert.deepEqual(bare(results), [], 'no written board shows a pixel of its value');
@@ -50,7 +53,7 @@ const DECORATED = {
   F2startlink: 384, F3phrase: 192, F4border: 120,
 };
 
-test('an imported fill hides the value or refuses the board on every case of the underline, rule and border attack sets', { skip }, async () => {
+test('an imported fill hides the value or refuses the board on every case of the underline, rule and border attack sets', { skip: shard('sets', skip) }, async () => {
   const results = await probe(Object.keys(DECORATED));
   assert.deepEqual(sizes(results), DECORATED, 'every case of every set ran');
   assert.deepEqual(bare(results), [], 'no written board shows a pixel of its value');
@@ -59,7 +62,7 @@ test('an imported fill hides the value or refuses the board on every case of the
 
 const LISTS = { EMoji: 3360, H1hang: 90, E1blank: 180, W2real: 1800, W3flex: 945, L1far: 270 };
 
-test('an imported fill hides the value or refuses the board on every case of the list and slot attack sets', { skip }, async () => {
+test('an imported fill hides the value or refuses the board on every case of the list and slot attack sets', { skip: shard('lists', skip) }, async () => {
   const results = await probe(Object.keys(LISTS));
   assert.deepEqual(sizes(results), LISTS, 'every case of every set ran');
   assert.deepEqual(bare(results), [], 'no written board shows a pixel of its value');
@@ -68,7 +71,7 @@ test('an imported fill hides the value or refuses the board on every case of the
 
 const REVIEW = { NS: 576, NO: 192, LU: 576, BX: 624, SC: 216, TD: 504, RC: 72, HI: 192, FT: 120 };
 
-test('an imported fill hides the value or refuses the board on every case of the border, slot, separator and faint review sets', { skip }, async () => {
+test('an imported fill hides the value or refuses the board on every case of the border, slot, separator and faint review sets', { skip: shard('sets', skip) }, async () => {
   const results = await probe(Object.keys(REVIEW));
   assert.deepEqual(sizes(results), REVIEW, 'every case of every set ran');
   assert.deepEqual(bare(results), [], 'no written board shows a pixel of its value');
@@ -79,12 +82,12 @@ test('an imported fill hides the value or refuses the board on every case of the
 
 const BOARDS = { run: 4, run3: 7, run6: 30, run7: 39, run8: 30, run9: 24, run10: 18, run11: 4, run12: 8, run13: 5, run14: 3, run15: 3, e1: 3, BX: 24, PG: 36, CX: 8, BR: 18, SL: 12, BK: 18, AR: 24, AW2: 42, AR2: 15, WL: 75, WL2: 48, FG: 48, SH: 240, PR: 144, FT: 60, TR: 20, TR4: 45, HL: 48, HL3: 54, HL4: 36 };
 
-test('every imported attack page set keeps its pinned size', () => {
+test('every imported attack page set keeps its pinned size', { skip: shard('sets') }, () => {
   assert.deepEqual(sizes(boardAttackScenes()), BOARDS);
 });
 
 // The pages run in two halves, alternate pages each, so CI can give each half a runner of its own.
-const boardHalf = (half) => test(`a composed board hides the value or is refused on every imported attack page, ${half === 0 ? 'first' : 'second'} half`, { skip }, async () => {
+const boardHalf = (half) => test(`a composed board hides the value or is refused on every imported attack page, ${half === 0 ? 'first' : 'second'} half`, { skip: shard(`pages-${half + 1}`, skip) }, async () => {
   const { chromium } = await import(renderer.playwrightCore);
   const browser = await chromium.launch({ headless: true, executablePath: renderer.executablePath });
   const scenes = boardAttackScenes().filter((_s, i) => i % 2 === half);
@@ -112,13 +115,13 @@ const fuzz = (kind, seed, parts) => Promise.all(Array.from({ length: parts }, (_
   worker.once('error', reject);
 })));
 
-test('fuzz: an imported fill never shrinks below its pad\'s fill or the first fill, and never grows past its bounds', async () => {
+test('fuzz: an imported fill never shrinks below its pad\'s fill or the first fill, and never grows past its bounds', { skip: shard('fuzz') }, async () => {
   const runs = (await Promise.all([11, 7, 23, 99, 1234].map((seed) => fuzz('import', seed, 2)))).flat();
   assert.deepEqual(runs.flatMap((r) => r.failures), []);
   assert.equal(runs.reduce((n, r) => n + r.ran, 0), 40000);
 });
 
-test('fuzz: a live fill is still the first fill, at 1x, 1.5x and 2x', async () => {
+test('fuzz: a live fill is still the first fill, at 1x, 1.5x and 2x', { skip: shard('fuzz') }, async () => {
   const runs = await fuzz('live', 7, 1);
   assert.deepEqual(runs.flatMap((r) => r.failures), []);
   assert.equal(runs[0].ran, 6000);
