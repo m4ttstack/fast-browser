@@ -3300,7 +3300,7 @@ async function typeOf(boardSpec, capture) {
     const page = await browser.newPage({ viewport: { width: 2400, height: 1600 } });
     await page.setContent(html, { waitUntil: 'load' });
     const report = await page.evaluate(() => window.__composeLayout());
-    const sizes = await page.evaluate(() => Object.fromEntries(['title', 'state', 'ltitle', 'lnote', 'tag', 'pin', 'lnum'].map((cls) => {
+    const sizes = await page.evaluate(() => Object.fromEntries(['title', 'state', 'ltitle', 'lnote', 'tag', 'pin', 'lnum', 'empty'].map((cls) => {
       const node = document.querySelector(`.${cls}`);
       return [cls, node ? parseFloat(getComputedStyle(node).fontSize) : null];
     })));
@@ -3308,7 +3308,7 @@ async function typeOf(boardSpec, capture) {
   } finally { await browser.close(); }
 }
 // The page CSS sizes in page.mjs, kept apart so the check does not read the code it checks.
-const TYPE_CSS = { title: 15, state: 11, ltitle: 13, lnote: 12, tag: 10, pin: 11, lnum: 11 };
+const TYPE_CSS = { title: 15, state: 11, ltitle: 13, lnote: 12, tag: 10, pin: 11, lnum: 11, empty: 13 };
 const PIN_CSS_R = 9;
 
 test('a lone panel drawn past CSS size sets its annotation type larger by its zoom; at or under CSS size the type keeps its CSS size', { skip }, async () => {
@@ -3347,6 +3347,17 @@ test('zoomed annotation type keeps its hierarchy, wraps at a width grown with it
   assert.ok(widest(zoomed.report) > 240 && widest(zoomed.report) <= 240 * 1.25 + 0.5, `a label at 1.25x wraps within ${240 * 1.25} px, not ${widest(zoomed.report)}`);
   const lines = (report) => p0(report).labels.map((label) => label.rect[3]);
   assert.deepEqual(lines(zoomed.report).map((h, i) => Math.abs(h / lines(plain.report)[i] - 1.25) < 0.08), [true, true], `each label grows with its type: ${lines(zoomed.report)} against ${lines(plain.report)}`);
+});
+
+test("an empty slot's own words grow with the board's type, and still sit inside a slot that holds them", { skip }, async () => {
+  for (const [width, zoom] of [[480, 1.25], [900, 1]]) {
+    const slot = [40, 60, 300, 80];
+    const { report, sizes } = await typeOf(spec([{ empty: 'blank' }, { ghost: 'hold' }]), await syntheticCapture({ size: [width, 200], bars: [holdOf([width])], boxes: { blank: slot, hold: holdOf([width]) } }));
+    assertInvariants(report);
+    assert.equal(report.textScale, zoom);
+    assert.equal(p0(report).slots[0].text, 'inside');
+    assert.ok(Math.abs(sizes.empty - TYPE_CSS.empty * zoom) < 0.01, `the slot's words are ${sizes.empty} px at ${zoom}x`);
+  }
 });
 
 test('a pinned board with zoomed annotation type draws its pins and legend numbers at that size, clear of each other', { skip }, async () => {
