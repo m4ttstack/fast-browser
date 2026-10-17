@@ -729,6 +729,27 @@ function gateReviewScenes(scenes) {
     push('TR', `name alone, context on email row gap${gap} ${dpr}x`, dpr, html, WHOLE, [{ kind: 'context', sel: '#erow' }]);
     push('TR', `name+email, context on labels and status row gap${gap} ${dpr}x`, dpr, html, WHOLE, [{ kind: 'redact', sel: '#e' }, { kind: 'context', sel: '#vlabel' }, { kind: 'context', sel: '#elabel' }, { kind: 'context', sel: '#srow' }]);
   }
+  // HL, HL3, HL4: a tinted table row, the next one (HL, HL4 at tints of 12 to 30 levels) or the value's own (HL3).
+  // The next row's text is counted as the value's, so a written board must cover it; a context mark on that row is
+  // the driver's word (`word`), and that recovery must be written.
+  const tinted = (gap, border, tint, own) => {
+    const row = (id, name, text, extra = '') => `<div id=${id}row style="display:flex;height:36px;line-height:36px;${border ? 'border-bottom:1px solid #e5e7eb;' : ''}margin-bottom:${gap}px;${extra}"><div style="width:120px;color:#6b7280;padding-left:8px">${name}</div><div><span id=${id}>${text}</span></div></div>`;
+    return card(520, 220, `<div style="position:absolute;left:20px;top:20px;width:400px">${row('v', 'Name', 'Samantha Rivera-Okafor', own ? `background:${tint}` : '')}${row('e', 'Email', 'samantha.ro@tracker.example', own ? '' : `background:${tint}`)}${row('s', 'Status', 'Open')}</div>`);
+  };
+  const both = (set, name, dpr, html, marks = []) => scenes.push({ set, name, dpr, viewport: [700, 420], html, value: '#v,#e', box: WHOLE, marks, ...(marks.length ? { word: true } : {}) });
+  for (const dpr of [1, 2, 3]) for (const bg of ['#eff6ff', '#e0e7ff', '#dbeafe', '#fef3c7']) for (const gap of [0, 4]) {
+    both('HL', `next row ${bg} gap${gap} ${dpr}x`, dpr, tinted(gap, true, bg, false));
+    both('HL', `next row ${bg} gap${gap}, context on it ${dpr}x`, dpr, tinted(gap, true, bg, false), [{ kind: 'context', sel: '#erow' }]);
+  }
+  for (const dpr of [1, 2, 3]) for (const bg of ['#dbeafe', '#fef3c7', '#e0e7ff']) for (const gap of [0, 4]) {
+    both('HL3', `own row ${bg} gap${gap} ${dpr}x`, dpr, tinted(gap, true, bg, true));
+    both('HL3', `own row ${bg} gap${gap}, context on next ${dpr}x`, dpr, tinted(gap, true, bg, true), [{ kind: 'context', sel: '#erow' }]);
+    const wrap = card(520, 220, `<div style="position:absolute;left:20px;top:20px;width:400px"><div style="display:flex;line-height:20px;padding:8px 0;border-bottom:1px solid #e5e7eb;background:${bg}"><div style="width:120px;color:#6b7280;padding-left:8px">Name</div><div style="width:100px"><span id=v>Samantha<br><span id=l2>Rivera-Okafor</span></span></div></div><div style="display:flex;height:36px;line-height:36px;border-bottom:1px solid #e5e7eb;margin-bottom:${gap}px"><div style="width:120px;color:#6b7280;padding-left:8px">Email</div><div><span id=e>samantha.ro@tracker.example</span></div></div></div>`);
+    push('HL3', `wraps in own row ${bg} gap${gap}, box l1 ${dpr}x`, dpr, wrap, L1);
+  }
+  for (const dpr of [1, 2, 3]) for (const bg of ['#f3f4f6', '#f1f5f9', '#e5e7eb', '#eef2ff', '#dcfce7', '#fee2e2']) for (const border of [true, false]) {
+    both('HL4', `next row ${bg} ${border ? 'bordered' : 'no border'} ${dpr}x`, dpr, tinted(0, border, bg, false));
+  }
   for (const dpr of [1, 2, 3]) for (const pad of [2, 4, 8, 12, 16]) {
     const row = (id, name, text) => `<div id=${id}row style="display:flex;line-height:18px;padding:${pad}px 0;border-bottom:1px solid #e5e7eb"><div id=${id}label style="width:120px;color:#6b7280">${name}</div><div><span id=${id}>${text}</span></div></div>`;
     const html = card(520, 240, `<div style="position:absolute;left:20px;top:20px;width:400px">${row('v', 'Name', 'Samantha Rivera-Okafor')}${row('e', 'Email', 'samantha.ro@tracker.example')}${row('s', 'Status', 'Open')}</div>`);
