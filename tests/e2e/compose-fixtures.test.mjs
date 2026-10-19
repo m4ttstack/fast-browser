@@ -668,22 +668,23 @@ for (const file of (await readdir(specDir)).filter((f) => f.endsWith('.json'))) 
           }
         }
       }
-      if (fixture.expect?.emptyRedactionRecord) {
-        // An imported panel's redact mark that lands nowhere is still gated: the record stands, empty, and names the board.
+      // A board with no redact mark at all, or whose imported redact mark lands nowhere, has an empty record naming it.
+      const unredacted = fixture.panels.every((panel) => !(panel.marks ?? []).some((m) => 'redact' in m));
+      if (fixture.expect?.emptyRedactionRecord || (unredacted && fixture.expect?.crops === undefined)) {
         assert.deepEqual(report.redactions.crops, [], 'no crop for a mark that hides nothing');
         const body = JSON.parse(await readFile(report.redactions.record, 'utf8'));
-        assert.deepEqual(body.redactions, [], 'the record lists no redaction');
+        assert.deepEqual([body.redactions, body.confirmed], [[], false], 'the record lists no redaction and starts unconfirmed');
         assert.equal(body.boardSha256, createHash('sha256').update(board).digest('hex'), 'the record names the board it was rendered with');
-        assert.equal(layoutReport.warnings.filter((w) => w.includes('lies outside the board')).length, fixture.expect.strayMarks, 'the render says each stray mark hides nothing');
+        assert.equal(layoutReport.warnings.filter((w) => w.includes('lies outside the board')).length, fixture.expect?.strayMarks ?? 0, 'the render says each stray mark hides nothing');
         const options = { paths, rendererLocation: async () => renderer };
         const confirmed = await compose({ command: 'compose', confirm: specPath }, options);
-        assert.equal(confirmed.confirmed, 0, 'confirm has nothing to confirm');
-        assert.deepEqual(JSON.parse(await readFile(report.redactions.record, 'utf8')), body, 'and writes nothing');
-      } else if (fixture.expect?.crops === undefined) assert.equal(report.redactions, undefined, 'a board with no imported redaction has no record');
+        assert.equal(confirmed.confirmed, 0, 'confirm confirms no redaction');
+        assert.deepEqual(JSON.parse(await readFile(report.redactions.record, 'utf8')), { ...body, confirmed: true }, 'but confirms the record');
+      } else if (fixture.expect?.crops === undefined) assert.equal(report.redactions, undefined, 'a board whose only redactions are live has no record');
       else {
         assert.equal(report.redactions.crops.length, fixture.expect.crops, 'one crop per drawn redaction');
         const body = JSON.parse(await readFile(report.redactions.record, 'utf8'));
-        assert.ok(body.redactions.every((r) => r.confirmed === false), 'a fresh render is unconfirmed');
+        assert.ok(body.confirmed === false && body.redactions.every((r) => r.confirmed === false), 'a fresh render is unconfirmed');
         for (const [i, file] of report.redactions.crops.entries()) {
           const bytes = await readFile(file);
           const [, , w, h] = layoutReport.crops[i].rect;
@@ -719,7 +720,7 @@ for (const file of (await readdir(specDir)).filter((f) => f.endsWith('.json'))) 
         assert.equal((await compose({ command: 'compose', confirm: specPath }, options)).confirmed, fixture.expect.crops);
         await compose({ command: 'compose', spec: specPath }, options);
         const again = JSON.parse(await readFile(report.redactions.record, 'utf8'));
-        assert.ok(again.redactions.every((r) => r.confirmed === false), 're-rendering resets the confirmation');
+        assert.ok(again.confirmed === false && again.redactions.every((r) => r.confirmed === false), 're-rendering resets the confirmation');
       }
       const golden = path.join(goldenDir, `${path.basename(file, '.json')}.png`);
       if (process.env.UPDATE_GOLDENS === '1') {

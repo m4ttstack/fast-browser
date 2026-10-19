@@ -62,7 +62,7 @@ test('render resolves the capture beside the spec, confines out, and reports war
       paths,
       rendererLocation: async () => ({ executablePath: '/x', playwrightCore: '/y' }),
       renderBoard: async (args) => { rendered = args; await writeFile(args.outPath, PNG);
-        return { report: { warnings: ['a lift was clamped at the frame edge'] }, pixels: { width: 2, height: 2 } }; },
+        return { report: { warnings: ['a lift was clamped at the frame edge'] }, pixels: { width: 2, height: 2 }, board: PNG }; },
     });
     assert.equal(rendered.outPath, path.join(paths.screenshotsDir, 'r-c-after.png'));
     assert.equal(report.out, rendered.outPath);
