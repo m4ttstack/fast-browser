@@ -12,6 +12,7 @@ import { assertInvariants, assertPanel, assertPanelSizes, inside, intersects, re
 import { countOffColor } from './helpers/png-diff.mjs';
 import { readPixels } from './helpers/png-pixels.mjs';
 import { rendererForTests } from './helpers/renderer.mjs';
+import { screenshot } from './helpers/screenshot.mjs';
 import { assertSameLayout } from './helpers/same-layout.mjs';
 
 const renderer = await rendererForTests();
@@ -33,7 +34,7 @@ async function syntheticCapture({ dark = false, size = [600, 300], bars, boxes, 
       `<div style="position:absolute;left:${x}px;top:${y}px;width:${w}px;height:${h}px;background:${fg}"></div>`).join('')}${tints.map(([x, y, w, h, colour]) =>
       `<div style="position:absolute;left:${x}px;top:${y}px;width:${w}px;height:${h}px;background:${colour}"></div>`).join('')}</body>`);
     const named = boxes ?? { a: list[0], b: list[1], edge: list[2] };
-    return { png: await page.screenshot({ scale: 'device' }), size: size.map((n) => n * scale), frame: [0, 0, size[0] * scale, size[1] * scale], dark, scale,
+    return { png: await screenshot(page, { scale: 'device' }), size: size.map((n) => n * scale), frame: [0, 0, size[0] * scale, size[1] * scale], dark, scale,
       boxes: Object.fromEntries(Object.entries(named).map(([key, box]) => [key, box.map((n) => n * scale)])) };
   } finally { await browser.close(); }
 }
@@ -1615,7 +1616,7 @@ async function roundCardCapture(scale, extra = '') {
     const [card, build, tests] = await page.evaluate(() => ['card', 'build', 'tests'].map((id) => { const r = document.getElementById(id).getBoundingClientRect(); return [r.x, r.y, r.width, r.height]; }));
     const frame = [card[0] - 12, card[1] - 12, card[2] + 24, card[3] + 24];
     const boxes = Object.fromEntries(Object.entries({ build, tests }).map(([key, box]) => [key, box.map((n) => n * scale)]));
-    return { card, capture: { png: await page.screenshot({ scale: 'device' }), size: [600 * scale, 300 * scale], frame: frame.map((n) => n * scale), dark: false, scale, boxes } };
+    return { card, capture: { png: await screenshot(page, { scale: 'device' }), size: [600 * scale, 300 * scale], frame: frame.map((n) => n * scale), dark: false, scale, boxes } };
   } finally { await browser.close(); }
 }
 

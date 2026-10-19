@@ -16,6 +16,7 @@ import { countOffColor, diffPngs } from './helpers/png-diff.mjs';
 import { fillProbeHardCases, runFillProbes } from './helpers/fill-probes.mjs';
 import { readPixels } from './helpers/png-pixels.mjs';
 import { rendererForTests } from './helpers/renderer.mjs';
+import { screenshot } from './helpers/screenshot.mjs';
 
 const renderer = await rendererForTests();
 const skip = renderer ? false : 'skipped by FAST_BROWSER_SKIP_COMPOSE_E2E=1';
@@ -95,7 +96,7 @@ async function captureImport({ browser, input, out, home, paths }) {
   const page = await browser.newPage({ viewport: { width: input.width ?? 1000, height: 700 }, deviceScaleFactor: input.dpr });
   await page.goto(pathToFileURL(path.resolve(`tests/fixtures/evidence/pages/${input.page}.html`)).href);
   const shot = path.join(home, `${out}.${input.format}`);
-  await page.screenshot({ path: shot, type: input.format, quality: input.format === 'jpeg' ? 92 : undefined });
+  await screenshot(page, { path: shot, type: input.format, quality: input.format === 'jpeg' ? 92 : undefined });
   await page.close();
   const { sidecar } = await compose({ command: 'compose', import: shot, out, origin: 'https://tracker.example/issues/1' }, { paths, rendererLocation: async () => renderer });
   return { captureReturn: null, sidecar };

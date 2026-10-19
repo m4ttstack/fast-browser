@@ -16,6 +16,7 @@ import { servePages, startCaptureTool } from './helpers/capture-tool.mjs';
 import { writeSidecar } from './helpers/capture-sidecar.mjs';
 import { readPixels } from './helpers/png-pixels.mjs';
 import { rendererForTests } from './helpers/renderer.mjs';
+import { screenshot } from './helpers/screenshot.mjs';
 import { assertSameLayout, near } from './helpers/same-layout.mjs';
 import { comparePngs } from './helpers/sharpness.mjs';
 
@@ -172,7 +173,7 @@ test('the tool: a 2x capture matches a native DPR 2 render, and an upscaled 1x d
       const page = await browser.newPage({ viewport: { width: 1000, height: 700 }, deviceScaleFactor: 2 });
       await page.goto(pages.url('nested-cards'));
       await page.evaluate(([x, y]) => scrollTo(x, y), scroll);
-      reference = await page.screenshot({ scale: 'device' });
+      reference = await screenshot(page, { scale: 'device' });
     } finally { await browser.close(); }
     const verdict = await comparePngs({ tool: await readFile(result.png), reference, oneX: await readFile(path.join(tool.outputDir, 'one.png')), renderer });
     assert.equal(verdict.sameSize, true);
@@ -251,7 +252,7 @@ async function boardReport({ file, deviceScaleFactor }) {
           const page = await browser.newPage({ viewport: { width: 1000, height: 700 }, deviceScaleFactor: input.import.dpr });
           await page.goto(pageUrl(input.import.page));
           const shot = path.join(home, `${stem}.c${i + 1}.${input.import.format}`);
-          await page.screenshot({ path: shot, type: input.import.format, quality: input.import.format === 'jpeg' ? 92 : undefined });
+          await screenshot(page, { path: shot, type: input.import.format, quality: input.import.format === 'jpeg' ? 92 : undefined });
           await page.close();
           const { sidecar } = await compose({ command: 'compose', import: shot, out: `${stem}.c${i + 1}`, origin: 'https://tracker.example/issues/1' }, { paths, rendererLocation: async () => renderer });
           sidecars.push(sidecar);
@@ -264,7 +265,7 @@ async function boardReport({ file, deviceScaleFactor }) {
         assert.equal(captureReturn.failedStep, undefined);
         if (scale === 2) {
           // The script leaves the page where it measured it; the same view at device pixels is the 2x twin.
-          await page.screenshot({ path: captureReturn.png, scale: 'device' });
+          await screenshot(page, { path: captureReturn.png, scale: 'device' });
           captureReturn.scale = 2;
         }
         await page.close();
@@ -350,7 +351,7 @@ async function barGrowth(scale) {
     try {
       const page = await browser.newPage({ viewport: { width: 600, height: 300 }, deviceScaleFactor: scale });
       await page.setContent('<body style="margin:0;background:#fff"><div style="position:absolute;left:60px;top:40px;width:160px;height:20px;background:#334155"></div></body>');
-      await page.screenshot({ path: png });
+      await screenshot(page, { path: png });
     } finally { await browser.close(); }
     const { sidecar } = await writeSidecar({ png, frame: [0, 0, 600, 300], boxes: { a: [40, 30, 100, 40] }, scale });
     const specPath = path.join(paths.screenshotsDir, 'bar.spec.json');

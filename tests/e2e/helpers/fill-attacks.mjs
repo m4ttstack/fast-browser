@@ -11,6 +11,7 @@ import path from 'node:path';
 import { compose } from '../../../lib/commands/compose.mjs';
 import { renderBoard } from '../../../lib/compose/engine.mjs';
 import { resolvePaths } from '../../../lib/core/paths.mjs';
+import { screenshot } from './screenshot.mjs';
 
 const T = (t) => `<span style="color:transparent;text-decoration-color:transparent;border-color:transparent">${t}</span>`;
 const TG = (t) => `<span style="color:transparent">${t}</span>`;
@@ -876,10 +877,10 @@ export async function runBoardScene({ browser, renderer, scene }) {
       box = boxFor(at, scene.box, scene.dpr);
       frame = (await rectOf('#frame')).map((v, i) => Math.round(v * scene.dpr) + (i < 2 ? -4 : 8));
       marks = await Promise.all((scene.marks ?? []).map(async (m) => ({ ...m, box: (await rectOf(m.sel)).map((v) => Math.round(v * scene.dpr)) })));
-      shown = await page.screenshot({ type: 'png' });
+      shown = await screenshot(page, { type: 'png' });
       const glyphs = scene.value.split(',').map((s) => `${s},${s} *`).join(',');
       await page.addStyleTag({ content: `${glyphs}{color:transparent!important${scene.glyphs ? ';text-decoration-color:#111827!important' : ''}}` });
-      hidden = await page.screenshot({ type: 'png' });
+      hidden = await screenshot(page, { type: 'png' });
     } finally { await page.close(); }
     const shot = path.join(home, 'scene.png');
     await writeFile(shot, shown);
