@@ -1,3 +1,5 @@
+import { screenshot } from './screenshot.mjs';
+
 // The real-glyph probes of an imported redaction fill. Each case draws a value in Chromium twice: once to measure
 // the redact box (the tight ink box of the glyphs, or of part of them), once as the image the box is drawn on, with
 // the decoration, the second line or the trailing word the box leaves out. A case exposes the pixels more than 8 off
@@ -221,7 +223,7 @@ export async function runFillProbes({ browser, geometrySource, cases = fillProbe
         const shots = [];
         for (const [part, hide] of [['measure', null], ['shown', null], ...(masked ? [['shown', batch.map((c) => (c.glyphs ? 'glyphs' : 'hide'))]] : [])]) {
           await page.setContent(sheet(cell, batch.map((c) => c[part]), hide));
-          shots.push((await page.screenshot({ type: 'png' })).toString('base64'));
+          shots.push((await screenshot(page, { type: 'png' })).toString('base64'));
         }
         const found = await decoder.evaluate(async ({ shots, adjusts, places, blanksOf, dpr, cell, columns }) => {
           const decode = async (b64) => {
