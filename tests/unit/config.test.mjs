@@ -171,18 +171,30 @@ test('loads and validates a saved config', async (t) => {
   assert.deepEqual(await loadConfig(paths), config);
 });
 
-test('fails closed when the config file is missing', async (t) => {
+test('a missing config file says setup has not run and keeps its ENOENT code', async (t) => {
   const paths = await temporaryPaths(t);
 
-  await assert.rejects(() => loadConfig(paths), ConfigError);
+  await assert.rejects(() => loadConfig(paths), (error) => {
+    assert.ok(error instanceof ConfigError);
+    assert.equal(error.code, 'ENOENT');
+    assert.match(error.message, /not set up yet/);
+    assert.match(error.message, /fast-browser setup/);
+    assert.ok(!error.message.includes(paths.configFile));
+    return true;
+  });
 });
 
-test('fails closed when the config file is malformed', async (t) => {
+test('a malformed config file keeps its own read error, not the setup hint', async (t) => {
   const paths = await temporaryPaths(t);
   await ensurePrivateDirectory(paths.dataDir);
   await writeFile(paths.configFile, '{not-json}\n', { mode: 0o600 });
 
-  await assert.rejects(() => loadConfig(paths), ConfigError);
+  await assert.rejects(() => loadConfig(paths), (error) => {
+    assert.ok(error instanceof ConfigError);
+    assert.match(error.message, /^unable to read config: /);
+    assert.doesNotMatch(error.message, /fast-browser setup/);
+    return true;
+  });
 });
 
 test('annotation palette defaults to unset so the first use must choose', () => {
