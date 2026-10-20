@@ -5,7 +5,7 @@ import path from 'node:path';
 import test from 'node:test';
 
 import { main } from '../../lib/cli/main.mjs';
-import { ConfigError, loadConfig } from '../../lib/core/config.mjs';
+import { ConfigError } from '../../lib/core/config.mjs';
 import { resolvePaths } from '../../lib/core/paths.mjs';
 
 test('doctor shows unselected checks as skipped without claiming they passed', async () => {
@@ -73,7 +73,7 @@ test('configure --json on a machine without setup names setup and keeps the erro
 
   const exitCode = await main({ command: 'configure', json: true }, {
     write: (text) => writes.push(text),
-    commands: { configure: async () => loadConfig(paths) },
+    paths,
   });
 
   const payload = JSON.parse(writes[0]);
