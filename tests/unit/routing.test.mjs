@@ -618,6 +618,47 @@ test('desired destination rejects an externally inserted routing block before mu
   assert.equal(await readFile(recordedAgentsPath, 'utf8'), externalBytes);
 });
 
+test('full profile refuses an unmanaged [mcp_servers.fast_browser] table instead of duplicating it', async (t) => {
+  const paths = await temporaryPaths(t);
+  const configFile = path.join(paths.homeDir, '.codex', 'config.toml');
+  const external = [
+    '[mcp_servers.fast_browser]',
+    'command = "node"',
+    'args = [ "/Applications/Example.app/Contents/Helpers/fast-browser/bin/fast-browser-mcp.mjs" ]',
+    '',
+  ].join('\n');
+  await mkdir(path.dirname(configFile), { recursive: true });
+  await writeFile(configFile, external);
+
+  await assert.rejects(
+    prepareRoutingTransition({ profile: 'full', paths }),
+    /config\.toml already defines \[mcp_servers\.fast_browser\] outside Fast Browser's managed block/,
+  );
+  assert.equal(await readFile(configFile, 'utf8'), external);
+});
+
+test('an unmanaged [mcp_servers.fast_browser] subtable or quoted key also refuses', async (t) => {
+  for (const header of ['[mcp_servers.fast_browser.env]', '[ mcp_servers."fast_browser" ]']) {
+    const paths = await temporaryPaths(t);
+    const configFile = path.join(paths.homeDir, '.codex', 'config.toml');
+    await mkdir(path.dirname(configFile), { recursive: true });
+    await writeFile(configFile, `${header}\nX = "1"\n`);
+    await assert.rejects(
+      prepareRoutingTransition({ profile: 'full', paths }),
+      /outside Fast Browser's managed block/,
+      header,
+    );
+  }
+});
+
+test('safe profile leaves an unmanaged [mcp_servers.fast_browser] table alone', async (t) => {
+  const paths = await temporaryPaths(t);
+  const configFile = path.join(paths.homeDir, '.codex', 'config.toml');
+  await mkdir(path.dirname(configFile), { recursive: true });
+  await writeFile(configFile, '[mcp_servers.fast_browser]\ncommand = "node"\n');
+  await prepareRoutingTransition({ profile: 'safe', paths });
+});
+
 test('unrecorded policy block conflicts even when its bytes match generated policy', async (t) => {
   const paths = await temporaryPaths(t);
   const configFile = path.join(paths.homeDir, '.codex', 'config.toml');
