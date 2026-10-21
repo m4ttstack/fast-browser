@@ -470,6 +470,18 @@ test('the codex template matches the Claude agent on flow-first, site-affordance
   }
 });
 
+test('the skill and both drivers treat a Saved login line as the lookup answer', async () => {
+  for (const file of [
+    'skills/fast-browsing/SKILL.md',
+    'agents/browser-driver.md',
+    'templates/codex/browser_driver.toml',
+  ]) {
+    const text = await readFile(path.join(pluginRoot, file), 'utf8');
+    assert.match(text, /Saved login for <origin>/, file);
+    assert.match(text, /skip\s+`rt logins list --json`/, file);
+  }
+});
+
 // `flows find` writes `<REQUIRED: ...>` placeholders into the invocation's
 // arg values and the runner types whatever string it gets, so a driver that
 // replays the invocation unedited types the placeholder on the real site.

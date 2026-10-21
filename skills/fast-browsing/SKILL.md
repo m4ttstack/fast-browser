@@ -207,7 +207,7 @@ digraph fast_browsing {
     "Login screens this task = 2?" -> "Saved login for this origin?" [label="no"];
     "Saved login for this origin?" -> "Secrets file and operator-named secrets for this site?" [label="no: no-saved-login; rt missing, or the origin is not listed"];
     "Saved login for this origin?" -> "Page shows 2FA, a captcha or an account chooser?" [label="yes"];
-    "Saved login for this origin?" -> "STOP: never type a credential yourself; only devlogin: names" [label="tempted to type a value, or a name rt logins list did not print"];
+    "Saved login for this origin?" -> "STOP: never type a credential yourself; only devlogin: names" [label="tempted to type a value, or a name neither rt logins list nor a Saved login line gave"];
     "STOP: never type a credential yourself; only devlogin: names" -> "Ask the human to log in in Chrome";
     "Page shows 2FA, a captcha or an account chooser?" -> "Ask the human to log in in Chrome" [label="yes: needs-human"];
     "Page shows 2FA, a captcha or an account chooser?" -> "browser_fill_form {fields: devlogin: names for the fields shown}" [label="no"];
@@ -512,6 +512,12 @@ then resume batching the rest.
 A page is a login screen, on every `a login screen` edge, when it shows a
 visible password field, or a visible email field on an origin
 `rt logins list --json` lists (the identifier-first case).
+
+When the login page's tool result carries a line `Saved login for <origin>:
+fill with <email name> / <password name>` and `<origin>` is exactly the login
+page's origin, that line is this lookup's answer: it is yes, its two names are
+the ones to use, and you skip `rt logins list --json`. With no such line, run
+the lookup.
 
 Run `rt logins list --json` and look for an entry whose `origin` is exactly the
 login page's origin. Yes only on an exact match. A missing `rt`, a command
