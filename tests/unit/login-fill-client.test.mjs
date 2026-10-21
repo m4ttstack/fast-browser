@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import test from 'node:test';
 
-import { LOGIN_FILL_MAX_RESPONSE_BYTES, requestLoginFill, rtPaths } from '../../lib/rt/login-fill-client.mjs';
+import { LOGIN_FILL_MAX_RESPONSE_BYTES, requestLoginFill, requestSavedLogin, rtPaths } from '../../lib/rt/login-fill-client.mjs';
 
 const ORIGIN = 'https://login.example.com';
 const NAME = 'devlogin:login.example.com:password';
@@ -122,4 +122,78 @@ test('RT_DAEMON_SOCK overrides the socket path', () => {
   const { socketPath, tokenFile } = rtPaths({ homeDir: '/h', env: { RT_DAEMON_SOCK: '/tmp/x.sock' } });
   assert.equal(socketPath, '/tmp/x.sock');
   assert.equal(tokenFile, '/h/.mattstack/rt/api-token');
+});
+
+const EMAIL_NAME = 'devlogin:login.example.com:email';
+const has = (homeDir, extra = {}) => requestSavedLogin({ origin: ORIGIN, homeDir, env: {}, pid: 4242, ...extra });
+const named = { ok: true, data: { origin: ORIGIN, fields: { email: EMAIL_NAME, password: NAME } } };
+
+test('requestSavedLogin posts token, client, pid and origin to /logins:has', async (t) => {
+  const homeDir = await fakeHome(t);
+  const seen = await fakeDaemon(t, homeDir, (req, res) => reply(res, named));
+  await has(homeDir);
+  assert.equal(seen[0].method, 'POST');
+  assert.equal(seen[0].url, '/logins:has');
+  assert.deepEqual(seen[0].body, { token: 'tok-1', client: 'fast-browser', pid: 4242, origin: ORIGIN });
+});
+
+test('requestSavedLogin returns fields when the daemon names a login', async (t) => {
+  const homeDir = await fakeHome(t);
+  await fakeDaemon(t, homeDir, (req, res) => reply(res, named));
+  assert.deepEqual(await has(homeDir), { fields: { email: EMAIL_NAME, password: NAME } });
+});
+
+test('requestSavedLogin returns none when the daemon says none', async (t) => {
+  const homeDir = await fakeHome(t);
+  await fakeDaemon(t, homeDir, (req, res) => reply(res, { ok: true, data: { none: true } }));
+  assert.deepEqual(await has(homeDir), { none: true });
+});
+
+test('requestSavedLogin: a field name that is not devlogin: is unavailable', async (t) => {
+  const homeDir = await fakeHome(t);
+  await fakeDaemon(t, homeDir, (req, res) => reply(res, {
+    ok: true, data: { origin: ORIGIN, fields: { email: 'x', password: NAME } },
+  }));
+  assert.deepEqual(await has(homeDir), { refused: 'unavailable' });
+});
+
+test('requestSavedLogin: missing token file is unavailable', async (t) => {
+  assert.deepEqual(await has(await fakeHome(t, { token: null })), { refused: 'unavailable' });
+});
+
+test('requestSavedLogin: socket error is unavailable', async (t) => {
+  assert.deepEqual(await has(await fakeHome(t)), { refused: 'unavailable' });
+});
+
+test('requestSavedLogin: a daemon that never answers is unavailable within the timeout', async (t) => {
+  const homeDir = await fakeHome(t);
+  await fakeDaemon(t, homeDir, () => {});
+  const started = Date.now();
+  assert.deepEqual(await has(homeDir, { timeoutMs: 200 }), { refused: 'unavailable' });
+  assert.ok(Date.now() - started < 2000);
+});
+
+test('requestSavedLogin: ok:false is unavailable', async (t) => {
+  const homeDir = await fakeHome(t);
+  await fakeDaemon(t, homeDir, (req, res) => reply(res, { ok: false, error: 'unknown command' }));
+  assert.deepEqual(await has(homeDir), { refused: 'unavailable' });
+});
+
+test('requestSavedLogin: unparseable body is unavailable', async (t) => {
+  const homeDir = await fakeHome(t);
+  await fakeDaemon(t, homeDir, (req, res) => reply(res, 'not json'));
+  assert.deepEqual(await has(homeDir), { refused: 'unavailable' });
+});
+
+test('requestSavedLogin: oversize body is unavailable', async (t) => {
+  const homeDir = await fakeHome(t);
+  await fakeDaemon(t, homeDir, (req, res) => {
+    res.on('error', () => {});
+    res.setHeader('content-type', 'application/json');
+    res.write(`{"ok":true,"data":{"origin":"${ORIGIN}","fields":{"email":"${EMAIL_NAME}","password":"${NAME}"},"pad":"`);
+    const piece = 'x'.repeat(16 * 1024);
+    for (let sent = 0; sent <= LOGIN_FILL_MAX_RESPONSE_BYTES; sent += piece.length) res.write(piece);
+    res.end('"}}');
+  });
+  assert.deepEqual(await has(homeDir), { refused: 'unavailable' });
 });
