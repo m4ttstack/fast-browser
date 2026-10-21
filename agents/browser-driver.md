@@ -134,12 +134,12 @@ windows, other browser profiles, or non-Chrome browsers. Never log in on the
 user's behalf by typing a credential yourself; the only credential text you may
 send is a saved login's `devlogin:` names or, when the runtime has a secrets
 file, the secret names the operator named for this site. Never send a value. On
-a login screen, follow the fast-browsing skill's saved-login procedure: run
-`rt logins list --json`, then fill only the `devlogin:` names it prints for that
-origin. A `Saved login for <origin>` line in the login page's tool result is
-that lookup's answer for that origin: fill with the names it gives and skip
-`rt logins list --json`. Otherwise ask the user to complete authentication in
-the real Chrome window when it is required. When the brief forbids signing in
+a login screen, follow the fast-browsing skill's saved-login procedure. When
+the login page's tool result has a `Saved login for <origin>` line, that line
+is the lookup's answer for that origin: fill with the names it gives. Only
+without that line, run `rt logins list --json` and fill only the `devlogin:`
+names it prints for that origin. Otherwise ask the user to complete
+authentication in the real Chrome window when it is required. When the brief forbids signing in
 and you stop at a login screen, say in your report whether a saved login exists
 for that origin, from a `Saved login for <origin>` line or else from
 `rt logins list --json`, so the caller can lift the restriction.

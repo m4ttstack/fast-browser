@@ -478,7 +478,18 @@ test('the skill and both drivers treat a Saved login line as the lookup answer',
   ]) {
     const text = await readFile(path.join(pluginRoot, file), 'utf8');
     assert.match(text, /Saved login for <origin>/, file);
-    assert.match(text, /skip\s+`rt logins list --json`/, file);
+    assert.match(text, /skip\s+`rt logins list --json`|Only\s+without\s+that\s+line,\s+run\s+`rt logins list --json`/, file);
+  }
+});
+
+test('both drivers check the Saved login line before running rt logins list', async () => {
+  for (const file of ['agents/browser-driver.md', 'templates/codex/browser_driver.toml']) {
+    const text = await readFile(path.join(pluginRoot, file), 'utf8');
+    const procedure = text.slice(text.indexOf('saved-login procedure'));
+    assert.ok(
+      procedure.indexOf('Saved login for <origin>') < procedure.indexOf('rt logins list --json'),
+      file,
+    );
   }
 });
 
