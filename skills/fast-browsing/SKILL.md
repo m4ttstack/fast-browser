@@ -510,8 +510,9 @@ then resume batching the rest.
 ### Saved login for this origin?
 
 A page is a login screen, on every `a login screen` edge, when it shows a
-visible password field, or a visible email field on an origin
-`rt logins list --json` lists (the identifier-first case).
+visible password field, or a visible email field on an origin that
+`rt logins list --json` lists or a `Saved login for <origin>` line names (the
+identifier-first case).
 
 When the login page's tool result carries a line `Saved login for <origin>:
 fill with <email name> / <password name>` and `<origin>` is exactly the login
@@ -966,7 +967,7 @@ Chrome.
 | Known text or region | Read it narrowly |
 | Need state from an already-used observation | Re-observe narrowly; never scroll back to the stale copy |
 | Same step failed twice | Single-step recovery for that step |
-| Login screen, origin listed by `rt logins list --json` | Fill its `devlogin:` names, submit, check the signed-in marker; hand back the outcome word otherwise |
+| Login screen, origin listed by `rt logins list --json` or a `Saved login for` line | Fill its `devlogin:` names, submit, check the signed-in marker; hand back the outcome word otherwise |
 | Login screen, secrets file and operator-named secrets | Log in by secret NAME, then check the signed-in marker |
 | Login screen, anything else | Ask the human to sign in in Chrome |
 | Just solved a repeatable journey with discrete calls | `browser_close`, `flows compile`, offer the flow |

@@ -140,8 +140,9 @@ origin. A `Saved login for <origin>` line in the login page's tool result is
 that lookup's answer for that origin: fill with the names it gives and skip
 `rt logins list --json`. Otherwise ask the user to complete authentication in
 the real Chrome window when it is required. When the brief forbids signing in
-and you stop at a login screen, still run `rt logins list --json` and say in your report whether
-a saved login exists for that origin, so the caller can lift the restriction.
+and you stop at a login screen, say in your report whether a saved login exists
+for that origin, from a `Saved login for <origin>` line or else from
+`rt logins list --json`, so the caller can lift the restriction.
 
 Return the requested distilled result in a form the caller can check without
 the page, because the page state dies with this context and an undetectably
