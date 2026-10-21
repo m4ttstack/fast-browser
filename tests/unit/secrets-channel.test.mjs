@@ -214,20 +214,34 @@ test('a fetch that never settles frees the origin after the deadline', async () 
 
 test('an answer that arrives after the deadline is not cached', async () => {
   const timers = [];
-  let release;
-  let calls = 0;
-  const lookup = lookupOver(() => {
-    calls += 1;
-    return new Promise((resolve) => { release = resolve; });
-  }, { setTimer: (fn) => { timers.push(fn); return {}; }, clearTimer: () => {} });
+  const releases = [];
+  const lookup = lookupOver(() => new Promise((resolve) => { releases.push(resolve); }), {
+    setTimer: (fn) => { timers.push(fn); return {}; },
+    clearTimer: () => {},
+  });
   const stuck = lookup(ORIGIN);
   timers[0]();
-  await stuck;
-  release({ fields: FIELDS });
+  assert.deepEqual(await stuck, { none: true });
+  releases[0]({ fields: FIELDS });
+  await new Promise((r) => setImmediate(r));
+
   const again = lookup(ORIGIN);
-  assert.equal(calls, 2);
-  release({ none: true });
+  assert.equal(releases.length, 2, 'the stale answer must not satisfy a later lookup');
+  releases[1]({ none: true });
   assert.deepEqual(await again, { none: true });
+});
+
+test('a stale cache entry is evicted when a read finds it expired', async () => {
+  let clock = 0;
+  const answers = [{ fields: FIELDS }, { refused: 'unavailable' }, { fields: FIELDS }];
+  let calls = 0;
+  const lookup = lookupOver(async () => { calls += 1; return answers.shift(); }, { now: () => clock, ttlMs: 10 });
+  assert.deepEqual(await lookup(ORIGIN), { fields: FIELDS });
+  clock = 10;
+  assert.deepEqual(await lookup(ORIGIN), { none: true });
+  clock = 0;
+  assert.deepEqual(await lookup(ORIGIN), { fields: FIELDS });
+  assert.equal(calls, 3, 'the expired entry is gone, so rewinding the clock cannot revive it');
 });
 
 test('the deadline timer is unreffed so it cannot keep the process alive', async () => {
