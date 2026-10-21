@@ -4,7 +4,12 @@ import net from 'node:net';
 import path from 'node:path';
 import test from 'node:test';
 
-import { attachSecretsChannel, replyTo } from '../../lib/runtime/secrets-channel.mjs';
+import {
+  attachSecretsChannel,
+  createSavedLoginLookup,
+  replyTo,
+  SAVED_LOGIN_TTL_MS,
+} from '../../lib/runtime/secrets-channel.mjs';
 
 const ORIGIN = 'https://login.example.com';
 const PASSWORD = 'devlogin:login.example.com:password';
@@ -65,6 +70,183 @@ test('malformed requests: no id is dropped, bad fields are unavailable, a throwi
     await replyTo(request(), async () => { throw new Error('boom'); }),
     { id: 'r1', name: PASSWORD, refused: 'unavailable' },
   );
+});
+
+const FIELDS = { email: 'devlogin:login.example.com:email', password: 'devlogin:login.example.com:password' };
+const savedLoginRequest = (overrides = {}) => ({ id: 's1', type: 'saved-login', origin: ORIGIN, ...overrides });
+const noFill = async () => { throw new Error('the fill path must not run'); };
+const lookupOver = (fetchSavedLogin, options = {}) => createSavedLoginLookup({ fetchSavedLogin, ...options });
+
+test('a saved-login request with fields replies { id, type, origin, fields }', async () => {
+  const lookup = lookupOver(async () => ({ fields: FIELDS }));
+  assert.deepEqual(await replyTo(savedLoginRequest(), noFill, lookup), {
+    id: 's1', type: 'saved-login', origin: ORIGIN, fields: FIELDS,
+  });
+});
+
+test('none and unavailable both reply { id, type, origin, none: true }', async () => {
+  const expected = { id: 's1', type: 'saved-login', origin: ORIGIN, none: true };
+  assert.deepEqual(await replyTo(savedLoginRequest(), noFill, lookupOver(async () => ({ none: true }))), expected);
+  assert.deepEqual(
+    await replyTo(savedLoginRequest(), noFill, lookupOver(async () => ({ refused: 'unavailable' }))),
+    expected,
+  );
+  assert.deepEqual(
+    await replyTo(savedLoginRequest(), noFill, lookupOver(async () => { throw new Error('boom'); })),
+    expected,
+  );
+});
+
+test('a saved-login request with a non-origin is none and never calls fetch', async () => {
+  let calls = 0;
+  const lookup = lookupOver(async () => { calls += 1; return { fields: FIELDS }; });
+  for (const origin of ['https://a.example.com/x', 'about:blank', 'ftp://a.example.com', 42, undefined]) {
+    assert.deepEqual(
+      await replyTo(savedLoginRequest({ origin }), noFill, lookup),
+      { id: 's1', type: 'saved-login', origin, none: true },
+    );
+  }
+  assert.equal(calls, 0);
+});
+
+test('a saved-login request with no id is dropped', async () => {
+  assert.equal(await replyTo({ type: 'saved-login', origin: ORIGIN }, noFill, lookupOver(async () => ({ none: true }))), null);
+});
+
+test('lookup caches fields and none for ttlMs, and refetches after', async () => {
+  let clock = 1000;
+  const answers = [{ fields: FIELDS }, { none: true }, { fields: FIELDS }];
+  const seen = [];
+  const lookup = lookupOver(async (origin) => { seen.push(origin); return answers.shift(); }, {
+    now: () => clock, ttlMs: 500,
+  });
+  assert.deepEqual(await lookup(ORIGIN), { fields: FIELDS });
+  clock += 499;
+  assert.deepEqual(await lookup(ORIGIN), { fields: FIELDS });
+  assert.equal(seen.length, 1);
+  clock += 1;
+  assert.deepEqual(await lookup(ORIGIN), { none: true });
+  assert.equal(seen.length, 2);
+  clock += 499;
+  assert.deepEqual(await lookup(ORIGIN), { none: true });
+  assert.equal(seen.length, 2);
+  clock += 1;
+  assert.deepEqual(await lookup(ORIGIN), { fields: FIELDS });
+  assert.equal(seen.length, 3);
+});
+
+test('lookup keeps one cache entry per origin', async () => {
+  const seen = [];
+  const lookup = lookupOver(async (origin) => { seen.push(origin); return { none: true }; });
+  await lookup(ORIGIN);
+  await lookup('https://other.example.com');
+  await lookup(ORIGIN);
+  assert.deepEqual(seen, [ORIGIN, 'https://other.example.com']);
+});
+
+test('the default ttl is thirty seconds', () => {
+  assert.equal(SAVED_LOGIN_TTL_MS, 30_000);
+});
+
+test('lookup never caches unavailable', async () => {
+  const answers = [{ refused: 'unavailable' }, { fields: FIELDS }];
+  let calls = 0;
+  const lookup = lookupOver(async () => { calls += 1; return answers.shift(); });
+  assert.deepEqual(await lookup(ORIGIN), { none: true });
+  assert.deepEqual(await lookup(ORIGIN), { fields: FIELDS });
+  assert.equal(calls, 2);
+});
+
+test('lookup never caches a malformed answer', async () => {
+  const answers = [{ fields: { email: 'x' } }, null, { fields: FIELDS }];
+  let calls = 0;
+  const lookup = lookupOver(async () => { calls += 1; return answers.shift(); });
+  assert.deepEqual(await lookup(ORIGIN), { none: true });
+  assert.deepEqual(await lookup(ORIGIN), { none: true });
+  assert.deepEqual(await lookup(ORIGIN), { fields: FIELDS });
+  assert.equal(calls, 3);
+});
+
+test('concurrent lookups of one origin share one fetch, and its answer lands in the cache even when the caller stopped waiting', async () => {
+  let release;
+  let calls = 0;
+  const lookup = lookupOver(() => {
+    calls += 1;
+    return new Promise((resolve) => { release = resolve; });
+  });
+  const first = lookup(ORIGIN);
+  const second = lookup(ORIGIN);
+  assert.equal(calls, 1);
+  const abandoned = await Promise.race([first, new Promise((r) => setTimeout(() => r('gave up'), 20))]);
+  assert.equal(abandoned, 'gave up');
+  release({ fields: FIELDS });
+  assert.deepEqual(await second, { fields: FIELDS });
+  assert.deepEqual(await first, { fields: FIELDS });
+  assert.deepEqual(await lookup(ORIGIN), { fields: FIELDS });
+  assert.equal(calls, 1);
+});
+
+test('a fetch that never settles frees the origin after the deadline', async () => {
+  const timers = [];
+  const cleared = [];
+  const setTimer = (fn, ms) => { const timer = { fn, ms }; timers.push(timer); return timer; };
+  const clearTimer = (timer) => { cleared.push(timer); };
+  let calls = 0;
+  const lookup = lookupOver(() => {
+    calls += 1;
+    return calls === 1 ? new Promise(() => {}) : Promise.resolve({ fields: FIELDS });
+  }, { setTimer, clearTimer, deadlineMs: 1600 });
+
+  const stuck = lookup(ORIGIN);
+  assert.equal(timers.length, 1);
+  assert.equal(timers[0].ms, 1600);
+  assert.equal(calls, 1);
+  void lookup(ORIGIN);
+  assert.equal(calls, 1, 'a second caller still shares the stuck fetch');
+
+  timers[0].fn();
+  assert.deepEqual(await stuck, { none: true });
+
+  assert.deepEqual(await lookup(ORIGIN), { fields: FIELDS });
+  assert.equal(calls, 2);
+  assert.ok(cleared.includes(timers[1]), 'a fetch that settles clears its deadline timer');
+});
+
+test('an answer that arrives after the deadline is not cached', async () => {
+  const timers = [];
+  let release;
+  let calls = 0;
+  const lookup = lookupOver(() => {
+    calls += 1;
+    return new Promise((resolve) => { release = resolve; });
+  }, { setTimer: (fn) => { timers.push(fn); return {}; }, clearTimer: () => {} });
+  const stuck = lookup(ORIGIN);
+  timers[0]();
+  await stuck;
+  release({ fields: FIELDS });
+  const again = lookup(ORIGIN);
+  assert.equal(calls, 2);
+  release({ none: true });
+  assert.deepEqual(await again, { none: true });
+});
+
+test('the deadline timer is unreffed so it cannot keep the process alive', async () => {
+  let unrefs = 0;
+  const lookup = lookupOver(async () => ({ none: true }), {
+    setTimer: () => ({ unref: () => { unrefs += 1; } }),
+    clearTimer: () => {},
+  });
+  await lookup(ORIGIN);
+  assert.equal(unrefs, 1);
+});
+
+test('a fill request without type still takes the fill path', async () => {
+  let lookups = 0;
+  const lookup = async () => { lookups += 1; return { none: true }; };
+  assert.deepEqual(await replyTo(request(), granted(), lookup), {
+    id: 'r1', name: PASSWORD, origin: ORIGIN, kind: 'password', value: CANARY,
+  });
+  assert.equal(lookups, 0);
 });
 
 // A real unix socket pair: `attachSecretsChannel` gets the server side, the
