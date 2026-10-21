@@ -638,7 +638,12 @@ test('full profile refuses an unmanaged [mcp_servers.fast_browser] table instead
 });
 
 test('an unmanaged [mcp_servers.fast_browser] subtable or quoted key also refuses', async (t) => {
-  for (const header of ['[mcp_servers.fast_browser.env]', '[ mcp_servers."fast_browser" ]']) {
+  for (const header of [
+    '[mcp_servers.fast_browser.env]',
+    '[ mcp_servers."fast_browser" ]',
+    '["mcp_servers".fast_browser]',
+    'mcp_servers.fast_browser.command = "node"',
+  ]) {
     const paths = await temporaryPaths(t);
     const configFile = path.join(paths.homeDir, '.codex', 'config.toml');
     await mkdir(path.dirname(configFile), { recursive: true });
@@ -649,6 +654,14 @@ test('an unmanaged [mcp_servers.fast_browser] subtable or quoted key also refuse
       header,
     );
   }
+});
+
+test('a [mcp_servers.fast_browser] look-alike inside a multiline string does not refuse', async (t) => {
+  const paths = await temporaryPaths(t);
+  const configFile = path.join(paths.homeDir, '.codex', 'config.toml');
+  await mkdir(path.dirname(configFile), { recursive: true });
+  await writeFile(configFile, 'instructions = """\n[mcp_servers.fast_browser]\n"""\n');
+  await prepareRoutingTransition({ profile: 'full', paths });
 });
 
 test('safe profile leaves an unmanaged [mcp_servers.fast_browser] table alone', async (t) => {
