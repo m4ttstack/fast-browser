@@ -13,6 +13,7 @@ test('finds every way a document can define mcp_servers.fast_browser', () => {
     "['mcp_servers'.'fast_browser']\n",
     '[mcp_servers."fast\\u005fbrowser"]\n',
     '[mcp_servers."fast\\U0000005Fbrowser"]\n',
+    'note = """ an escaped \\""" stays inside """\n[mcp_servers.fast_browser]\n',
     '[mcp_servers.fast_browser.env]\nX = "1"\n',
     '[[mcp_servers.fast_browser.tools]]\n',
     'mcp_servers.fast_browser.command = "node"\n',
