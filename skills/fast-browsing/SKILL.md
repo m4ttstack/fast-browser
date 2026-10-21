@@ -207,7 +207,7 @@ digraph fast_browsing {
     "Login screens this task = 2?" -> "Saved login for this origin?" [label="no"];
     "Saved login for this origin?" -> "Secrets file and operator-named secrets for this site?" [label="no: no-saved-login; rt missing, or the origin is not listed"];
     "Saved login for this origin?" -> "Page shows 2FA, a captcha or an account chooser?" [label="yes"];
-    "Saved login for this origin?" -> "STOP: never type a credential yourself; only devlogin: names" [label="tempted to type a value, or a name rt logins list did not print"];
+    "Saved login for this origin?" -> "STOP: never type a credential yourself; only devlogin: names" [label="tempted to type a value, or a name neither rt logins list nor a Saved login line gave"];
     "STOP: never type a credential yourself; only devlogin: names" -> "Ask the human to log in in Chrome";
     "Page shows 2FA, a captcha or an account chooser?" -> "Ask the human to log in in Chrome" [label="yes: needs-human"];
     "Page shows 2FA, a captcha or an account chooser?" -> "browser_fill_form {fields: devlogin: names for the fields shown}" [label="no"];
@@ -510,8 +510,15 @@ then resume batching the rest.
 ### Saved login for this origin?
 
 A page is a login screen, on every `a login screen` edge, when it shows a
-visible password field, or a visible email field on an origin
-`rt logins list --json` lists (the identifier-first case).
+visible password field, or a visible email field on an origin that
+`rt logins list --json` lists or a `Saved login for <origin>` line names (the
+identifier-first case).
+
+When the login page's tool result carries a line `Saved login for <origin>:
+fill with <email name> / <password name>` and `<origin>` is exactly the login
+page's origin, that line is this lookup's answer: it is yes, its two names are
+the ones to use, and you skip `rt logins list --json`. With no such line, run
+the lookup.
 
 Run `rt logins list --json` and look for an entry whose `origin` is exactly the
 login page's origin. Yes only on an exact match. A missing `rt`, a command
@@ -960,7 +967,7 @@ Chrome.
 | Known text or region | Read it narrowly |
 | Need state from an already-used observation | Re-observe narrowly; never scroll back to the stale copy |
 | Same step failed twice | Single-step recovery for that step |
-| Login screen, origin listed by `rt logins list --json` | Fill its `devlogin:` names, submit, check the signed-in marker; hand back the outcome word otherwise |
+| Login screen, origin listed by `rt logins list --json` or a `Saved login for` line | Fill its `devlogin:` names, submit, check the signed-in marker; hand back the outcome word otherwise |
 | Login screen, secrets file and operator-named secrets | Log in by secret NAME, then check the signed-in marker |
 | Login screen, anything else | Ask the human to sign in in Chrome |
 | Just solved a repeatable journey with discrete calls | `browser_close`, `flows compile`, offer the flow |

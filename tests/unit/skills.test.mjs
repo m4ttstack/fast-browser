@@ -470,6 +470,43 @@ test('the codex template matches the Claude agent on flow-first, site-affordance
   }
 });
 
+test('the skill and both drivers treat a Saved login line as the lookup answer', async () => {
+  for (const file of [
+    'skills/fast-browsing/SKILL.md',
+    'agents/browser-driver.md',
+    'templates/codex/browser_driver.toml',
+  ]) {
+    const text = await readFile(path.join(pluginRoot, file), 'utf8');
+    assert.match(text, /Saved login for <origin>/, file);
+    assert.match(text, /skip\s+`rt logins list --json`|Only\s+without\s+that\s+line,\s+run\s+`rt logins list --json`/, file);
+  }
+});
+
+test('both drivers check the Saved login line before running rt logins list', async () => {
+  for (const file of ['agents/browser-driver.md', 'templates/codex/browser_driver.toml']) {
+    const text = await readFile(path.join(pluginRoot, file), 'utf8');
+    const procedure = text.slice(text.indexOf('saved-login procedure'));
+    assert.ok(
+      procedure.indexOf('Saved login for <origin>') < procedure.indexOf('rt logins list --json'),
+      file,
+    );
+  }
+});
+
+test('every place that names the saved-login lookup also names the Saved login line', async () => {
+  const skill = await readFile(path.join(pluginRoot, 'skills/fast-browsing/SKILL.md'), 'utf8');
+  const loginScreen = skill.match(/A page is a login screen[\s\S]*?\n\n/)?.[0] ?? '';
+  assert.match(loginScreen, /identifier-first/);
+  assert.match(loginScreen, /`Saved login for <origin>` line/);
+  const row = skill.split('\n').find(line => line.startsWith('| Login screen, origin')) ?? '';
+  assert.match(row, /`rt logins list --json`/);
+  assert.match(row, /`Saved login for` line/);
+  const agent = await readFile(path.join(pluginRoot, 'agents/browser-driver.md'), 'utf8');
+  const forbids = agent.match(/When the brief forbids signing in[\s\S]*?lift the restriction\./)?.[0] ?? '';
+  assert.match(forbids, /`rt logins list --json`/);
+  assert.match(forbids, /`Saved login for <origin>` line/);
+});
+
 // `flows find` writes `<REQUIRED: ...>` placeholders into the invocation's
 // arg values and the runner types whatever string it gets, so a driver that
 // replays the invocation unedited types the placeholder on the real site.

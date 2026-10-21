@@ -6,7 +6,7 @@ import test from 'node:test';
 
 import { buildContentManifestDigest } from '../../lib/core/content-manifest.mjs';
 import { launchRuntime } from '../../lib/runtime/launch.mjs';
-import { attachSecretsChannel } from '../../lib/runtime/secrets-channel.mjs';
+import { attachSecretsChannel, createSavedLoginLookup } from '../../lib/runtime/secrets-channel.mjs';
 import { requestLoginFill } from '../../lib/rt/login-fill-client.mjs';
 
 const ORIGIN = 'https://login.example.com';
@@ -191,4 +191,44 @@ test('with no rt token every request is unavailable and the runtime still runs',
   assert.equal(code, 0);
   const { replies } = JSON.parse(await readFile(out, 'utf8'));
   assert.deepEqual(replies, [{ id: 'p', name: 'devlogin:login.example.com:password', refused: 'unavailable' }]);
+});
+
+test('saved-login and fill frames interleaved over the real channel each get their own reply by id', { timeout: TEST_TIMEOUT_MS }, async (t) => {
+  const { homeDir, paths, lock, out } = await setup(t);
+  const fields = { email: 'devlogin:login.example.com:email', password: 'devlogin:login.example.com:password' };
+  const lookups = [];
+  withFakeRuntimeEnv(t, out, [
+    { id: 'l1', type: 'saved-login', origin: ORIGIN },
+    { id: 'p', name: 'devlogin:login.example.com:password', frameOrigin: ORIGIN, elementKind: 'password' },
+    { id: 'l2', type: 'saved-login', origin: 'https://nobody.example.com' },
+    { id: 'l3', type: 'saved-login', origin: 'https://login.example.com/path' },
+    { id: 'e', name: 'devlogin:login.example.com:email', frameOrigin: ORIGIN, elementKind: 'text' },
+  ]);
+  const lookupSavedLogin = createSavedLoginLookup({
+    fetchSavedLogin: async (origin) => {
+      lookups.push(origin);
+      return origin === ORIGIN ? { fields } : { none: true };
+    },
+  });
+  const code = await launchRuntime({
+    config: { profile: 'safe', connection: { mode: 'manual' }, sessions: { enabled: false } },
+    paths,
+    lock,
+    secretsChannel: {
+      attach: (socket) => attachSecretsChannel({
+        socket,
+        fetchFill: (request) => requestLoginFill({ ...request, homeDir, env: {} }),
+        lookupSavedLogin,
+      }),
+    },
+  });
+  assert.equal(code, 0);
+  const { replies } = JSON.parse(await readFile(out, 'utf8'));
+  const byId = Object.fromEntries(replies.map((r) => [r.id, r]));
+  assert.deepEqual(byId.l1, { id: 'l1', type: 'saved-login', origin: ORIGIN, fields });
+  assert.deepEqual(byId.l2, { id: 'l2', type: 'saved-login', origin: 'https://nobody.example.com', none: true });
+  assert.deepEqual(byId.l3, { id: 'l3', type: 'saved-login', origin: 'https://login.example.com/path', none: true });
+  assert.deepEqual(byId.p, { id: 'p', name: 'devlogin:login.example.com:password', origin: ORIGIN, kind: 'password', value: CANARY });
+  assert.equal(byId.e.value, CANARY);
+  assert.deepEqual(lookups.sort(), [ORIGIN, 'https://nobody.example.com']);
 });
