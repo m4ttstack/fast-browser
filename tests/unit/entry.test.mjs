@@ -222,6 +222,7 @@ test('the cloud path never gets a secrets channel', async () => {
 
 const LOGIN = 'https://login.example.com';
 const PASSWORD_NAME = 'devlogin:login.example.com:password';
+const EMAIL_NAME = 'devlogin:login.example.com:email';
 
 // A short root under /tmp keeps the daemon's unix socket path inside the
 // platform's sun_path limit, which os.tmpdir() on macOS can exceed.
@@ -237,9 +238,12 @@ async function fakeRtHome(t, { daemonSocket } = {}) {
     let body = '';
     req.on('data', (c) => { body += c; });
     req.on('end', () => {
-      seen.push(JSON.parse(body));
+      seen.push({ route: req.url, ...JSON.parse(body) });
       res.setHeader('content-type', 'application/json');
-      res.end(JSON.stringify({ ok: true, data: { origin: LOGIN, kind: 'password', value: 'pw-from-fake-rt' } }));
+      const data = req.url === '/logins:has'
+        ? { fields: { email: EMAIL_NAME, password: PASSWORD_NAME } }
+        : { origin: LOGIN, kind: 'password', value: 'pw-from-fake-rt' };
+      res.end(JSON.stringify({ ok: true, data }));
     });
   });
   await new Promise((resolve) => daemon.listen(daemonSocket?.(root) ?? path.join(rtDir, 'rt.sock'), resolve));
@@ -300,4 +304,25 @@ test('the default secrets channel reaches the daemon through RT_DAEMON_SOCK from
   });
   assert.equal(reply.value, 'pw-from-fake-rt');
   assert.equal(seen.length, 1);
+});
+
+test('the default secrets channel answers a saved-login frame from the daemon\'s logins:has', async (t) => {
+  const { root, homeDir, seen } = await fakeRtHome(t, { daemonSocket: (dir) => path.join(dir, 'alt.sock') });
+  const { reply, warned } = await roundTripThroughDefaultChannel(t, {
+    root,
+    homeDir,
+    env: { RT_DAEMON_SOCK: path.join(root, 'alt.sock') },
+    lines: [JSON.stringify({ id: 's', type: 'saved-login', origin: LOGIN })],
+  });
+  assert.deepEqual(reply, {
+    id: 's',
+    type: 'saved-login',
+    origin: LOGIN,
+    fields: { email: EMAIL_NAME, password: PASSWORD_NAME },
+  });
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].route, '/logins:has');
+  assert.equal(seen[0].token, 'tok-entry');
+  assert.equal(seen[0].origin, LOGIN);
+  assert.deepEqual(warned, []);
 });
