@@ -20,6 +20,7 @@ test('finds every way a document can define mcp_servers.fast_browser', () => {
     '[mcp_servers]\nfast_browser = { command = "node" }\n',
     '[mcp_servers]\nfast_browser.command = "node"\n',
     'mcp_servers = { other = { a = 1 }, fast_browser = { command = "node" } }\n',
+    'mcp_servers = {\n  # servers\n  other = { a = 1 },\n  fast_browser = { command = "node" },\n}\n',
   ];
   for (const text of defining) assert.equal(tomlDefinesPath(text, TARGET), true, text);
 });
