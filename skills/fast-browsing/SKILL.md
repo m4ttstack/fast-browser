@@ -568,10 +568,13 @@ reason word.
   lookalike). That is `needs-human`.
 - `refused: opaque-origin`: the field sits in a sandboxed or blank frame, so
   its origin cannot be checked. That is `needs-human`.
-- `refused: recording`: a video or a recording is on (a configured video, or
-  a capture in progress), and a saved login never fills while one runs. That
-  is `needs-human`; tell the human the recording must be off for a saved
-  login.
+- `refused: recording`: Fast Browser itself is recording, never a screen
+  recorder on the machine: the `video` setting in
+  `~/.fast-browser/config.json`, or a capture in progress. A saved login never
+  fills while one runs. That is `needs-human`. Tell the human that
+  `fast-browser configure --video off` clears the setting and that only a
+  restarted Fast Browser session picks it up; closing tabs or the browser
+  does not.
 - `refused: slow-typing`: the fill used `slowly`, which a saved login refuses.
   Fill the same names once more with `browser_fill_form` or a plain
   `browser_type`, never `slowly`. A second `slow-typing` refusal is

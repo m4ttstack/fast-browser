@@ -285,6 +285,11 @@ test('the capturing-flows skill states recording scope, finalization, and the PI
 
   assert.match(text, /configure --video/);
   assert.match(text, /--video off/);
+  // A capture that leaves the video setting on records every later session
+  // and makes every saved login refuse with `refused: recording`, so both
+  // exits from the restart question must turn it back off.
+  assert.match(text, /"Restart answer\?" -> "fast-browser configure --video off: the restarted session keeps recording" \[label="restarted"\]/);
+  assert.match(text, /"Restart answer\?" -> "fast-browser configure --video off: no restart came" \[label="will not restart"\]/);
   // The scope, stated to match the fast-browsing boundaries: recording covers
   // the relay-attached real-Chrome tabs Fast Browser controls, and promises
   // no other browser to record in.

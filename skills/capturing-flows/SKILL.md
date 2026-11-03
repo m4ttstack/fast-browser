@@ -35,6 +35,8 @@ digraph capture_flow {
     "configure result?" [shape=diamond];
     "Ask the human to restart the Fast Browser session" [shape=box];
     "Restart answer?" [shape=diamond];
+    "fast-browser configure --video off: the restarted session keeps recording" [shape=plaintext];
+    "fast-browser configure --video off: no restart came" [shape=plaintext];
     "browser_tabs {action: new, url: <where the flow starts>}" [shape=plaintext];
     "Drive exactly the one flow being shown" [shape=box];
     "Recorded flow result?" [shape=diamond];
@@ -92,8 +94,10 @@ digraph capture_flow {
     "configure result?" -> "Ask the human to restart the Fast Browser session" [label="set"];
     "configure result?" -> "Off-script gate: configure refused the video setting" [label="the command errored"];
     "Ask the human to restart the Fast Browser session" -> "Restart answer?";
-    "Restart answer?" -> "browser_tabs {action: new, url: <where the flow starts>}" [label="restarted"];
-    "Restart answer?" -> "Handed back with what is done" [label="will not restart"];
+    "Restart answer?" -> "fast-browser configure --video off: the restarted session keeps recording" [label="restarted"];
+    "Restart answer?" -> "fast-browser configure --video off: no restart came" [label="will not restart"];
+    "fast-browser configure --video off: the restarted session keeps recording" -> "browser_tabs {action: new, url: <where the flow starts>}";
+    "fast-browser configure --video off: no restart came" -> "Handed back with what is done";
 
     "browser_tabs {action: new, url: <where the flow starts>}" -> "Drive exactly the one flow being shown";
     "Drive exactly the one flow being shown" -> "Recorded flow result?";
@@ -199,6 +203,16 @@ setting, never the profile, sessions, or palette.
 Ask the human to restart the Fast Browser session and say when it is back; see
 `## Asking the human`. A delegated subagent does not wait for the restart: it
 puts the ask in its distilled result and returns, which is the hand back edge.
+
+### Turn the video setting back off
+
+Run `fast-browser configure --video off` on both edges out of the restart
+question, before anything else. The restarted session read the setting when it
+launched and records until it ends, so turning it off loses nothing for this
+capture. Left on, every Fast Browser session started afterwards records every
+tab it drives, and every saved login refuses with `refused: recording`. A
+delegated subagent handing back for the restart says in its distilled result
+that whoever resumes it after the restart runs `configure --video off` first.
 
 ### Drive exactly the one flow being shown
 
@@ -392,6 +406,7 @@ when it does, carry on from the step you stopped at.
 | Symptom | Cause, and the graph edge that handles it |
 |---|---|
 | No `.webm` appears in `~/.fast-browser/output/videos/` | Recording was enabled after the session started, and the setting only applies to sessions started after it. `none appeared` leads back through the recording check to `configure` and the restart |
+| Saved logins refuse with `refused: recording` long after a capture | A capture left the video setting on, so every later session records. `fast-browser configure --video off`, then restart the Fast Browser session |
 | The `.webm` is tiny or unreadable | The tab or session was still open, so the file was not finalized. Close first; `tiny or unreadable` leads to a fresh take |
 | `gif` reports the renderer missing | `ffmpeg missing` leads to `brew install ffmpeg`, then `fast-browser doctor` to confirm; a second miss opens its gate |
 | `gif` refuses the name | `refused the name` leads to the bare name inside the videos directory; a second refusal opens its gate |
