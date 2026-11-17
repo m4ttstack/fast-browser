@@ -292,7 +292,8 @@ test('the capturing-flows skill states recording scope, finalization, and the PI
   assert.match(text, /"configure result\?" -> "browser_tabs \{action: new, url: <where the flow starts>\}" \[label="set"\]/);
   assert.match(text, /"browser_tabs \{action: close\}: the finished recording" -> "fast-browser configure --video off: the finished take"/);
   assert.match(text, /"browser_tabs \{action: close\}: the broken recording" -> "fast-browser configure --video off: the broken take"/);
-  assert.match(text, /"Login answer\?" -> "fast-browser configure --video off: handing back mid-take" \[label="will not sign in"\]/);
+  assert.match(text, /"Login answer\?" -> "browser_tabs \{action: close\}: handing back mid-take" \[label="will not sign in"\]/);
+  assert.match(text, /"browser_tabs \{action: close\}: handing back mid-take" -> "fast-browser configure --video off: handing back mid-take"/);
   assert.doesNotMatch(text, /Ask the human to restart/);
   // The scope, stated to match the fast-browsing boundaries: recording covers
   // the relay-attached real-Chrome tabs Fast Browser controls, and promises

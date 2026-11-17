@@ -42,6 +42,7 @@ digraph capture_flow {
     "Login answer?" [shape=diamond];
     "browser_tabs {action: close}: the broken recording" [shape=plaintext];
     "fast-browser configure --video off: the broken take" [shape=plaintext];
+    "browser_tabs {action: close}: handing back mid-take" [shape=plaintext];
     "fast-browser configure --video off: handing back mid-take" [shape=plaintext];
     "browser_tabs {action: close}: the finished recording" [shape=plaintext];
     "fast-browser configure --video off: the finished take" [shape=plaintext];
@@ -104,7 +105,8 @@ digraph capture_flow {
     "STOP: never collect from an open tab" -> "browser_tabs {action: close}: the finished recording";
     "Ask the human to log in in Chrome" -> "Login answer?";
     "Login answer?" -> "browser_tabs {action: close}: the broken recording" [label="signed in: re-record clean"];
-    "Login answer?" -> "fast-browser configure --video off: handing back mid-take" [label="will not sign in"];
+    "Login answer?" -> "browser_tabs {action: close}: handing back mid-take" [label="will not sign in"];
+    "browser_tabs {action: close}: handing back mid-take" -> "fast-browser configure --video off: handing back mid-take";
     "Login answer?" -> "STOP: never log in for the user" [label="tempted to type the password they pasted"];
     "fast-browser configure --video off: handing back mid-take" -> "Handed back with what is done";
     "browser_tabs {action: close}: the broken recording" -> "fast-browser configure --video off: the broken take";
