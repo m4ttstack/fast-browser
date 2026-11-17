@@ -153,27 +153,33 @@ async (page, args) => {
   // A cross-site redirect (a sign-in page, for one) can swap the tab's
   // target out from under `page` while the browser itself is fine, and the
   // navigation then rejects with the same closed-target text a real
-  // disconnect uses. When the context still lists a live page, the
-  // navigation landed there: the run carries on in that page, so a sign-in
-  // wall surfaces as an ordinary step failure at its own url instead of a
-  // SIDECAR_LOST. Only a navigation takes this path; it never re-runs the
-  // navigation, and a context with no live page is still SIDECAR_LOST.
-  const adoptLivePage = async (text) => {
-    if (!isSidecarLost(text)) return false;
-    let pages;
+  // disconnect uses. When exactly one live page appeared in the context
+  // during the navigation, the navigation landed there: the run carries on
+  // in that page, so a sign-in wall surfaces as an ordinary step failure at
+  // its own url instead of a SIDECAR_LOST. Only a navigation takes this
+  // path; it never re-runs the navigation, and anything less certain (no new
+  // page, several, or one that closes while loading) is still SIDECAR_LOST.
+  const pagesNow = () => {
     try {
-      pages = page.context().pages();
+      const pages = page.context().pages();
+      return Array.isArray(pages) ? pages : [];
     } catch {
-      return false;
+      return [];
     }
-    const live = (Array.isArray(pages) ? pages : [])
-      .filter((candidate) => candidate !== page && !(typeof candidate.isClosed === 'function' && candidate.isClosed()));
-    if (live.length === 0) return false;
+  };
+  const isOpen = (candidate) => !(typeof candidate.isClosed === 'function' && candidate.isClosed());
+  // Only a page that appeared during the navigation can be its replacement;
+  // a tab that was already open is unrelated and is never taken for it.
+  const adoptLivePage = async (text, before) => {
+    if (!isSidecarLost(text)) return false;
+    const appeared = pagesNow().filter((candidate) => !before.includes(candidate) && isOpen(candidate));
+    if (appeared.length !== 1) return false;
     page.off('filechooser', onFileChooser);
-    page = live[live.length - 1];
+    page = appeared[0];
+    latestChooser = null;
     page.on('filechooser', onFileChooser);
     await page.waitForLoadState('domcontentloaded').catch(() => {});
-    return true;
+    return isOpen(page);
   };
   // A restart is safe only when no step that may have touched the site was
   // mutating. That is every completed step (index < stepsCompleted) plus the
@@ -958,11 +964,12 @@ async (page, args) => {
       const first = steps[0];
       const usesStepZero = !!(first && first.op === 'goto' && typeof first.url === 'string');
       const preconditionPath = usesStepZero ? template(first.url) : '/';
+      const pagesBefore = pagesNow();
       try {
         await page.goto(`${origin}${preconditionPath}`);
         await page.waitForLoadState('domcontentloaded');
       } catch (error) {
-        if (!(await adoptLivePage(String(error && error.message)))) {
+        if (!(await adoptLivePage(String(error && error.message), pagesBefore))) {
           fail({
             failedStep: 0,
             error: `${ORIGIN_UNREACHABLE}${String(error && error.message)}`,
@@ -1010,11 +1017,12 @@ async (page, args) => {
       resolvedForAct = null;
       switch (step && step.op) {
         case 'goto': {
+          const pagesBefore = pagesNow();
           try {
             await page.goto(`${origin}${template(step.url)}`);
             await page.waitForLoadState('domcontentloaded');
           } catch (error) {
-            if (!(await adoptLivePage(String(error && error.message)))) throw error;
+            if (!(await adoptLivePage(String(error && error.message), pagesBefore))) throw error;
           }
           break;
         }

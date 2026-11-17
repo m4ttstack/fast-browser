@@ -837,32 +837,87 @@ test('SIDECAR_LOST while reaching the origin says restart, since no step ran yet
 
 // A cross-site redirect (a sign-in page) can swap the tab's target while the
 // browser is fine. The closed page's context still lists the live one.
-function swappedTabPages(liveUrl) {
+function swappedTabPages(liveUrl, { preexisting = [], opensPage = true, closesAfterLoad = false } = {}) {
+  let liveClosed = false;
   const live = {
     url: () => liveUrl,
-    isClosed: () => false,
+    isClosed: () => liveClosed,
     on: () => {},
     off: () => {},
     goto: async () => {},
     locator: () => ({ waitFor: async () => { throw new Error('no locator candidate matched'); }, click: async () => {}, frames: () => [] }),
-    waitForLoadState: async () => {},
+    waitForLoadState: async () => { if (closesAfterLoad) liveClosed = true; },
     waitForTimeout: async () => {},
   };
+  const pages = [];
   const closed = {
     url: () => 'about:blank',
     isClosed: () => true,
     on: () => {},
     off: () => {},
-    goto: async () => { throw new Error('page.goto: Target page, context or browser has been closed'); },
+    // The redirect opens the replacement target as the navigation fails.
+    goto: async () => {
+      if (opensPage && !pages.includes(live)) pages.push(live);
+      throw new Error('page.goto: Target page, context or browser has been closed');
+    },
     locator: () => ({ waitFor: async () => {}, click: async () => {}, frames: () => [] }),
     waitForLoadState: async () => {},
     waitForTimeout: async () => {},
   };
-  const context = { pages: () => [closed, live] };
+  pages.push(closed, ...preexisting);
+  const context = { pages: () => [...pages] };
   closed.context = () => context;
   live.context = () => context;
+  for (const other of preexisting) other.context = () => context;
   return { closed, live };
 }
+
+const otherTab = (url) => ({
+  url: () => url,
+  isClosed: () => false,
+  on: () => {},
+  off: () => {},
+  waitForLoadState: async () => {},
+});
+
+async function runRedirectFlow(closed) {
+  const source = await readSource();
+  const macro = new Function(`"use strict"; return (${source});`)();
+  const flow = {
+    schemaVersion: 1,
+    name: 'redirect-probe',
+    origin: 'https://example.test',
+    steps: [{ op: 'click', target: { locators: [{ kind: 'css', selector: '#next' }] } }],
+  };
+  try {
+    await macro(closed, { flow });
+  } catch (error) {
+    return error.message;
+  }
+  return 'no error';
+}
+
+test('a tab that was already open is never taken for the redirected one', async () => {
+  const { closed } = swappedTabPages('https://login.example.test/u/login', {
+    preexisting: [otherTab('https://unrelated.example.test/')],
+    opensPage: false,
+  });
+  assert.match(await runRedirectFlow(closed), /^SIDECAR_LOST: /);
+});
+
+test('the page that appeared during the navigation is adopted, not an older tab', async () => {
+  const { closed } = swappedTabPages('https://login.example.test/u/login', {
+    preexisting: [otherTab('https://unrelated.example.test/')],
+  });
+  const message = await runRedirectFlow(closed);
+  assert.match(message, /^FLOW_RUNNER_FAILURE: /);
+  assert.equal(JSON.parse(message.slice('FLOW_RUNNER_FAILURE: '.length)).url, 'https://login.example.test/u/login');
+});
+
+test('an adopted page that closes during its load wait is not adopted', async () => {
+  const { closed } = swappedTabPages('https://login.example.test/u/login', { closesAfterLoad: true });
+  assert.match(await runRedirectFlow(closed), /^SIDECAR_LOST: /);
+});
 
 test('a navigation whose tab was swapped carries on in the live page, never SIDECAR_LOST', async () => {
   const source = await readSource();
