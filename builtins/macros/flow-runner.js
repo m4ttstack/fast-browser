@@ -150,6 +150,31 @@ async (page, args) => {
     const firstLine = text.split('\n', 1)[0];
     return SIDECAR_SIGNATURES.some((signature) => firstLine.includes(signature));
   };
+  // A cross-site redirect (a sign-in page, for one) can swap the tab's
+  // target out from under `page` while the browser itself is fine, and the
+  // navigation then rejects with the same closed-target text a real
+  // disconnect uses. When the context still lists a live page, the
+  // navigation landed there: the run carries on in that page, so a sign-in
+  // wall surfaces as an ordinary step failure at its own url instead of a
+  // SIDECAR_LOST. Only a navigation takes this path; it never re-runs the
+  // navigation, and a context with no live page is still SIDECAR_LOST.
+  const adoptLivePage = async (text) => {
+    if (!isSidecarLost(text)) return false;
+    let pages;
+    try {
+      pages = page.context().pages();
+    } catch {
+      return false;
+    }
+    const live = (Array.isArray(pages) ? pages : [])
+      .filter((candidate) => candidate !== page && !(typeof candidate.isClosed === 'function' && candidate.isClosed()));
+    if (live.length === 0) return false;
+    page.off('filechooser', onFileChooser);
+    page = live[live.length - 1];
+    page.on('filechooser', onFileChooser);
+    await page.waitForLoadState('domcontentloaded').catch(() => {});
+    return true;
+  };
   // A restart is safe only when no step that may have touched the site was
   // mutating. That is every completed step (index < stepsCompleted) plus the
   // in-flight one at `failedStep`: a click or fill can land before the
@@ -937,13 +962,15 @@ async (page, args) => {
         await page.goto(`${origin}${preconditionPath}`);
         await page.waitForLoadState('domcontentloaded');
       } catch (error) {
-        fail({
-          failedStep: 0,
-          error: `${ORIGIN_UNREACHABLE}${String(error && error.message)}`,
-          url: page.url(),
-          stepsCompleted: 0,
-          locatorFallbacks,
-        });
+        if (!(await adoptLivePage(String(error && error.message)))) {
+          fail({
+            failedStep: 0,
+            error: `${ORIGIN_UNREACHABLE}${String(error && error.message)}`,
+            url: page.url(),
+            stepsCompleted: 0,
+            locatorFallbacks,
+          });
+        }
       }
       if (usesStepZero) startIndex = 1;
     }
@@ -983,8 +1010,12 @@ async (page, args) => {
       resolvedForAct = null;
       switch (step && step.op) {
         case 'goto': {
-          await page.goto(`${origin}${template(step.url)}`);
-          await page.waitForLoadState('domcontentloaded');
+          try {
+            await page.goto(`${origin}${template(step.url)}`);
+            await page.waitForLoadState('domcontentloaded');
+          } catch (error) {
+            if (!(await adoptLivePage(String(error && error.message)))) throw error;
+          }
           break;
         }
         case 'click': {

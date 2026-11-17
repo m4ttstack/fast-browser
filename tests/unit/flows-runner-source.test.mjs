@@ -835,6 +835,85 @@ test('SIDECAR_LOST while reaching the origin says restart, since no step ran yet
   assert.equal(shape.recovery, 'restart the flow from navigation; do not repeat this call');
 });
 
+// A cross-site redirect (a sign-in page) can swap the tab's target while the
+// browser is fine. The closed page's context still lists the live one.
+function swappedTabPages(liveUrl) {
+  const live = {
+    url: () => liveUrl,
+    isClosed: () => false,
+    on: () => {},
+    off: () => {},
+    goto: async () => {},
+    locator: () => ({ waitFor: async () => { throw new Error('no locator candidate matched'); }, click: async () => {}, frames: () => [] }),
+    waitForLoadState: async () => {},
+    waitForTimeout: async () => {},
+  };
+  const closed = {
+    url: () => 'about:blank',
+    isClosed: () => true,
+    on: () => {},
+    off: () => {},
+    goto: async () => { throw new Error('page.goto: Target page, context or browser has been closed'); },
+    locator: () => ({ waitFor: async () => {}, click: async () => {}, frames: () => [] }),
+    waitForLoadState: async () => {},
+    waitForTimeout: async () => {},
+  };
+  const context = { pages: () => [closed, live] };
+  closed.context = () => context;
+  live.context = () => context;
+  return { closed, live };
+}
+
+test('a navigation whose tab was swapped carries on in the live page, never SIDECAR_LOST', async () => {
+  const source = await readSource();
+  const macro = new Function(`"use strict"; return (${source});`)();
+  const { closed } = swappedTabPages('https://login.example.test/u/login');
+  const flow = {
+    schemaVersion: 1,
+    name: 'redirect-probe',
+    origin: 'https://example.test',
+    steps: [
+      { op: 'click', target: { locators: [{ kind: 'css', selector: '#next' }] } },
+    ],
+  };
+  let message;
+  try {
+    await macro(closed, { flow });
+  } catch (error) {
+    message = error.message;
+  }
+  assert.match(message, /^FLOW_RUNNER_FAILURE: /);
+  const shape = JSON.parse(message.slice('FLOW_RUNNER_FAILURE: '.length));
+  assert.equal(shape.url, 'https://login.example.test/u/login');
+});
+
+test('a goto step whose tab was swapped counts as navigated and the next step runs in the live page', async () => {
+  const source = await readSource();
+  const macro = new Function(`"use strict"; return (${source});`)();
+  const { closed } = swappedTabPages('https://login.example.test/u/login');
+  closed.url = () => 'https://example.test/';
+  const flow = {
+    schemaVersion: 1,
+    name: 'redirect-step-probe',
+    origin: 'https://example.test',
+    steps: [
+      { op: 'goto', url: '/claims' },
+      { op: 'click', target: { locators: [{ kind: 'css', selector: '#next' }] } },
+    ],
+  };
+  let message;
+  try {
+    await macro(closed, { flow });
+  } catch (error) {
+    message = error.message;
+  }
+  assert.match(message, /^FLOW_RUNNER_FAILURE: /);
+  const shape = JSON.parse(message.slice('FLOW_RUNNER_FAILURE: '.length));
+  assert.equal(shape.failedStep, 1);
+  assert.equal(shape.stepsCompleted, 1);
+  assert.equal(shape.url, 'https://login.example.test/u/login');
+});
+
 test('flow-runner.js never says "retry", including in comments', async () => {
   // Duplicated deliberately from the existing canary above: the recovery
   // wording added for SIDECAR_LOST is the most likely accidental
