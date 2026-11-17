@@ -310,27 +310,27 @@ test('bundled lock pins the intended candidate identity and immutable artifact U
 
   assert.deepEqual(lock, {
     schemaVersion: 1,
-    productVersion: '0.1.6',
-    sourceCommit: '92f543036dcfe86fd106726ee0ea39a5962c5057',
+    productVersion: '0.1.7',
+    sourceCommit: '4e97d4f1291951f0687b170fa0ef0860b81493d9',
     protocolVersion: 2,
     runtime: {
       url: 'https://github.com/m4ttheweric/playwright/releases/download/'
-        + 'fast-browser-v0.1.6/fast-browser-mcp-0.1.6.tar.gz',
-      file: 'fast-browser-mcp-0.1.6.tar.gz',
-      sha256: '94b4e51d8285498ba00da8df50bd7a886872bb4edeacef44c87378dcde330f3c',
+        + 'fast-browser-v0.1.7/fast-browser-mcp-0.1.7.tar.gz',
+      file: 'fast-browser-mcp-0.1.7.tar.gz',
+      sha256: '371e92ac03f5b02e71ff32dc0db0bfcf9a32c29c8499748b5f80db9c82cab9ef',
       node: '>=20',
     },
     extension: {
       url: 'https://github.com/m4ttheweric/playwright/releases/download/'
-        + 'fast-browser-v0.1.6/fast-browser-extension-0.1.6.zip',
-      file: 'fast-browser-extension-0.1.6.zip',
+        + 'fast-browser-v0.1.7/fast-browser-extension-0.1.7.zip',
+      file: 'fast-browser-extension-0.1.7.zip',
       sha256: 'b6bccac5cdd19c5588b6c9f77847877a88021acb55a67ad3153085ac2efe63a7',
       id: 'fnfikoifhimpdedpdepehibjjkcfbacm',
       version: '0.2.11',
       crx: {
         url: 'https://github.com/m4ttheweric/playwright/releases/download/'
-          + 'fast-browser-v0.1.6/fast-browser-extension-0.1.6.crx',
-        file: 'fast-browser-extension-0.1.6.crx',
+          + 'fast-browser-v0.1.7/fast-browser-extension-0.1.7.crx',
+        file: 'fast-browser-extension-0.1.7.crx',
         sha256: 'b98600eb6b42a2e3d40cc4a165c02a7b64da7cfefc288e4b4214756cec8a41ca',
       },
     },
@@ -387,6 +387,7 @@ function launcherPaths(directory) {
     runtimeDir: path.join(directory, '.fast-browser', 'runtime'),
     outputDir: path.join(directory, '.fast-browser', 'output'),
     screenshotsDir: path.join(directory, '.fast-browser', 'screenshots'),
+    configFile: path.join(directory, '.fast-browser', 'config.json'),
   };
 }
 
@@ -403,11 +404,13 @@ test('builds exact safe and full runtime argument snapshots', () => {
     `--capture-dir=${paths.screenshotsDir}`,
     '--save-trace',
   ];
+  const videoConfig = `--video-config=${paths.configFile}`;
 
-  assert.deepEqual(runtimeArgs({ config: launcherConfig('safe'), paths, lock }), base);
+  assert.deepEqual(runtimeArgs({ config: launcherConfig('safe'), paths, lock }), [...base, videoConfig]);
   assert.deepEqual(runtimeArgs({ config: launcherConfig('full'), paths, lock }), [
     ...base,
     '--save-session',
+    videoConfig,
   ]);
 });
 
@@ -454,38 +457,35 @@ test('runtimeArgs omits --save-trace exactly when config.trace is false', () => 
     `--output-dir=${paths.outputDir}`,
     `--capture-dir=${paths.screenshotsDir}`,
   ];
+  const videoConfig = `--video-config=${paths.configFile}`;
 
   assert.deepEqual(
     runtimeArgs({ config: { ...launcherConfig('safe'), trace: false }, paths, lock }),
-    base,
+    [...base, videoConfig],
   );
   assert.deepEqual(
     runtimeArgs({ config: { ...launcherConfig('full'), trace: false }, paths, lock }),
-    [...base, '--save-session'],
+    [...base, '--save-session', videoConfig],
   );
 });
 
-// Video is orthogonal to the profile: it rides on either arg set, and its
-// absence (the default) adds nothing. The runtime ignores the flag for
-// attached extension-relay browsers, so passing it alongside --extension is
-// deliberate and harmless.
-test('runtimeArgs appends --save-video exactly when a video size is configured', () => {
+// FB-75. The runtime re-reads config.json's video field before every call, so
+// a local session always gets --video-config and `configure --video` applies on
+// the next call with no restart. The launch-time --save-video is never passed
+// for a local session, because it cannot be turned off without a restart.
+test('runtimeArgs points a local session at config.json for video, whatever video is set to', () => {
   const paths = launcherPaths('/synthetic-home');
   const lock = fixtureLock();
-  const video = { width: 1280, height: 720 };
+  const videoConfig = `--video-config=${paths.configFile}`;
 
-  assert.deepEqual(
-    runtimeArgs({ config: { ...launcherConfig('safe'), video }, paths, lock }),
-    [...runtimeArgs({ config: launcherConfig('safe'), paths, lock }), '--save-video=1280x720'],
-  );
-  assert.deepEqual(
-    runtimeArgs({ config: { ...launcherConfig('full'), video }, paths, lock }),
-    [...runtimeArgs({ config: launcherConfig('full'), paths, lock }), '--save-video=1280x720'],
-  );
-  assert.deepEqual(
-    runtimeArgs({ config: { ...launcherConfig('safe'), video: null }, paths, lock }),
-    runtimeArgs({ config: launcherConfig('safe'), paths, lock }),
-  );
+  for (const profile of ['safe', 'full']) {
+    for (const video of [null, { width: 1280, height: 720 }]) {
+      const args = runtimeArgs({ config: { ...launcherConfig(profile), video }, paths, lock });
+      assert.equal(args.at(-1), videoConfig);
+      assert.equal(args.filter(arg => arg.startsWith('--video-config')).length, 1);
+      assert.ok(!args.some(arg => arg.startsWith('--save-video')), `no --save-video for ${profile}`);
+    }
+  }
 });
 
 async function installedLauncher() {
