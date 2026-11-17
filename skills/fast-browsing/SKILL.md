@@ -571,10 +571,10 @@ reason word.
 - `refused: recording`: Fast Browser itself is recording, never a screen
   recorder on the machine: the `video` setting in
   `~/.fast-browser/config.json`, or a capture in progress. A saved login never
-  fills while one runs. That is `needs-human`. Tell the human that
-  `fast-browser configure --video off` clears the setting and that only a
-  restarted Fast Browser session picks it up; closing tabs or the browser
-  does not.
+  fills while one runs. That is `needs-human`. The refusal names what is
+  recording and how to stop it. For the `video` setting, tell the human that
+  `fast-browser configure --video off` clears it and the running session
+  stops recording on its next call, with no restart.
 - `refused: slow-typing`: the fill used `slowly`, which a saved login refuses.
   Fill the same names once more with `browser_fill_form` or a plain
   `browser_type`, never `slowly`. A second `slow-typing` refusal is

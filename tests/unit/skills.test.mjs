@@ -285,11 +285,16 @@ test('the capturing-flows skill states recording scope, finalization, and the PI
 
   assert.match(text, /configure --video/);
   assert.match(text, /--video off/);
-  // A capture that leaves the video setting on records every later session
-  // and makes every saved login refuse with `refused: recording`, so both
-  // exits from the restart question must turn it back off.
-  assert.match(text, /"Restart answer\?" -> "fast-browser configure --video off: the restarted session keeps recording" \[label="restarted"\]/);
-  assert.match(text, /"Restart answer\?" -> "fast-browser configure --video off: no restart came" \[label="will not restart"\]/);
+  // The running session re-reads the video setting before every call (runtime
+  // 0.1.7), so turning it off before the take's tab closes stops the take, and
+  // leaving it on makes every saved login refuse with `refused: recording`.
+  // Every exit from a started take turns it off, and only after the close.
+  assert.match(text, /"configure result\?" -> "browser_tabs \{action: new, url: <where the flow starts>\}" \[label="set"\]/);
+  assert.match(text, /"browser_tabs \{action: close\}: the finished recording" -> "fast-browser configure --video off: the finished take"/);
+  assert.match(text, /"browser_tabs \{action: close\}: the broken recording" -> "fast-browser configure --video off: the broken take"/);
+  assert.match(text, /"Login answer\?" -> "browser_tabs \{action: close\}: handing back mid-take" \[label="will not sign in"\]/);
+  assert.match(text, /"browser_tabs \{action: close\}: handing back mid-take" -> "fast-browser configure --video off: handing back mid-take"/);
+  assert.doesNotMatch(text, /Ask the human to restart/);
   // The scope, stated to match the fast-browsing boundaries: recording covers
   // the relay-attached real-Chrome tabs Fast Browser controls, and promises
   // no other browser to record in.

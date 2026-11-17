@@ -8,6 +8,7 @@ const paths = {
   dataDir: '/synthetic-home/.fast-browser',
   outputDir: '/synthetic-home/.fast-browser/output',
   screenshotsDir: '/synthetic-home/.fast-browser/screenshots',
+  configFile: '/synthetic-home/.fast-browser/config.json',
 };
 const lock = { extension: { id: 'abcdefghijklmnopabcdefghijklmnop' } };
 
@@ -48,6 +49,7 @@ test('the attached arg list keeps its exact historical order', () => {
     '--timeout-settle=200',
     '--output-dir=/synthetic-home/.fast-browser/output',
     '--capture-dir=/synthetic-home/.fast-browser/screenshots',
+    '--video-config=/synthetic-home/.fast-browser/config.json',
   ]);
 });
 

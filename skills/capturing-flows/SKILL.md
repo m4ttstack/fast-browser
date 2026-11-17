@@ -30,13 +30,9 @@ digraph capture_flow {
 
     "Trigger: motion is the evidence" [shape=ellipse];
     "Recording attempts >= 3?" [shape=diamond];
-    "Recording on since before this session started?" [shape=diamond];
+    "Video setting already on?" [shape=diamond];
     "fast-browser configure --video 1280x720" [shape=plaintext];
     "configure result?" [shape=diamond];
-    "Ask the human to restart the Fast Browser session" [shape=box];
-    "Restart answer?" [shape=diamond];
-    "fast-browser configure --video off: the restarted session keeps recording" [shape=plaintext];
-    "fast-browser configure --video off: no restart came" [shape=plaintext];
     "browser_tabs {action: new, url: <where the flow starts>}" [shape=plaintext];
     "Drive exactly the one flow being shown" [shape=box];
     "Recorded flow result?" [shape=diamond];
@@ -45,7 +41,11 @@ digraph capture_flow {
     "Ask the human to log in in Chrome" [shape=box];
     "Login answer?" [shape=diamond];
     "browser_tabs {action: close}: the broken recording" [shape=plaintext];
+    "fast-browser configure --video off: the broken take" [shape=plaintext];
+    "browser_tabs {action: close}: handing back mid-take" [shape=plaintext];
+    "fast-browser configure --video off: handing back mid-take" [shape=plaintext];
     "browser_tabs {action: close}: the finished recording" [shape=plaintext];
+    "fast-browser configure --video off: the finished take" [shape=plaintext];
     "ls -t ~/.fast-browser/output/videos/*.webm" [shape=plaintext];
     "Newest .webm is this flow's, complete?" [shape=diamond];
     "fast-browser gif <name>.webm --fps <8 first> --width <800 first>" [shape=plaintext];
@@ -86,18 +86,13 @@ digraph capture_flow {
     "GIF delivered" [shape=doublecircle style=filled fillcolor=lightgreen];
 
     "Trigger: motion is the evidence" -> "Recording attempts >= 3?";
-    "Recording attempts >= 3?" -> "Recording on since before this session started?" [label="no"];
+    "Recording attempts >= 3?" -> "Video setting already on?" [label="no"];
     "Recording attempts >= 3?" -> "Off-script gate: recording attempts spent" [label="yes: budget spent"];
-    "Recording on since before this session started?" -> "browser_tabs {action: new, url: <where the flow starts>}" [label="yes"];
-    "Recording on since before this session started?" -> "fast-browser configure --video 1280x720" [label="no, or unsure"];
+    "Video setting already on?" -> "browser_tabs {action: new, url: <where the flow starts>}" [label="yes"];
+    "Video setting already on?" -> "fast-browser configure --video 1280x720" [label="no, or unsure"];
     "fast-browser configure --video 1280x720" -> "configure result?";
-    "configure result?" -> "Ask the human to restart the Fast Browser session" [label="set"];
+    "configure result?" -> "browser_tabs {action: new, url: <where the flow starts>}" [label="set"];
     "configure result?" -> "Off-script gate: configure refused the video setting" [label="the command errored"];
-    "Ask the human to restart the Fast Browser session" -> "Restart answer?";
-    "Restart answer?" -> "fast-browser configure --video off: the restarted session keeps recording" [label="restarted"];
-    "Restart answer?" -> "fast-browser configure --video off: no restart came" [label="will not restart"];
-    "fast-browser configure --video off: the restarted session keeps recording" -> "browser_tabs {action: new, url: <where the flow starts>}";
-    "fast-browser configure --video off: no restart came" -> "Handed back with what is done";
 
     "browser_tabs {action: new, url: <where the flow starts>}" -> "Drive exactly the one flow being shown";
     "Drive exactly the one flow being shown" -> "Recorded flow result?";
@@ -110,11 +105,15 @@ digraph capture_flow {
     "STOP: never collect from an open tab" -> "browser_tabs {action: close}: the finished recording";
     "Ask the human to log in in Chrome" -> "Login answer?";
     "Login answer?" -> "browser_tabs {action: close}: the broken recording" [label="signed in: re-record clean"];
-    "Login answer?" -> "Handed back with what is done" [label="will not sign in"];
+    "Login answer?" -> "browser_tabs {action: close}: handing back mid-take" [label="will not sign in"];
+    "browser_tabs {action: close}: handing back mid-take" -> "fast-browser configure --video off: handing back mid-take";
     "Login answer?" -> "STOP: never log in for the user" [label="tempted to type the password they pasted"];
-    "browser_tabs {action: close}: the broken recording" -> "Recording attempts >= 3?";
+    "fast-browser configure --video off: handing back mid-take" -> "Handed back with what is done";
+    "browser_tabs {action: close}: the broken recording" -> "fast-browser configure --video off: the broken take";
+    "fast-browser configure --video off: the broken take" -> "Recording attempts >= 3?";
 
-    "browser_tabs {action: close}: the finished recording" -> "ls -t ~/.fast-browser/output/videos/*.webm";
+    "browser_tabs {action: close}: the finished recording" -> "fast-browser configure --video off: the finished take";
+    "fast-browser configure --video off: the finished take" -> "ls -t ~/.fast-browser/output/videos/*.webm";
     "ls -t ~/.fast-browser/output/videos/*.webm" -> "Newest .webm is this flow's, complete?";
     "Newest .webm is this flow's, complete?" -> "fast-browser gif <name>.webm --fps <8 first> --width <800 first>" [label="yes"];
     "Newest .webm is this flow's, complete?" -> "Recording attempts >= 3?" [label="none appeared, or tiny or unreadable"];
@@ -150,15 +149,15 @@ digraph capture_flow {
     "Off-script gate: recording attempts spent" -> "Off-script rounds = 2: recording attempts spent?" [label="iterate: the human fixed the cause"];
     "Off-script gate: recording attempts spent" -> "Held: nothing moved" [label="hold"];
     "Off-script gate: recording attempts spent" -> "Handed back with what is done" [label="hand back"];
-    "Make the approved move once: recording attempts spent" -> "browser_tabs {action: new, url: <where the flow starts>}";
-    "Off-script rounds = 2: recording attempts spent?" -> "Recording on since before this session started?" [label="no: record again"];
+    "Make the approved move once: recording attempts spent" -> "Video setting already on?";
+    "Off-script rounds = 2: recording attempts spent?" -> "Video setting already on?" [label="no: record again"];
     "Off-script rounds = 2: recording attempts spent?" -> "Handed back with what is done" [label="yes"];
 
     "Off-script gate: configure refused the video setting" -> "Make the approved move once: configure refused" [label="take: the human set it"];
     "Off-script gate: configure refused the video setting" -> "Off-script rounds = 2: configure refused?" [label="iterate: the human fixed the cause"];
     "Off-script gate: configure refused the video setting" -> "Held: nothing moved" [label="hold"];
     "Off-script gate: configure refused the video setting" -> "Handed back with what is done" [label="hand back"];
-    "Make the approved move once: configure refused" -> "Ask the human to restart the Fast Browser session";
+    "Make the approved move once: configure refused" -> "browser_tabs {action: new, url: <where the flow starts>}";
     "Off-script rounds = 2: configure refused?" -> "fast-browser configure --video 1280x720" [label="no: configure again"];
     "Off-script rounds = 2: configure refused?" -> "Handed back with what is done" [label="yes"];
 
@@ -188,31 +187,25 @@ digraph capture_flow {
 }
 ```
 
-### Ask the human to restart the Fast Browser session
-
-The video setting is a runtime launch flag: only a runtime started after
-`configure` records. A session already running when the setting changed
-records nothing, however long it keeps going, so answer the graph's recording
-question with "no, or unsure" whenever the setting's history is unknown.
+### The video setting
 
 `fast-browser configure --video 1280x720` sets the recorded frame size as
 `<width>x<height>`, from 320x240 up to 3840x2160. `fast-browser configure
 --video off` turns recording back off. Either form touches only the video
 setting, never the profile, sessions, or palette.
 
-Ask the human to restart the Fast Browser session and say when it is back; see
-`## Asking the human`. A delegated subagent does not wait for the restart: it
-puts the ask in its distilled result and returns, which is the hand back edge.
+The running session reads the setting again before every browser call, so a
+change takes effect on the next call with no restart. Turned on, every open
+tab starts recording, and so does every tab opened while it stays on. Turned
+off, the next browser call stops and saves every recording. Answer
+`Video setting already on?` with "no, or unsure" whenever you do not know.
 
-### Turn the video setting back off
-
-Run `fast-browser configure --video off` on both edges out of the restart
-question, before anything else. The restarted session read the setting when it
-launched and records until it ends, so turning it off loses nothing for this
-capture. Left on, every Fast Browser session started afterwards records every
-tab it drives, and every saved login refuses with `refused: recording`. A
-delegated subagent handing back for the restart says in its distilled result
-that whoever resumes it after the restart runs `configure --video off` first.
+Turn it off only after the recorded tab has closed: turned off before or
+during the take, the next browser call stops the recording and the flow is
+lost. Every path that leaves a started take runs `configure --video off`, the
+finished take, the broken take, and the hand back mid-take alike. Left on,
+every tab Fast Browser drives records and every saved login refuses with
+`refused: recording`.
 
 ### Drive exactly the one flow being shown
 
@@ -365,7 +358,7 @@ Quote what ended each take (broke midway, a login screen, no complete `.webm`, p
 
 Quote the `configure` command and its error.
 - **You fix the cause** (iterate, recommended): you clear what made `configure` refuse, and I run it once more.
-- **You set it yourself** (take): you turn recording on your own way, and I ask for the restart, whose first recording confirms it.
+- **You set it yourself** (take): you turn recording on your own way, and the next recording confirms it.
 - **Hold, nothing moved** (hold): I stop here and change nothing further.
 - **Hand back what is done** (hand back): I report that recording could not be turned on.
 
@@ -405,8 +398,8 @@ when it does, carry on from the step you stopped at.
 
 | Symptom | Cause, and the graph edge that handles it |
 |---|---|
-| No `.webm` appears in `~/.fast-browser/output/videos/` | Recording was enabled after the session started, and the setting only applies to sessions started after it. `none appeared` leads back through the recording check to `configure` and the restart |
-| Saved logins refuse with `refused: recording` long after a capture | A capture left the video setting on, so every later session records. `fast-browser configure --video off`, then restart the Fast Browser session |
+| No `.webm` appears in `~/.fast-browser/output/videos/` | The video setting was off while the take ran, or was turned off before its tab closed. `none appeared` leads back through the recording check to `configure` |
+| Saved logins refuse with `refused: recording` long after a capture | A capture left the video setting on, so every tab Fast Browser drives records. `fast-browser configure --video off`; the next browser call stops it, no restart |
 | The `.webm` is tiny or unreadable | The tab or session was still open, so the file was not finalized. Close first; `tiny or unreadable` leads to a fresh take |
 | `gif` reports the renderer missing | `ffmpeg missing` leads to `brew install ffmpeg`, then `fast-browser doctor` to confirm; a second miss opens its gate |
 | `gif` refuses the name | `refused the name` leads to the bare name inside the videos directory; a second refusal opens its gate |
@@ -422,4 +415,5 @@ when it does, carry on from the step you stopped at.
 | "The PII is in two frames; nobody will look closely." | STOP: never deliver motion evidence containing PII. Re-record cleanly or deliver annotated stills. |
 | "A straight re-drive is the faster of the two options under the deadline." | Re-driving a mutating flow repeats its effect, such as another real order. It needs the human's go-ahead and clean test data; otherwise annotated stills. |
 | "Re-driving is not finishable in time, so the stills can come from memory." | Stills need the pages. Reach each key step again, stopping short of a mutating one. |
-| "Recording is turned on, so this session records." | Only a runtime started after `configure` records. Ask for the restart. |
+| "I'll turn video off now so I don't forget, the take will still record." | The session reads the setting on its next call, so off before the tab closes stops the take. Turn it off right after the close. |
+| "Changing the video setting needs a Fast Browser restart." | The running session picks the change up on its next browser call. Never ask for a restart to record. |
